@@ -8,7 +8,7 @@
     "dev": "vitepress dev . --host 0.0.0.0",
     "build": "vitepress build .",
     "preview": "vitepress preview . --host 0.0.0.0",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler pages deploy .vitepress/dist --project-name home-harbor"
   },
   "devDependencies": {
     "@braintree/sanitize-url": "^7.1.2",
