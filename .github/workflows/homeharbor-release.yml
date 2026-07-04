@@ -133,26 +133,15 @@ jobs:
                 pnpm frontend:typecheck
                 pnpm docs:build
                 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
-                  system-plan system/x86_64/system/manifest.yml "${VERSION}" /workspace >/dev/null
-                dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
-                  system-build system/x86_64/system/manifest.yml "${VERSION}" /workspace
+                  release-build system/x86_64/system/manifest.yml "${VERSION}" /workspace
 
+                release_dir="artifacts/channels/${VERSION}"
                 required_artifacts=(
-                  "artifacts/homeharbor-vmlinuz-${VERSION}"
-                  "artifacts/homeharbor-initramfs-${VERSION}.img"
-                  "artifacts/homeharbor-modules-${VERSION}.img"
-                  "artifacts/homeharbor-firmware-${VERSION}.img"
-                  "artifacts/homeharbor-rootfs-${VERSION}.img"
-                  "artifacts/homeharbor-recovery-${VERSION}.img"
-                  "artifacts/homeharbor-vbmeta-a-${VERSION}.img"
-                  "artifacts/homeharbor-vbmeta-a-${VERSION}.digest"
-                  "artifacts/homeharbor-vbmeta-b-${VERSION}.img"
-                  "artifacts/homeharbor-vbmeta-b-${VERSION}.digest"
-                  "artifacts/homeharbor-boot-${VERSION}.efi"
-                  "artifacts/homeharbor-bootloader-${VERSION}.efi"
-                  "artifacts/homeharbor-bootx64-${VERSION}.efi"
-                  "artifacts/homeharbor-${VERSION}-plan.json"
-                  "artifacts/homeharbor-${VERSION}-super.txt"
+                  "${release_dir}/channel-${CHANNEL}.json"
+                  "${release_dir}/homeharbor-system-ota-${VERSION}.tar.gz"
+                  "${release_dir}/homeharbor-kernel-generic-ota-${VERSION}.tar.gz"
+                  "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso"
+                  "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso.sha256"
                 )
                 for artifact in "${required_artifacts[@]}"; do
                   if [[ ! -s "${artifact}" ]]; then
@@ -169,22 +158,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
+          CHANNEL: ${{ steps.release.outputs.channel }}
         run: |
           set -euo pipefail
           release_dir="artifacts/channels/${VERSION}"
-          release_assets=()
-          while IFS= read -r asset; do
-            release_assets+=("${asset}")
-          done < <(find artifacts -maxdepth 1 -type f -name "homeharbor-*${VERSION}*" | sort)
-          if [[ -d "${release_dir}" ]]; then
-            while IFS= read -r asset; do
-              release_assets+=("${asset}")
-            done < <(find "${release_dir}" -type f | sort)
-          fi
-          if [[ "${#release_assets[@]}" -eq 0 ]]; then
-            echo "No release assets were produced for ${VERSION}." >&2
+          if [[ ! -d "${release_dir}" ]]; then
+            echo "Release directory was not produced for ${VERSION}: ${release_dir}" >&2
             exit 1
           fi
+          release_assets=(
+            "${release_dir}/channel-${CHANNEL}.json"
+            "${release_dir}/homeharbor-system-ota-${VERSION}.tar.gz"
+            "${release_dir}/homeharbor-kernel-generic-ota-${VERSION}.tar.gz"
+            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso"
+            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso.sha256"
+          )
+          for asset in "${release_assets[@]}"; do
+            if [[ ! -s "${asset}" ]]; then
+              echo "Missing release asset: ${asset}" >&2
+              exit 1
+            fi
+          done
           gh release delete daily --cleanup-tag --yes || true
           git tag -f daily "${GITHUB_SHA}"
           git push origin :refs/tags/daily || true
@@ -201,23 +195,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
+          CHANNEL: ${{ steps.release.outputs.channel }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
         run: |
           set -euo pipefail
           release_dir="artifacts/channels/${VERSION}"
-          release_assets=()
-          while IFS= read -r asset; do
-            release_assets+=("${asset}")
-          done < <(find artifacts -maxdepth 1 -type f -name "homeharbor-*${VERSION}*" | sort)
-          if [[ -d "${release_dir}" ]]; then
-            while IFS= read -r asset; do
-              release_assets+=("${asset}")
-            done < <(find "${release_dir}" -type f | sort)
-          fi
-          if [[ "${#release_assets[@]}" -eq 0 ]]; then
-            echo "No release assets were produced for ${VERSION}." >&2
+          if [[ ! -d "${release_dir}" ]]; then
+            echo "Release directory was not produced for ${VERSION}: ${release_dir}" >&2
             exit 1
           fi
+          release_assets=(
+            "${release_dir}/channel-${CHANNEL}.json"
+            "${release_dir}/homeharbor-system-ota-${VERSION}.tar.gz"
+            "${release_dir}/homeharbor-kernel-generic-ota-${VERSION}.tar.gz"
+            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso"
+            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso.sha256"
+          )
+          for asset in "${release_assets[@]}"; do
+            if [[ ! -s "${asset}" ]]; then
+              echo "Missing release asset: ${asset}" >&2
+              exit 1
+            fi
+          done
           gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || \
             gh release create "${RELEASE_TAG}" --verify-tag --title "HomeHarbor ${VERSION}" --notes "HomeHarbor stable release ${VERSION}."
           gh release upload "${RELEASE_TAG}" --clobber \
