@@ -136,11 +136,12 @@ jobs:
                   release-build system/x86_64/system/manifest.yml "${VERSION}" /workspace
 
                 release_dir="artifacts/channels/${VERSION}"
+                iso="${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso"
                 required_artifacts=(
                   "${release_dir}/channel-${CHANNEL}.json"
                   "${release_dir}/homeharbor-system-ota-${VERSION}.tar.gz"
                   "${release_dir}/homeharbor-kernel-generic-ota-${VERSION}.tar.gz"
-                  "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso"
+                  "${iso}"
                   "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso.sha256"
                 )
                 for artifact in "${required_artifacts[@]}"; do
@@ -149,6 +150,42 @@ jobs:
                     exit 1
                   fi
                 done
+
+                release_assets=(
+                  "${release_dir}/channel-${CHANNEL}.json"
+                  "${release_dir}/homeharbor-system-ota-${VERSION}.tar.gz"
+                  "${release_dir}/homeharbor-kernel-generic-ota-${VERSION}.tar.gz"
+                  "${iso}.sha256"
+                )
+                github_asset_limit_bytes=2147483647
+                split_part_bytes=$((1900 * 1024 * 1024))
+                iso_bytes="$(stat -c %s "${iso}")"
+                if (( iso_bytes <= github_asset_limit_bytes )); then
+                  release_assets+=("${iso}")
+                else
+                  split_prefix="${iso}.part-"
+                  rm -f "${split_prefix}"*
+                  split -b "${split_part_bytes}" -d -a 3 "${iso}" "${split_prefix}"
+                  mapfile -t iso_parts < <(find "${release_dir}" -maxdepth 1 -type f -name "$(basename "${iso}").part-*" | sort)
+                  if (( ${#iso_parts[@]} < 2 )); then
+                    echo "Expected split ISO parts for oversized installer: ${iso}" >&2
+                    exit 1
+                  fi
+                  parts_manifest="${iso}.parts.txt"
+                  {
+                    echo "file=$(basename "${iso}")"
+                    echo "size=${iso_bytes}"
+                    echo "partSize=${split_part_bytes}"
+                    echo "partCount=${#iso_parts[@]}"
+                    echo "sha256=$(basename "${iso}.sha256")"
+                    echo
+                    echo "Reassemble with:"
+                    echo "cat $(basename "${iso}").part-* > $(basename "${iso}")"
+                    echo "sha256sum -c $(basename "${iso}.sha256")"
+                  } > "${parts_manifest}"
+                  release_assets+=("${iso_parts[@]}" "${parts_manifest}")
+                fi
+                printf "%s\n" "${release_assets[@]}" > "${release_dir}/release-assets.txt"
           HOMEHARBOR_BUILDER_SCRIPT
           HOMEHARBOR_DOCKER_SCRIPT
 
@@ -166,13 +203,12 @@ jobs:
             echo "Release directory was not produced for ${VERSION}: ${release_dir}" >&2
             exit 1
           fi
-          release_assets=(
-            "${release_dir}/channel-${CHANNEL}.json"
-            "${release_dir}/homeharbor-system-ota-${VERSION}.tar.gz"
-            "${release_dir}/homeharbor-kernel-generic-ota-${VERSION}.tar.gz"
-            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso"
-            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso.sha256"
-          )
+          release_asset_list="${release_dir}/release-assets.txt"
+          if [[ ! -s "${release_asset_list}" ]]; then
+            echo "Release asset list was not produced for ${VERSION}: ${release_asset_list}" >&2
+            exit 1
+          fi
+          mapfile -t release_assets < "${release_asset_list}"
           for asset in "${release_assets[@]}"; do
             if [[ ! -s "${asset}" ]]; then
               echo "Missing release asset: ${asset}" >&2
@@ -186,7 +222,7 @@ jobs:
           gh release create daily \
             --prerelease \
             --title "HomeHarbor Daily ${VERSION}" \
-            --notes "Automated daily HomeHarbor managed artifact build." \
+            --notes "Automated daily HomeHarbor managed artifact build. Oversized full installer ISOs are published as .part-* assets with a .parts.txt reassembly manifest." \
             "${release_assets[@]}"
 
       - name: Publish stable release
@@ -204,13 +240,12 @@ jobs:
             echo "Release directory was not produced for ${VERSION}: ${release_dir}" >&2
             exit 1
           fi
-          release_assets=(
-            "${release_dir}/channel-${CHANNEL}.json"
-            "${release_dir}/homeharbor-system-ota-${VERSION}.tar.gz"
-            "${release_dir}/homeharbor-kernel-generic-ota-${VERSION}.tar.gz"
-            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso"
-            "${release_dir}/homeharbor-full-live-installer-${CHANNEL}-${VERSION}.iso.sha256"
-          )
+          release_asset_list="${release_dir}/release-assets.txt"
+          if [[ ! -s "${release_asset_list}" ]]; then
+            echo "Release asset list was not produced for ${VERSION}: ${release_asset_list}" >&2
+            exit 1
+          fi
+          mapfile -t release_assets < "${release_asset_list}"
           for asset in "${release_assets[@]}"; do
             if [[ ! -s "${asset}" ]]; then
               echo "Missing release asset: ${asset}" >&2
