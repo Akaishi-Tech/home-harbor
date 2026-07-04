@@ -81,8 +81,8 @@ jobs:
             archlinux:base-devel bash <<'HOMEHARBOR_DOCKER_SCRIPT'
               set -euo pipefail
               pacman -Syu --noconfirm --needed \
-                android-tools arch-install-scripts archiso aspnet-runtime base-devel btrfs-progs cryptsetup \
-                device-mapper dosfstools dotnet-sdk efitools erofs-utils git gptfdisk jq lvm2 networkmanager openssl \
+                android-tools arch-install-scripts archiso aspnet-runtime base-devel btrfs-progs clang cryptsetup \
+                device-mapper dosfstools dotnet-sdk efitools erofs-utils git gptfdisk jq lld lvm2 networkmanager openssl \
                 pnpm postgresql qemu-base sbsigntools sudo systemd systemd-ukify
               chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
               useradd -m -G wheel builder
