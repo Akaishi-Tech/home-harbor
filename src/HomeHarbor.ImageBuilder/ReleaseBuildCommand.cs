@@ -21,7 +21,7 @@ internal static partial class ImageBuilderProgram
                 repoRoot,
                 version);
             await new SystemImageBuilder(repoRoot, version, systemPlan).BuildAsync(cancellationToken);
-            await new ReleaseArtifactBuilder(repoRoot, version, systemPlan).BuildAsync(cancellationToken);
+            _ = await new ReleaseArtifactBuilder(repoRoot, version, systemPlan).BuildAsync(cancellationToken);
             return 0;
         });
         return command;

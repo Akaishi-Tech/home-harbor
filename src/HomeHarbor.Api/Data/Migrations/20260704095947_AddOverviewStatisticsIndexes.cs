@@ -1,207 +1,206 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace HomeHarbor.Api.Data.Migrations
+namespace HomeHarbor.Api.Data.Migrations;
+
+/// <inheritdoc />
+public partial class AddOverviewStatisticsIndexes : Migration
 {
     /// <inheritdoc />
-    public partial class AddOverviewStatisticsIndexes : Migration
+    protected override void Up(MigrationBuilder migrationBuilder)
     {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.CreateIndex(
-                name: "IX_WireGuardPeers_FamilyId_CreatedAt",
-                table: "WireGuardPeers",
-                columns: new[] { "FamilyId", "CreatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_WireGuardPeers_FamilyId_CreatedAt",
+            table: "WireGuardPeers",
+            columns: ["FamilyId", "CreatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_WebDavTokens_FamilyId_CreatedAt",
-                table: "WebDavTokens",
-                columns: new[] { "FamilyId", "CreatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_WebDavTokens_FamilyId_CreatedAt",
+            table: "WebDavTokens",
+            columns: ["FamilyId", "CreatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_SyncStates_FamilyId_UpdatedAt",
-                table: "SyncStates",
-                columns: new[] { "FamilyId", "UpdatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_SyncStates_FamilyId_UpdatedAt",
+            table: "SyncStates",
+            columns: ["FamilyId", "UpdatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_StorageHealthSnapshots_FamilyId_CheckedAt",
-                table: "StorageHealthSnapshots",
-                columns: new[] { "FamilyId", "CheckedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_StorageHealthSnapshots_FamilyId_CheckedAt",
+            table: "StorageHealthSnapshots",
+            columns: ["FamilyId", "CheckedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_SmbShares_FamilyId_Enabled",
-                table: "SmbShares",
-                columns: new[] { "FamilyId", "Enabled" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_SmbShares_FamilyId_Enabled",
+            table: "SmbShares",
+            columns: ["FamilyId", "Enabled"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_SmbCredentials_FamilyId_RevokedAt",
-                table: "SmbCredentials",
-                columns: new[] { "FamilyId", "RevokedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_SmbCredentials_FamilyId_RevokedAt",
+            table: "SmbCredentials",
+            columns: ["FamilyId", "RevokedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_SmbCredentials_ShareId_RevokedAt",
-                table: "SmbCredentials",
-                columns: new[] { "ShareId", "RevokedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_SmbCredentials_ShareId_RevokedAt",
+            table: "SmbCredentials",
+            columns: ["ShareId", "RevokedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_RecoveryDrills_FamilyId_StartedAt",
-                table: "RecoveryDrills",
-                columns: new[] { "FamilyId", "StartedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_RecoveryDrills_FamilyId_StartedAt",
+            table: "RecoveryDrills",
+            columns: ["FamilyId", "StartedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_MediaAssets_FamilyId_LastModifiedUtc",
-                table: "MediaAssets",
-                columns: new[] { "FamilyId", "LastModifiedUtc" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_MediaAssets_FamilyId_LastModifiedUtc",
+            table: "MediaAssets",
+            columns: ["FamilyId", "LastModifiedUtc"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_MediaAssets_FamilyId_MediaType",
-                table: "MediaAssets",
-                columns: new[] { "FamilyId", "MediaType" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_MediaAssets_FamilyId_MediaType",
+            table: "MediaAssets",
+            columns: ["FamilyId", "MediaType"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ManagedContainers_FamilyId_CreatedAt",
-                table: "ManagedContainers",
-                columns: new[] { "FamilyId", "CreatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_ManagedContainers_FamilyId_CreatedAt",
+            table: "ManagedContainers",
+            columns: ["FamilyId", "CreatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ManagedContainers_FamilyId_DeletedAt",
-                table: "ManagedContainers",
-                columns: new[] { "FamilyId", "DeletedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_ManagedContainers_FamilyId_DeletedAt",
+            table: "ManagedContainers",
+            columns: ["FamilyId", "DeletedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ManagedContainers_FamilyId_UpdatedAt",
-                table: "ManagedContainers",
-                columns: new[] { "FamilyId", "UpdatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_ManagedContainers_FamilyId_UpdatedAt",
+            table: "ManagedContainers",
+            columns: ["FamilyId", "UpdatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ManagedApps_FamilyId_CreatedAt",
-                table: "ManagedApps",
-                columns: new[] { "FamilyId", "CreatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_ManagedApps_FamilyId_CreatedAt",
+            table: "ManagedApps",
+            columns: ["FamilyId", "CreatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ManagedApps_FamilyId_DesiredState",
-                table: "ManagedApps",
-                columns: new[] { "FamilyId", "DesiredState" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_ManagedApps_FamilyId_DesiredState",
+            table: "ManagedApps",
+            columns: ["FamilyId", "DesiredState"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ManagedApps_FamilyId_UpdatedAt",
-                table: "ManagedApps",
-                columns: new[] { "FamilyId", "UpdatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_ManagedApps_FamilyId_UpdatedAt",
+            table: "ManagedApps",
+            columns: ["FamilyId", "UpdatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_FamilySpaces_CreatedAt",
-                table: "FamilySpaces",
-                column: "CreatedAt");
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_FamilySpaces_CreatedAt",
+            table: "FamilySpaces",
+            column: "CreatedAt");
 
-            migrationBuilder.CreateIndex(
-                name: "IX_FamilyMembers_FamilyId_CreatedAt",
-                table: "FamilyMembers",
-                columns: new[] { "FamilyId", "CreatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_FamilyMembers_FamilyId_CreatedAt",
+            table: "FamilyMembers",
+            columns: ["FamilyId", "CreatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Devices_FamilyId_LastSeenAt_CreatedAt",
-                table: "Devices",
-                columns: new[] { "FamilyId", "LastSeenAt", "CreatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_Devices_FamilyId_LastSeenAt_CreatedAt",
+            table: "Devices",
+            columns: ["FamilyId", "LastSeenAt", "CreatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_BackupTargets_FamilyId_CreatedAt",
-                table: "BackupTargets",
-                columns: new[] { "FamilyId", "CreatedAt" });
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_BackupTargets_FamilyId_CreatedAt",
+            table: "BackupTargets",
+            columns: ["FamilyId", "CreatedAt"]);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_BackupJobs_FamilyId_StartedAt",
-                table: "BackupJobs",
-                columns: new[] { "FamilyId", "StartedAt" });
-        }
+        _ = migrationBuilder.CreateIndex(
+            name: "IX_BackupJobs_FamilyId_StartedAt",
+            table: "BackupJobs",
+            columns: ["FamilyId", "StartedAt"]);
+    }
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropIndex(
-                name: "IX_WireGuardPeers_FamilyId_CreatedAt",
-                table: "WireGuardPeers");
+    /// <inheritdoc />
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        _ = migrationBuilder.DropIndex(
+            name: "IX_WireGuardPeers_FamilyId_CreatedAt",
+            table: "WireGuardPeers");
 
-            migrationBuilder.DropIndex(
-                name: "IX_WebDavTokens_FamilyId_CreatedAt",
-                table: "WebDavTokens");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_WebDavTokens_FamilyId_CreatedAt",
+            table: "WebDavTokens");
 
-            migrationBuilder.DropIndex(
-                name: "IX_SyncStates_FamilyId_UpdatedAt",
-                table: "SyncStates");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_SyncStates_FamilyId_UpdatedAt",
+            table: "SyncStates");
 
-            migrationBuilder.DropIndex(
-                name: "IX_StorageHealthSnapshots_FamilyId_CheckedAt",
-                table: "StorageHealthSnapshots");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_StorageHealthSnapshots_FamilyId_CheckedAt",
+            table: "StorageHealthSnapshots");
 
-            migrationBuilder.DropIndex(
-                name: "IX_SmbShares_FamilyId_Enabled",
-                table: "SmbShares");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_SmbShares_FamilyId_Enabled",
+            table: "SmbShares");
 
-            migrationBuilder.DropIndex(
-                name: "IX_SmbCredentials_FamilyId_RevokedAt",
-                table: "SmbCredentials");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_SmbCredentials_FamilyId_RevokedAt",
+            table: "SmbCredentials");
 
-            migrationBuilder.DropIndex(
-                name: "IX_SmbCredentials_ShareId_RevokedAt",
-                table: "SmbCredentials");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_SmbCredentials_ShareId_RevokedAt",
+            table: "SmbCredentials");
 
-            migrationBuilder.DropIndex(
-                name: "IX_RecoveryDrills_FamilyId_StartedAt",
-                table: "RecoveryDrills");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_RecoveryDrills_FamilyId_StartedAt",
+            table: "RecoveryDrills");
 
-            migrationBuilder.DropIndex(
-                name: "IX_MediaAssets_FamilyId_LastModifiedUtc",
-                table: "MediaAssets");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_MediaAssets_FamilyId_LastModifiedUtc",
+            table: "MediaAssets");
 
-            migrationBuilder.DropIndex(
-                name: "IX_MediaAssets_FamilyId_MediaType",
-                table: "MediaAssets");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_MediaAssets_FamilyId_MediaType",
+            table: "MediaAssets");
 
-            migrationBuilder.DropIndex(
-                name: "IX_ManagedContainers_FamilyId_CreatedAt",
-                table: "ManagedContainers");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_ManagedContainers_FamilyId_CreatedAt",
+            table: "ManagedContainers");
 
-            migrationBuilder.DropIndex(
-                name: "IX_ManagedContainers_FamilyId_DeletedAt",
-                table: "ManagedContainers");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_ManagedContainers_FamilyId_DeletedAt",
+            table: "ManagedContainers");
 
-            migrationBuilder.DropIndex(
-                name: "IX_ManagedContainers_FamilyId_UpdatedAt",
-                table: "ManagedContainers");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_ManagedContainers_FamilyId_UpdatedAt",
+            table: "ManagedContainers");
 
-            migrationBuilder.DropIndex(
-                name: "IX_ManagedApps_FamilyId_CreatedAt",
-                table: "ManagedApps");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_ManagedApps_FamilyId_CreatedAt",
+            table: "ManagedApps");
 
-            migrationBuilder.DropIndex(
-                name: "IX_ManagedApps_FamilyId_DesiredState",
-                table: "ManagedApps");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_ManagedApps_FamilyId_DesiredState",
+            table: "ManagedApps");
 
-            migrationBuilder.DropIndex(
-                name: "IX_ManagedApps_FamilyId_UpdatedAt",
-                table: "ManagedApps");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_ManagedApps_FamilyId_UpdatedAt",
+            table: "ManagedApps");
 
-            migrationBuilder.DropIndex(
-                name: "IX_FamilySpaces_CreatedAt",
-                table: "FamilySpaces");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_FamilySpaces_CreatedAt",
+            table: "FamilySpaces");
 
-            migrationBuilder.DropIndex(
-                name: "IX_FamilyMembers_FamilyId_CreatedAt",
-                table: "FamilyMembers");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_FamilyMembers_FamilyId_CreatedAt",
+            table: "FamilyMembers");
 
-            migrationBuilder.DropIndex(
-                name: "IX_Devices_FamilyId_LastSeenAt_CreatedAt",
-                table: "Devices");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_Devices_FamilyId_LastSeenAt_CreatedAt",
+            table: "Devices");
 
-            migrationBuilder.DropIndex(
-                name: "IX_BackupTargets_FamilyId_CreatedAt",
-                table: "BackupTargets");
+        _ = migrationBuilder.DropIndex(
+            name: "IX_BackupTargets_FamilyId_CreatedAt",
+            table: "BackupTargets");
 
-            migrationBuilder.DropIndex(
-                name: "IX_BackupJobs_FamilyId_StartedAt",
-                table: "BackupJobs");
-        }
+        _ = migrationBuilder.DropIndex(
+            name: "IX_BackupJobs_FamilyId_StartedAt",
+            table: "BackupJobs");
     }
 }

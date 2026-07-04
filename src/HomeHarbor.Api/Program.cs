@@ -49,11 +49,11 @@ var useDevelopmentMemoryCacheFallback = !migrateDatabase &&
     HomeHarborCacheBackend.ShouldUseDevelopmentMemoryFallback(builder.Environment, cacheOptions);
 if (useDevelopmentMemoryCacheFallback)
 {
-    builder.Services.AddDistributedMemoryCache();
+    _ = builder.Services.AddDistributedMemoryCache();
 }
 else
 {
-    builder.Services.AddStackExchangeRedisCache(options =>
+    _ = builder.Services.AddStackExchangeRedisCache(options =>
     {
         var configuration = new ConfigurationOptions
         {
@@ -67,7 +67,7 @@ else
 
     if (!migrateDatabase)
     {
-        builder.Services.AddHostedService<ValkeyCacheStartupValidator>();
+        _ = builder.Services.AddHostedService<ValkeyCacheStartupValidator>();
     }
 }
 

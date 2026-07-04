@@ -63,7 +63,7 @@ public sealed class HomeController(
             .OrderByDescending(j => j.StartedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
-        var files = CountArea(familyId, StorageArea.Files);
+        var (Count, Bytes) = CountArea(familyId, StorageArea.Files);
         var photos = CountArea(familyId, StorageArea.Photos);
         var backups = CountArea(familyId, StorageArea.Backups);
 
@@ -71,7 +71,7 @@ public sealed class HomeController(
             Initialized: true,
             Family: new OverviewFamily(family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt),
             Modules: new OverviewModules(
-                Files: new OverviewAreaModule(files.Count, files.Bytes, "/dav/files/"),
+                Files: new OverviewAreaModule(Count, Bytes, "/dav/files/"),
                 Photos: new OverviewAreaModule(photos.Count, photos.Bytes, "/dav/photos/"),
                 Backups: new OverviewBackupModule(
                     backups.Count,

@@ -134,7 +134,7 @@ public sealed class OverviewCacheTests
         private readonly Dictionary<string, byte[]> _items = new(StringComparer.Ordinal);
 
         public byte[]? Get(string key)
-            => _items.TryGetValue(key, out var value) ? value.ToArray() : null;
+            => _items.TryGetValue(key, out var value) ? [.. value] : null;
 
         public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
             => Task.FromResult(Get(key));
@@ -156,7 +156,7 @@ public sealed class OverviewCacheTests
         }
 
         public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
-            => _items[key] = value.ToArray();
+            => _items[key] = [.. value];
 
         public Task SetAsync(
             string key,

@@ -26,8 +26,8 @@ public sealed class WireGuardKeyGeneratorTests
         var publicKey = Convert.FromBase64String(pair.PublicKey);
 
         Assert.AreEqual("managed-fallback", pair.Mode);
-        Assert.AreEqual(32, privateKey.Length);
-        Assert.AreEqual(32, publicKey.Length);
+        Assert.HasCount(32, privateKey);
+        Assert.HasCount(32, publicKey);
         Assert.AreEqual(0, privateKey[0] & 7);
         Assert.AreEqual(0, privateKey[31] & 128);
         Assert.AreEqual(64, privateKey[31] & 64);

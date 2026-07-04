@@ -135,13 +135,19 @@ public sealed class ManagedContainerSpecServiceTests
 
     private static void CreateDirectorySymlinkOrInconclusive(string linkPath, string targetPath)
     {
+        string? inconclusiveReason = null;
         try
         {
-            Directory.CreateSymbolicLink(linkPath, targetPath);
+            _ = Directory.CreateSymbolicLink(linkPath, targetPath);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
         {
-            Assert.Inconclusive($"Directory symlinks are not available in this test environment: {exception.Message}");
+            inconclusiveReason = $"Directory symlinks are not available in this test environment: {exception.Message}";
+        }
+
+        if (inconclusiveReason is not null)
+        {
+            Assert.Inconclusive(inconclusiveReason);
         }
     }
 

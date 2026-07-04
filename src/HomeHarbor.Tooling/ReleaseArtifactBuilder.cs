@@ -601,14 +601,9 @@ public sealed class ReleaseArtifactBuilder(
             if (!string.IsNullOrEmpty(entry.LinkTarget))
             {
                 DeleteIfExists(output);
-                if (entry.Attributes.HasFlag(FileAttributes.Directory))
-                {
-                    _ = Directory.CreateSymbolicLink(output, entry.LinkTarget);
-                }
-                else
-                {
-                    _ = File.CreateSymbolicLink(output, entry.LinkTarget);
-                }
+                _ = entry.Attributes.HasFlag(FileAttributes.Directory)
+                    ? Directory.CreateSymbolicLink(output, entry.LinkTarget)
+                    : File.CreateSymbolicLink(output, entry.LinkTarget);
 
                 continue;
             }
@@ -725,7 +720,7 @@ public sealed class ReleaseArtifactBuilder(
         var builder = new StringBuilder();
         foreach (var c in value)
         {
-            builder.Append(char.IsAsciiLetterOrDigit(c) ? c : '_');
+            _ = builder.Append(char.IsAsciiLetterOrDigit(c) ? c : '_');
         }
 
         return builder.Length <= 32 ? builder.ToString() : builder.ToString(0, 32);

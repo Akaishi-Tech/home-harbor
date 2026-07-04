@@ -14,7 +14,7 @@ public sealed class HomeHarborInitHelperBuildTests
             ReleaseChannel.Stable,
             debugShellRequested: false);
 
-        Assert.IsFalse(arguments.Contains(HomeHarborInitHelperBuild.EmergencyShellDefineArgument));
+        Assert.DoesNotContain(HomeHarborInitHelperBuild.EmergencyShellDefineArgument, arguments);
     }
 
     [TestMethod]
@@ -26,7 +26,7 @@ public sealed class HomeHarborInitHelperBuildTests
             ReleaseChannel.Dev,
             debugShellRequested: true);
 
-        Assert.IsTrue(arguments.Contains(HomeHarborInitHelperBuild.EmergencyShellDefineArgument));
+        Assert.Contains(HomeHarborInitHelperBuild.EmergencyShellDefineArgument, arguments);
     }
 
     [TestMethod]

@@ -15,7 +15,7 @@ public sealed class JwtSigningKeyStoreTests
 
             var key = JwtSigningKeyStore.GetOrCreateKey(path);
 
-            Assert.AreEqual(64, key.Length);
+            Assert.HasCount(64, key);
             CollectionAssert.AreEqual(key, Convert.FromBase64String(File.ReadAllText(path)));
             if (!OperatingSystem.IsWindows())
             {
@@ -64,8 +64,8 @@ public sealed class JwtSigningKeyStoreTests
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
                 JwtSigningKeyStore.GetOrCreateKey(path));
 
-            StringAssert.Contains(ex.Message, "base64");
-            Assert.IsInstanceOfType<FormatException>(ex.InnerException);
+            Assert.Contains("base64", ex.Message);
+            _ = Assert.IsInstanceOfType<FormatException>(ex.InnerException);
             Assert.AreEqual("not base64", File.ReadAllText(path));
         }
         finally
@@ -87,7 +87,7 @@ public sealed class JwtSigningKeyStoreTests
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
                 JwtSigningKeyStore.GetOrCreateKey(path));
 
-            StringAssert.Contains(ex.Message, "at least 32 bytes");
+            Assert.Contains("at least 32 bytes", ex.Message);
             Assert.AreEqual(encoded, File.ReadAllText(path));
         }
         finally
@@ -104,5 +104,5 @@ public sealed class JwtSigningKeyStoreTests
     }
 
     private static byte[] CreateKey(int length)
-        => Enumerable.Range(0, length).Select(value => (byte)value).ToArray();
+        => [.. Enumerable.Range(0, length).Select(value => (byte)value)];
 }
