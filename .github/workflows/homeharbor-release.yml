@@ -115,6 +115,7 @@ jobs:
               export HOMEHARBOR_IMAGE_SIZE="${HOMEHARBOR_IMAGE_SIZE:-12G}"
               export HOMEHARBOR_PACKAGE_USER=builder
               export HOMEHARBOR_RELEASE_SKIP_FULL_E2E=1
+              export AllowMissingPrunePackageData=true
 
               sudo -E -H -u builder bash <<'HOMEHARBOR_BUILDER_SCRIPT'
                 set -euo pipefail
