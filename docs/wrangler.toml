@@ -4,8 +4,5 @@ name = "home-harbor"
 pages_build_output_dir = ".vitepress/dist"
 compatibility_date = "2026-07-01"
 
-[assets]
-directory = ".vitepress/dist"
-
 [vars]
 HOMEHARBOR_DOCS_SITE = "true"

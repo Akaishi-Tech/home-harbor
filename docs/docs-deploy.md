@@ -54,12 +54,12 @@ pnpm docs:preview
 ```toml
 "$schema" = "./node_modules/wrangler/config-schema.json"
 
-name = "homeharbor-docs"
+name = "home-harbor"
 pages_build_output_dir = ".vitepress/dist"
 compatibility_date = "2026-07-01"
 ```
 
-`pages_build_output_dir` points to the VitePress static output directory. Treat this file as the source of truth for the Pages project; if settings are changed in the Cloudflare dashboard, sync them back into `wrangler.toml`.
+`name` is the Cloudflare Pages project name. `pages_build_output_dir` points to the VitePress static output directory. Do not add an `[assets]` section here; Wrangler reserves that for Workers static assets and rejects it during Pages deploy validation. Treat this file as the source of truth for the Pages project; if settings are changed in the Cloudflare dashboard, sync them back into `wrangler.toml`.
 
 ## Direct Upload Deploy
 
@@ -75,13 +75,20 @@ Deploy:
 pnpm docs:deploy
 ```
 
-The deploy script runs `wrangler pages deploy` in the `homeharbor-docs` package. Wrangler reads `docs/wrangler.toml` and uploads `docs/.vitepress/dist`.
+The deploy script runs `wrangler pages deploy .vitepress/dist --project-name home-harbor` in the `homeharbor-docs` package. `homeharbor-docs` is the pnpm package name, and `home-harbor` is the Cloudflare Pages project name.
+
+Direct Upload CI needs these environment variables:
+
+- `CLOUDFLARE_API_TOKEN`: account API token with Account > Cloudflare Pages > Edit permission for the account that owns `home-harbor`.
+- `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account ID, especially when the token can access multiple accounts or CI should not rely on account auto-detection.
+
+If Wrangler reports `Authentication error [code: 10000]` after the VitePress build completes, the static build succeeded. Rotate or adjust `CLOUDFLARE_API_TOKEN`, then deploy again.
 
 For first-time setup or login:
 
 ```bash
 pnpm --filter homeharbor-docs exec wrangler login
-pnpm --filter homeharbor-docs exec wrangler pages project create homeharbor-docs
+pnpm --filter homeharbor-docs exec wrangler pages project create home-harbor
 ```
 
 ## Cloudflare Pages Git Integration
@@ -103,6 +110,14 @@ Output directory:
 ```text
 .vitepress/dist
 ```
+
+Deploy command:
+
+```text
+leave blank
+```
+
+Do not set the Pages Git integration deploy command to `pnpm deploy`. Pages publishes the output directory itself; `pnpm docs:deploy` is only for local or external CI direct upload.
 
 Use Node 20 or newer.
 
