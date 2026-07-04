@@ -18,6 +18,8 @@ public sealed class RootlessBuildExecutorTests
                 "--mount",
                 "--propagation",
                 "unchanged",
+                "--setgroups",
+                "allow",
                 "--map-auto",
                 "--map-root-user",
                 "--setuid",
