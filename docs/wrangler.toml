@@ -1,6 +1,6 @@
 "$schema" = "./node_modules/wrangler/config-schema.json"
 
-name = "homeharbor-docs"
+name = "home-harbor"
 pages_build_output_dir = ".vitepress/dist"
 compatibility_date = "2026-07-01"
 
