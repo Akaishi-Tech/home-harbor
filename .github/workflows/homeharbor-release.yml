@@ -62,8 +62,9 @@ jobs:
             echo "HOMEHARBOR_SECURE_BOOT_KEY_PEM and HOMEHARBOR_SECURE_BOOT_CERT_PEM secrets are required." >&2
             exit 1
           fi
-          # Keep the container non-privileged; the C# image builders use rootless user namespaces.
           docker run --rm -i \
+            --privileged \
+            --userns=host \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             -v "${PWD}:/workspace" \
@@ -82,6 +83,7 @@ jobs:
                 android-tools arch-install-scripts archiso aspnet-runtime base-devel btrfs-progs cryptsetup \
                 device-mapper dosfstools dotnet-sdk efitools erofs-utils git gptfdisk jq lvm2 networkmanager openssl \
                 pnpm postgresql qemu-base sbsigntools sudo systemd
+              chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
               useradd -m -G wheel builder
               printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/homeharbor-builder
               chmod 0440 /etc/sudoers.d/homeharbor-builder
