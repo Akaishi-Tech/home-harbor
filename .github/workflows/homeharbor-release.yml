@@ -120,7 +120,11 @@ jobs:
               export HOMEHARBOR_RELEASE_SKIP_FULL_E2E=1
               export AllowMissingPrunePackageData=true
 
-              sudo -E -H -u builder bash <<'HOMEHARBOR_BUILDER_SCRIPT'
+              export HOME=/home/builder
+              setpriv --reuid=builder --regid=builder --init-groups \
+                --inh-caps +sys_admin,+setuid,+setgid \
+                --ambient-caps +sys_admin,+setuid,+setgid \
+                bash <<'HOMEHARBOR_BUILDER_SCRIPT'
                 set -euo pipefail
                 cd /workspace
                 dotnet restore HomeHarbor.slnx
