@@ -7,6 +7,8 @@ public sealed class RootlessBuildExecutor(ICommandRunner runner)
         "--fork",
         "--pid",
         "--mount",
+        "--propagation",
+        "unchanged",
         "--map-auto",
         "--map-root-user",
         "--setuid",
