@@ -67,6 +67,7 @@ jobs:
             --userns=host \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
+            --security-opt systempaths=unconfined \
             -v "${PWD}:/workspace" \
             -w /workspace \
             -e VERSION \
