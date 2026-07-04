@@ -1,0 +1,9 @@
+[Unit]
+Description=Bootstrap HomeHarbor PostgreSQL role and database
+Requires=homeharbor-postgresql.service
+After=homeharbor-postgresql.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent postgres-bootstrap

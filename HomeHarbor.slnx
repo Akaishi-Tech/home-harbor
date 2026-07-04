@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HomeHarbor.Api/HomeHarbor.Api.csproj" />
+    <Project Path="src/HomeHarbor.Core/HomeHarbor.Core.csproj" />
+    <Project Path="src/HomeHarbor.Agent/HomeHarbor.Agent.csproj" />
+    <Project Path="src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" />
+    <Project Path="src/HomeHarbor.Installer/HomeHarbor.Installer.csproj" />
+    <Project Path="src/HomeHarbor.Recovery/HomeHarbor.Recovery.csproj" />
+    <Project Path="src/HomeHarbor.Tooling/HomeHarbor.Tooling.csproj" />
+    <Project Path="src/HomeHarbor.WebDav/HomeHarbor.WebDav.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HomeHarbor.FullE2E.Tests/HomeHarbor.FullE2E.Tests.csproj" />
+    <Project Path="tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj" />
+  </Folder>
+</Solution>

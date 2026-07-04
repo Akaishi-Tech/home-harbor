@@ -1,0 +1,488 @@
+# Maintainer: HomeHarbor maintainers
+pkgbase=homeharbor
+_homeharbor_version="${HOMEHARBOR_VERSION:-0.1.0-dev}"
+_homeharbor_channel="${HOMEHARBOR_CHANNEL:-dev}"
+_homeharbor_source_tarball="${HOMEHARBOR_SOURCE_TARBALL:?HOMEHARBOR_SOURCE_TARBALL must point to the clean HomeHarbor source tarball}"
+pkgver="${_homeharbor_version//-/_}"
+pkgrel=1
+arch=('x86_64')
+url='https://github.com/akaishi-tech/home-harbor'
+license=('GPL-3.0-only')
+makedepends=('aspnet-runtime' 'dotnet-sdk' 'efitools' 'jq' 'openssl' 'pnpm' 'sbsigntools' 'systemd-ukify')
+options=('!strip')
+
+_dotnet_keys=(
+  bcrypt-net-next
+  microsoft-aspnetcore-authentication-jwtbearer
+  microsoft-aspnetcore-openapi
+  microsoft-extensions-caching-stackexchangeredis
+  microsoft-entityframeworkcore
+  microsoft-entityframeworkcore-abstractions
+  microsoft-entityframeworkcore-relational
+  microsoft-identitymodel-abstractions
+  microsoft-identitymodel-jsonwebtokens
+  microsoft-identitymodel-logging
+  microsoft-identitymodel-protocols
+  microsoft-identitymodel-protocols-openidconnect
+  microsoft-identitymodel-tokens
+  microsoft-openapi
+  microsoft-win32-systemevents
+  npgsql
+  npgsql-entityframeworkcore-postgresql
+  pipelines-sockets-unofficial
+  qrcoder
+  stackexchange-redis
+  system-commandline
+  system-drawing-common
+  system-identitymodel-tokens-jwt
+  yamldotnet
+)
+
+pkgname=(homeharbor-control homeharbor-recovery homeharbor-installer)
+_dotnet_package_depends=()
+for _dotnet_key in "${_dotnet_keys[@]}"; do
+  pkgname+=("dotnet-${_dotnet_key}")
+  _dotnet_package_depends+=("dotnet-${_dotnet_key}=${pkgver}-${pkgrel}")
+done
+
+source=("homeharbor-${_homeharbor_version}.tar.gz::file://${_homeharbor_source_tarball}")
+sha256sums=('SKIP')
+
+_source_root="homeharbor-${_homeharbor_version}"
+_publish_root="publish/api"
+_agent_publish_root="publish/agent"
+_recovery_publish_root="publish/recovery"
+_installer_publish_root="publish/installer"
+_avb_helper="publish/homeharbor-avb"
+_init_helper="publish/homeharbor-verity"
+
+build() {
+  local source_dir="${srcdir}/${_source_root}"
+  local publish_dir="${srcdir}/${_publish_root}"
+  local agent_publish_dir="${srcdir}/${_agent_publish_root}"
+  local recovery_publish_dir="${srcdir}/${_recovery_publish_root}"
+  local installer_publish_dir="${srcdir}/${_installer_publish_root}"
+  local avb_helper="${srcdir}/${_avb_helper}"
+  local init_helper="${srcdir}/${_init_helper}"
+
+  rm -rf "${publish_dir}" "${agent_publish_dir}" "${recovery_publish_dir}" "${installer_publish_dir}" "${avb_helper}" "${init_helper}"
+  mkdir -p "${publish_dir}" "${agent_publish_dir}" "${recovery_publish_dir}" "${installer_publish_dir}"
+
+  pnpm --dir "${source_dir}" --filter homeharbor-frontend install --frozen-lockfile
+  pnpm --dir "${source_dir}" --filter homeharbor-frontend build
+  dotnet publish "${source_dir}/src/HomeHarbor.Api/HomeHarbor.Api.csproj" \
+    -c Release \
+    -o "${publish_dir}"
+  dotnet publish "${source_dir}/src/HomeHarbor.Agent/HomeHarbor.Agent.csproj" \
+    -c Release \
+    -o "${agent_publish_dir}"
+  dotnet publish "${source_dir}/src/HomeHarbor.Recovery/HomeHarbor.Recovery.csproj" \
+    -c Release \
+    -o "${recovery_publish_dir}"
+  dotnet publish "${source_dir}/src/HomeHarbor.Installer/HomeHarbor.Installer.csproj" \
+    -c Release \
+    -o "${installer_publish_dir}"
+  dotnet run --project "${source_dir}/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- \
+    build-homeharbor-avb "${avb_helper}" "${source_dir}"
+  dotnet run --project "${source_dir}/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- \
+    build-homeharbor-init "${init_helper}" "${source_dir}"
+}
+
+_dotnet_library_info() {
+  local key="$1"
+  case "${key}" in
+    bcrypt-net-next)
+      _dotnet_id='BCrypt.Net-Next'
+      _dotnet_version='4.2.0'
+      _dotnet_dll='BCrypt-Net-Next.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-aspnetcore-authentication-jwtbearer)
+      _dotnet_id='Microsoft.AspNetCore.Authentication.JwtBearer'
+      _dotnet_version='10.0.9'
+      _dotnet_dll='Microsoft.AspNetCore.Authentication.JwtBearer.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-aspnetcore-openapi)
+      _dotnet_id='Microsoft.AspNetCore.OpenApi'
+      _dotnet_version='10.0.9'
+      _dotnet_dll='Microsoft.AspNetCore.OpenApi.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-extensions-caching-stackexchangeredis)
+      _dotnet_id='Microsoft.Extensions.Caching.StackExchangeRedis'
+      _dotnet_version='10.0.9'
+      _dotnet_dll='Microsoft.Extensions.Caching.StackExchangeRedis.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-entityframeworkcore)
+      _dotnet_id='Microsoft.EntityFrameworkCore'
+      _dotnet_version='10.0.9'
+      _dotnet_dll='Microsoft.EntityFrameworkCore.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-entityframeworkcore-abstractions)
+      _dotnet_id='Microsoft.EntityFrameworkCore.Abstractions'
+      _dotnet_version='10.0.9'
+      _dotnet_dll='Microsoft.EntityFrameworkCore.Abstractions.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-entityframeworkcore-relational)
+      _dotnet_id='Microsoft.EntityFrameworkCore.Relational'
+      _dotnet_version='10.0.9'
+      _dotnet_dll='Microsoft.EntityFrameworkCore.Relational.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-identitymodel-abstractions)
+      _dotnet_id='Microsoft.IdentityModel.Abstractions'
+      _dotnet_version='8.0.1'
+      _dotnet_dll='Microsoft.IdentityModel.Abstractions.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-identitymodel-jsonwebtokens)
+      _dotnet_id='Microsoft.IdentityModel.JsonWebTokens'
+      _dotnet_version='8.0.1'
+      _dotnet_dll='Microsoft.IdentityModel.JsonWebTokens.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-identitymodel-logging)
+      _dotnet_id='Microsoft.IdentityModel.Logging'
+      _dotnet_version='8.0.1'
+      _dotnet_dll='Microsoft.IdentityModel.Logging.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-identitymodel-protocols)
+      _dotnet_id='Microsoft.IdentityModel.Protocols'
+      _dotnet_version='8.0.1'
+      _dotnet_dll='Microsoft.IdentityModel.Protocols.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-identitymodel-protocols-openidconnect)
+      _dotnet_id='Microsoft.IdentityModel.Protocols.OpenIdConnect'
+      _dotnet_version='8.0.1'
+      _dotnet_dll='Microsoft.IdentityModel.Protocols.OpenIdConnect.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-identitymodel-tokens)
+      _dotnet_id='Microsoft.IdentityModel.Tokens'
+      _dotnet_version='8.0.1'
+      _dotnet_dll='Microsoft.IdentityModel.Tokens.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-openapi)
+      _dotnet_id='Microsoft.OpenApi'
+      _dotnet_version='2.7.5'
+      _dotnet_dll='Microsoft.OpenApi.dll'
+      _dotnet_license='MIT'
+      ;;
+    microsoft-win32-systemevents)
+      _dotnet_id='Microsoft.Win32.SystemEvents'
+      _dotnet_version='6.0.0'
+      _dotnet_dll='Microsoft.Win32.SystemEvents.dll'
+      _dotnet_license='MIT'
+      ;;
+    npgsql)
+      _dotnet_id='Npgsql'
+      _dotnet_version='10.0.3'
+      _dotnet_dll='Npgsql.dll'
+      _dotnet_license='PostgreSQL'
+      ;;
+    npgsql-entityframeworkcore-postgresql)
+      _dotnet_id='Npgsql.EntityFrameworkCore.PostgreSQL'
+      _dotnet_version='10.0.2'
+      _dotnet_dll='Npgsql.EntityFrameworkCore.PostgreSQL.dll'
+      _dotnet_license='PostgreSQL'
+      ;;
+    pipelines-sockets-unofficial)
+      _dotnet_id='Pipelines.Sockets.Unofficial'
+      _dotnet_version='2.2.8'
+      _dotnet_dll='Pipelines.Sockets.Unofficial.dll'
+      _dotnet_license='MIT'
+      ;;
+    qrcoder)
+      _dotnet_id='QRCoder'
+      _dotnet_version='1.8.0'
+      _dotnet_dll='QRCoder.dll'
+      _dotnet_license='MIT'
+      ;;
+    stackexchange-redis)
+      _dotnet_id='StackExchange.Redis'
+      _dotnet_version='2.7.27'
+      _dotnet_dll='StackExchange.Redis.dll'
+      _dotnet_license='MIT'
+      ;;
+    system-commandline)
+      _dotnet_id='System.CommandLine'
+      _dotnet_version='2.0.9'
+      _dotnet_dll='System.CommandLine.dll'
+      _dotnet_license='MIT'
+      ;;
+    system-drawing-common)
+      _dotnet_id='System.Drawing.Common'
+      _dotnet_version='6.0.0'
+      _dotnet_dll='System.Drawing.Common.dll'
+      _dotnet_license='MIT'
+      ;;
+    system-identitymodel-tokens-jwt)
+      _dotnet_id='System.IdentityModel.Tokens.Jwt'
+      _dotnet_version='8.0.1'
+      _dotnet_dll='System.IdentityModel.Tokens.Jwt.dll'
+      _dotnet_license='MIT'
+      ;;
+    yamldotnet)
+      _dotnet_id='YamlDotNet'
+      _dotnet_version='18.1.0'
+      _dotnet_dll='YamlDotNet.dll'
+      _dotnet_license='MIT'
+      ;;
+    *)
+      echo "unknown HomeHarbor .NET package key: ${key}" >&2
+      return 1
+      ;;
+  esac
+}
+
+_dotnet_install_path() {
+  local key="$1"
+  _dotnet_library_info "${key}" || return
+  printf '/usr/lib/dotnet/homeharbor/%s/%s/%s' "${_dotnet_id}" "${_dotnet_version}" "${_dotnet_dll}"
+}
+
+_dotnet_library_source() {
+  local key="$1"
+  _dotnet_library_info "${key}" || return
+
+  local root
+  for root in "${_publish_root}" "${_agent_publish_root}" "${_recovery_publish_root}" "${_installer_publish_root}"; do
+    local candidate="${srcdir}/${root}/${_dotnet_dll}"
+    if [[ -f "${candidate}" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
+
+  echo "published HomeHarbor .NET library not found: ${_dotnet_dll}" >&2
+  return 1
+}
+
+_package_dotnet_library() {
+  local key="$1"
+  _dotnet_library_info "${key}" || return
+  local source_file
+  source_file="$(_dotnet_library_source "${key}")" || return
+
+  pkgdesc=".NET runtime library ${_dotnet_id} for HomeHarbor"
+  depends=('dotnet-runtime')
+  license=("${_dotnet_license}")
+
+  install -Dm644 \
+    "${source_file}" \
+    "${pkgdir}/usr/lib/dotnet/homeharbor/${_dotnet_id}/${_dotnet_version}/${_dotnet_dll}"
+}
+
+_link_published_dotnet_libraries() {
+  local publish_dir="$1"
+  local target_dir="$2"
+
+  for key in "${_dotnet_keys[@]}"; do
+    _dotnet_library_info "${key}"
+    if [[ ! -f "${publish_dir}/${_dotnet_dll}" ]]; then
+      continue
+    fi
+
+    local target
+    target="$(_dotnet_install_path "${key}")"
+    ln -s "${target}" "${target_dir}/${_dotnet_dll}"
+  done
+}
+
+package_homeharbor-control() {
+  local source_dir="${srcdir}/${_source_root}"
+  local publish_dir="${srcdir}/${_publish_root}"
+  local agent_publish_dir="${srcdir}/${_agent_publish_root}"
+  local avb_helper="${srcdir}/${_avb_helper}"
+  local init_helper="${srcdir}/${_init_helper}"
+  pkgdesc='HomeHarbor control plane'
+  depends=(
+    'aspnet-runtime'
+    'android-tools'
+    'btrfs-progs'
+    'cryptsetup'
+    'device-mapper'
+    'dotnet-runtime'
+    'caddy'
+    'curl'
+    'jq'
+    'mdadm'
+    'openssl'
+    'podman'
+    'postgresql'
+    'samba'
+    'smartmontools'
+    'systemd'
+    'tpm2-tss'
+    'valkey'
+    'xfsprogs'
+    "${_dotnet_package_depends[@]}"
+  )
+
+  install -dm755 "${pkgdir}/usr/lib/homeharbor/api"
+  install -Dm755 "${publish_dir}/HomeHarbor.Api" "${pkgdir}/usr/lib/homeharbor/api/HomeHarbor.Api"
+  install -Dm644 "${publish_dir}/HomeHarbor.Api.dll" "${pkgdir}/usr/lib/homeharbor/api/HomeHarbor.Api.dll"
+  install -Dm644 "${publish_dir}/HomeHarbor.Api.deps.json" "${pkgdir}/usr/lib/homeharbor/api/HomeHarbor.Api.deps.json"
+  install -Dm644 "${publish_dir}/HomeHarbor.Api.runtimeconfig.json" "${pkgdir}/usr/lib/homeharbor/api/HomeHarbor.Api.runtimeconfig.json"
+  install -Dm644 "${publish_dir}/HomeHarbor.Core.dll" "${pkgdir}/usr/lib/homeharbor/api/HomeHarbor.Core.dll"
+  install -Dm644 "${publish_dir}/HomeHarbor.Tooling.dll" "${pkgdir}/usr/lib/homeharbor/api/HomeHarbor.Tooling.dll"
+  install -Dm644 "${publish_dir}/HomeHarbor.WebDav.dll" "${pkgdir}/usr/lib/homeharbor/api/HomeHarbor.WebDav.dll"
+  install -Dm644 "${publish_dir}/appsettings.json" "${pkgdir}/usr/lib/homeharbor/api/appsettings.json"
+
+  for file in \
+    HomeHarbor.Api.pdb \
+    HomeHarbor.Core.pdb \
+    HomeHarbor.Tooling.pdb \
+    HomeHarbor.WebDav.pdb \
+    HomeHarbor.Api.staticwebassets.endpoints.json \
+    HomeHarbor.Api.staticwebassets.runtime.json \
+    web.config; do
+    if [[ -f "${publish_dir}/${file}" ]]; then
+      install -Dm644 "${publish_dir}/${file}" "${pkgdir}/usr/lib/homeharbor/api/${file}"
+    fi
+  done
+
+  if [[ -d "${publish_dir}/wwwroot" ]]; then
+    cp -a "${publish_dir}/wwwroot" "${pkgdir}/usr/lib/homeharbor/api/"
+  fi
+
+  install -dm755 "${pkgdir}/usr/lib/homeharbor/agent"
+  install -Dm755 "${agent_publish_dir}/HomeHarbor.Agent" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Agent"
+  install -Dm644 "${agent_publish_dir}/HomeHarbor.Agent.dll" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Agent.dll"
+  install -Dm644 "${agent_publish_dir}/HomeHarbor.Agent.deps.json" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Agent.deps.json"
+  install -Dm644 "${agent_publish_dir}/HomeHarbor.Agent.runtimeconfig.json" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Agent.runtimeconfig.json"
+  install -Dm644 "${agent_publish_dir}/HomeHarbor.Tooling.dll" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Tooling.dll"
+  if [[ -f "${agent_publish_dir}/HomeHarbor.Agent.pdb" ]]; then
+    install -Dm644 "${agent_publish_dir}/HomeHarbor.Agent.pdb" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Agent.pdb"
+  fi
+  if [[ -f "${agent_publish_dir}/HomeHarbor.Tooling.pdb" ]]; then
+    install -Dm644 "${agent_publish_dir}/HomeHarbor.Tooling.pdb" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Tooling.pdb"
+  fi
+
+  _link_published_dotnet_libraries "${publish_dir}" "${pkgdir}/usr/lib/homeharbor/api"
+  _link_published_dotnet_libraries "${agent_publish_dir}" "${pkgdir}/usr/lib/homeharbor/agent"
+
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-api.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-api.service"
+  install -Dm644 "${source_dir}/os/systemd/valkey.service.d/homeharbor.conf" "${pkgdir}/usr/lib/systemd/system/valkey.service.d/homeharbor.conf"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-postgresql.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-postgresql.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-postgresql-init.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-postgresql-init.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-postgresql-bootstrap.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-postgresql-bootstrap.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-boot-attempt.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-boot-attempt.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-boot-success.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-boot-success.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-firstboot.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-firstboot.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-apply.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-apply.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-apply.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-apply.path"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-ota-commit.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-ota-commit.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-caddy-render.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-caddy-render.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-health.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-health.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-health.timer" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-health.timer"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-smbd.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-smbd.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-nmbd.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-nmbd.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-smb-apply.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-smb-apply.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-smb-apply.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-smb-apply.path"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-container-apply.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-container-apply.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-container-apply.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-container-apply.path"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-system-app-apply.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-system-app-apply.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-system-app-apply.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-system-app-apply.path"
+  install -Dm644 "${source_dir}/os/systemd/caddy.service.d/homeharbor-config.conf" "${pkgdir}/usr/lib/systemd/system/caddy.service.d/homeharbor-config.conf"
+  sed -i "s/^Environment=HOMEHARBOR_VERSION=.*/Environment=HOMEHARBOR_VERSION=${_homeharbor_version}/" \
+    "${pkgdir}/usr/lib/systemd/system/homeharbor-api.service"
+  sed -i "s/^Environment=HOMEHARBOR_CHANNEL=.*/Environment=HOMEHARBOR_CHANNEL=${_homeharbor_channel}/" \
+    "${pkgdir}/usr/lib/systemd/system/homeharbor-api.service"
+
+  install -Dm755 "${avb_helper}" "${pkgdir}/usr/lib/homeharbor/homeharbor-avb"
+  install -Dm755 "${init_helper}" "${pkgdir}/boot/init/homeharbor-verity"
+
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor.sysusers" "${pkgdir}/usr/lib/sysusers.d/homeharbor.conf"
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor.tmpfiles" "${pkgdir}/usr/lib/tmpfiles.d/homeharbor.conf"
+  install -dm755 "${pkgdir}/etc/homeharbor" "${pkgdir}/homeharbor-data"
+}
+
+package_homeharbor-recovery() {
+  local source_dir="${srcdir}/${_source_root}"
+  local recovery_publish_dir="${srcdir}/${_recovery_publish_root}"
+  local avb_helper="${srcdir}/${_avb_helper}"
+  pkgdesc='HomeHarbor recovery environment'
+  depends=(
+    'android-tools'
+    'device-mapper'
+    'dotnet-runtime'
+    'jq'
+    'openssl'
+    'systemd'
+    "dotnet-system-commandline=${pkgver}-${pkgrel}"
+    "dotnet-yamldotnet=${pkgver}-${pkgrel}"
+  )
+
+  install -dm755 "${pkgdir}/usr/lib/homeharbor/recovery"
+  install -Dm755 "${recovery_publish_dir}/HomeHarbor.Recovery" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Recovery"
+  install -Dm644 "${recovery_publish_dir}/HomeHarbor.Recovery.dll" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Recovery.dll"
+  install -Dm644 "${recovery_publish_dir}/HomeHarbor.Recovery.deps.json" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Recovery.deps.json"
+  install -Dm644 "${recovery_publish_dir}/HomeHarbor.Recovery.runtimeconfig.json" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Recovery.runtimeconfig.json"
+  install -Dm644 "${recovery_publish_dir}/HomeHarbor.Tooling.dll" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Tooling.dll"
+
+  if [[ -f "${recovery_publish_dir}/HomeHarbor.Recovery.pdb" ]]; then
+    install -Dm644 "${recovery_publish_dir}/HomeHarbor.Recovery.pdb" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Recovery.pdb"
+  fi
+  if [[ -f "${recovery_publish_dir}/HomeHarbor.Tooling.pdb" ]]; then
+    install -Dm644 "${recovery_publish_dir}/HomeHarbor.Tooling.pdb" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Tooling.pdb"
+  fi
+  _link_published_dotnet_libraries "${recovery_publish_dir}" "${pkgdir}/usr/lib/homeharbor/recovery"
+
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-fastbootd.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-fastbootd.service"
+  install -Dm644 "${source_dir}/os/systemd/network/20-homeharbor-recovery-wired.network" "${pkgdir}/etc/systemd/network/20-homeharbor-recovery-wired.network"
+  install -Dm644 "${source_dir}/os/systemd/serial-getty@ttyS0.service.d/recovery-autologin.conf" "${pkgdir}/etc/systemd/system/serial-getty@ttyS0.service.d/recovery-autologin.conf"
+  install -Dm644 "${source_dir}/os/systemd/getty@tty1.service.d/recovery-autologin.conf" "${pkgdir}/etc/systemd/system/getty@tty1.service.d/recovery-autologin.conf"
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor-recovery.sysusers" "${pkgdir}/usr/lib/sysusers.d/homeharbor_recovery.conf"
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor-recovery.tmpfiles" "${pkgdir}/usr/lib/tmpfiles.d/homeharbor_recovery.conf"
+  install -Dm755 "${avb_helper}" "${pkgdir}/usr/lib/homeharbor/homeharbor-avb"
+  install -dm755 "${pkgdir}/etc/homeharbor" "${pkgdir}/homeharbor-data"
+}
+
+package_homeharbor-installer() {
+  local source_dir="${srcdir}/${_source_root}"
+  local installer_publish_dir="${srcdir}/${_installer_publish_root}"
+  local avb_helper="${srcdir}/${_avb_helper}"
+  pkgdesc='HomeHarbor live disk installer'
+  depends=(
+    'android-tools'
+    'btrfs-progs'
+    'cryptsetup'
+    'device-mapper'
+    'dotnet-runtime'
+    'dosfstools'
+    'efitools'
+    'erofs-utils'
+    'gpm'
+    'mdadm'
+    'xfsprogs'
+    'gptfdisk'
+    'jq'
+    'mokutil'
+    'openssl'
+    'sbsigntools'
+    'systemd'
+    'tpm2-tss'
+  )
+
+  install -dm755 "${pkgdir}/usr/lib/homeharbor/installer"
+  cp -a "${installer_publish_dir}/." "${pkgdir}/usr/lib/homeharbor/installer/"
+  chmod 0755 "${pkgdir}/usr/lib/homeharbor/installer/HomeHarbor.Installer"
+  find "${pkgdir}/usr/lib/homeharbor/installer" -type f ! -name HomeHarbor.Installer -exec chmod 0644 {} +
+
+  install -Dm755 "${avb_helper}" "${pkgdir}/usr/lib/homeharbor/homeharbor-avb"
+  install -Dm644 "${source_dir}/certs/homeharbor-secure-boot.crt" "${pkgdir}/usr/share/homeharbor/secure-boot/homeharbor-secure-boot.crt"
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor-recovery.sysusers" "${pkgdir}/usr/lib/sysusers.d/homeharbor-installer.conf"
+  install -dm755 "${pkgdir}/etc/homeharbor" "${pkgdir}/opt/homeharbor-installer/payloads"
+}
+
+for _dotnet_key in "${_dotnet_keys[@]}"; do
+  eval "package_dotnet-${_dotnet_key}() { _package_dotnet_library '${_dotnet_key}'; }"
+done

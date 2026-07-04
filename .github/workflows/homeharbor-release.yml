@@ -1,0 +1,216 @@
+name: HomeHarbor OTA and Installers
+
+on:
+  push:
+    tags:
+      - "v*"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      HOMEHARBOR_GITHUB_REPOSITORY: akaishi-tech/home-harbor
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release coordinates
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            channel=stable
+            release_tag="${GITHUB_REF_NAME}"
+            version="${GITHUB_REF_NAME#v}"
+          else
+            channel=daily
+            release_tag=daily
+            short_sha="${GITHUB_SHA::7}"
+            version="0.1.0-daily.${GITHUB_RUN_NUMBER}.${short_sha}"
+          fi
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release artifacts in Arch Linux
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          CHANNEL: ${{ steps.release.outputs.channel }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM: ${{ secrets.HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM }}
+          HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM: ${{ secrets.HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM }}
+          HOMEHARBOR_RELEASE_KEY_ID: ${{ secrets.HOMEHARBOR_RELEASE_KEY_ID }}
+          HOMEHARBOR_SECURE_BOOT_KEY_PEM: ${{ secrets.HOMEHARBOR_SECURE_BOOT_KEY_PEM }}
+          HOMEHARBOR_SECURE_BOOT_CERT_PEM: ${{ secrets.HOMEHARBOR_SECURE_BOOT_CERT_PEM }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM}" || -z "${HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM}" ]]; then
+            echo "HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM and HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM secrets are required." >&2
+            exit 1
+          fi
+          if [[ -z "${HOMEHARBOR_SECURE_BOOT_KEY_PEM}" || -z "${HOMEHARBOR_SECURE_BOOT_CERT_PEM}" ]]; then
+            echo "HOMEHARBOR_SECURE_BOOT_KEY_PEM and HOMEHARBOR_SECURE_BOOT_CERT_PEM secrets are required." >&2
+            exit 1
+          fi
+          # Keep the container non-privileged; the C# image builders use rootless user namespaces.
+          docker run --rm \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            -e VERSION \
+            -e CHANNEL \
+            -e RELEASE_TAG \
+            -e HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM \
+            -e HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM \
+            -e HOMEHARBOR_RELEASE_KEY_ID \
+            -e HOMEHARBOR_SECURE_BOOT_KEY_PEM \
+            -e HOMEHARBOR_SECURE_BOOT_CERT_PEM \
+            archlinux:base-devel bash <<'HOMEHARBOR_DOCKER_SCRIPT'
+              set -euo pipefail
+              pacman -Syu --noconfirm --needed \
+                android-tools arch-install-scripts archiso aspnet-runtime base-devel btrfs-progs cryptsetup \
+                device-mapper dosfstools dotnet-sdk efitools erofs-utils git gptfdisk jq lvm2 networkmanager openssl \
+                pnpm postgresql qemu-base sbsigntools sudo systemd
+              useradd -m -G wheel builder
+              printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/homeharbor-builder
+              chmod 0440 /etc/sudoers.d/homeharbor-builder
+              printf "builder:100000:65536\n" >> /etc/subuid
+              printf "builder:100000:65536\n" >> /etc/subgid
+              install -d -m 0700 /tmp/homeharbor-keys
+              printf "%s" "${HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM}" > /tmp/homeharbor-keys/release.pem
+              printf "%s" "${HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM}" > /tmp/homeharbor-keys/release.pub.pem
+              printf "%s" "${HOMEHARBOR_SECURE_BOOT_KEY_PEM}" > /tmp/homeharbor-keys/secure-boot.key
+              printf "%s" "${HOMEHARBOR_SECURE_BOOT_CERT_PEM}" > /tmp/homeharbor-keys/secure-boot.crt
+              chmod 600 /tmp/homeharbor-keys/release.pem
+              chmod 600 /tmp/homeharbor-keys/secure-boot.key
+              chmod 644 /tmp/homeharbor-keys/release.pub.pem
+              chmod 644 /tmp/homeharbor-keys/secure-boot.crt
+              chown -R builder:builder /tmp/homeharbor-keys
+              original_uid="$(stat -c %u /workspace)"
+              original_gid="$(stat -c %g /workspace)"
+              restore_workspace_owner() { chown -R "${original_uid}:${original_gid}" /workspace || true; }
+              trap restore_workspace_owner EXIT
+              chown -R builder:builder /workspace
+              export HOMEHARBOR_RELEASE_PRIVATE_KEY=/tmp/homeharbor-keys/release.pem
+              export HOMEHARBOR_RELEASE_PUBLIC_KEY=/tmp/homeharbor-keys/release.pub.pem
+              export HOMEHARBOR_SECURE_BOOT=1
+              export HOMEHARBOR_SECURE_BOOT_KEY=/tmp/homeharbor-keys/secure-boot.key
+              export HOMEHARBOR_SECURE_BOOT_CERT=/tmp/homeharbor-keys/secure-boot.crt
+              export HOMEHARBOR_SECURE_BOOT_ENROLL=manual
+              export HOMEHARBOR_RELEASE_CHANNEL="${CHANNEL}"
+              export HOMEHARBOR_ISO_CHANNEL="${CHANNEL}"
+              export HOMEHARBOR_CHANNEL="${CHANNEL}"
+              export HOMEHARBOR_GITHUB_RELEASE_TAG="${RELEASE_TAG}"
+              export HOMEHARBOR_IMAGE_SIZE="${HOMEHARBOR_IMAGE_SIZE:-12G}"
+              export HOMEHARBOR_PACKAGE_USER=builder
+              export HOMEHARBOR_RELEASE_SKIP_FULL_E2E=1
+
+              sudo -E -H -u builder bash <<'HOMEHARBOR_BUILDER_SCRIPT'
+                set -euo pipefail
+                cd /workspace
+                dotnet restore HomeHarbor.slnx
+                dotnet test tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj --no-restore
+                pnpm install --frozen-lockfile
+                pnpm frontend:typecheck
+                pnpm docs:build
+                dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
+                  system-plan system/x86_64/system/manifest.yml "${VERSION}" /workspace >/dev/null
+                dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
+                  system-build system/x86_64/system/manifest.yml "${VERSION}" /workspace
+
+                required_artifacts=(
+                  "artifacts/homeharbor-vmlinuz-${VERSION}"
+                  "artifacts/homeharbor-initramfs-${VERSION}.img"
+                  "artifacts/homeharbor-modules-${VERSION}.img"
+                  "artifacts/homeharbor-firmware-${VERSION}.img"
+                  "artifacts/homeharbor-rootfs-${VERSION}.img"
+                  "artifacts/homeharbor-recovery-${VERSION}.img"
+                  "artifacts/homeharbor-vbmeta-a-${VERSION}.img"
+                  "artifacts/homeharbor-vbmeta-a-${VERSION}.digest"
+                  "artifacts/homeharbor-vbmeta-b-${VERSION}.img"
+                  "artifacts/homeharbor-vbmeta-b-${VERSION}.digest"
+                  "artifacts/homeharbor-boot-${VERSION}.efi"
+                  "artifacts/homeharbor-bootloader-${VERSION}.efi"
+                  "artifacts/homeharbor-bootx64-${VERSION}.efi"
+                  "artifacts/homeharbor-${VERSION}-plan.json"
+                  "artifacts/homeharbor-${VERSION}-super.txt"
+                )
+                for artifact in "${required_artifacts[@]}"; do
+                  if [[ ! -s "${artifact}" ]]; then
+                    echo "Missing release artifact: ${artifact}" >&2
+                    exit 1
+                  fi
+                done
+          HOMEHARBOR_BUILDER_SCRIPT
+          HOMEHARBOR_DOCKER_SCRIPT
+
+      - name: Publish daily release
+        if: steps.release.outputs.channel == 'daily'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_dir="artifacts/channels/${VERSION}"
+          release_assets=()
+          while IFS= read -r asset; do
+            release_assets+=("${asset}")
+          done < <(find artifacts -maxdepth 1 -type f -name "homeharbor-*${VERSION}*" | sort)
+          if [[ -d "${release_dir}" ]]; then
+            while IFS= read -r asset; do
+              release_assets+=("${asset}")
+            done < <(find "${release_dir}" -type f | sort)
+          fi
+          if [[ "${#release_assets[@]}" -eq 0 ]]; then
+            echo "No release assets were produced for ${VERSION}." >&2
+            exit 1
+          fi
+          gh release delete daily --cleanup-tag --yes || true
+          git tag -f daily "${GITHUB_SHA}"
+          git push origin :refs/tags/daily || true
+          git push origin daily --force
+          gh release create daily \
+            --prerelease \
+            --title "HomeHarbor Daily ${VERSION}" \
+            --notes "Automated daily HomeHarbor managed artifact build." \
+            "${release_assets[@]}"
+
+      - name: Publish stable release
+        if: steps.release.outputs.channel == 'stable'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          release_dir="artifacts/channels/${VERSION}"
+          release_assets=()
+          while IFS= read -r asset; do
+            release_assets+=("${asset}")
+          done < <(find artifacts -maxdepth 1 -type f -name "homeharbor-*${VERSION}*" | sort)
+          if [[ -d "${release_dir}" ]]; then
+            while IFS= read -r asset; do
+              release_assets+=("${asset}")
+            done < <(find "${release_dir}" -type f | sort)
+          fi
+          if [[ "${#release_assets[@]}" -eq 0 ]]; then
+            echo "No release assets were produced for ${VERSION}." >&2
+            exit 1
+          fi
+          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || \
+            gh release create "${RELEASE_TAG}" --verify-tag --title "HomeHarbor ${VERSION}" --notes "HomeHarbor stable release ${VERSION}."
+          gh release upload "${RELEASE_TAG}" --clobber \
+            "${release_assets[@]}"

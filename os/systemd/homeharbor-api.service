@@ -1,0 +1,29 @@
+[Unit]
+Description=HomeHarbor control plane
+Requires=valkey.service
+RequiresMountsFor=/var/lib/homeharbor
+After=network-online.target homeharbor-storage-apply.service valkey.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homeharbor
+Group=homeharbor
+SupplementaryGroups=valkey
+WorkingDirectory=/usr/lib/homeharbor/api
+Environment=HomeHarbor__Api__UnixSocketPath=/run/homeharbor/api.sock
+Environment=HOMEHARBOR_VERSION=0.1.0
+Environment=HOMEHARBOR_CHANNEL=dev
+RuntimeDirectory=homeharbor
+RuntimeDirectoryMode=0750
+UMask=0007
+ExecStartPre=+/usr/lib/homeharbor/agent/HomeHarbor.Agent firstboot
+ExecStart=/usr/bin/dotnet /usr/lib/homeharbor/api/HomeHarbor.Api.dll
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homeharbor /homeharbor-data /run/homeharbor
+
+[Install]
+WantedBy=multi-user.target

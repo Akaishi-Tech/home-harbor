@@ -1,0 +1,8 @@
+schemaVersion: 1
+name: generic
+kernel:
+  package: linux
+  origin: upstream-arch-binary
+artifacts: {}
+artifactBuilds: []
+addons: []

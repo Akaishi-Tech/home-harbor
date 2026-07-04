@@ -1,0 +1,18 @@
+{
+  "name": "homeharbor-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "license": "GPL-3.0-only",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "frontend:dev": "pnpm --filter homeharbor-frontend dev",
+    "frontend:typecheck": "pnpm --filter homeharbor-frontend typecheck",
+    "frontend:build": "pnpm --filter homeharbor-frontend build",
+    "frontend:preview": "pnpm --filter homeharbor-frontend preview",
+    "docs:dev": "pnpm --filter homeharbor-docs dev",
+    "docs:build": "pnpm --filter homeharbor-docs build",
+    "docs:preview": "pnpm --filter homeharbor-docs preview",
+    "docs:deploy": "pnpm --filter homeharbor-docs deploy",
+    "ui:build": "pnpm --filter homeharbor-frontend build && pnpm --filter homeharbor-docs build"
+  }
+}

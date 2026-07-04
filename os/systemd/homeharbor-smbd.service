@@ -1,0 +1,14 @@
+[Unit]
+Description=HomeHarbor SMB file sharing daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/lib/homeharbor/agent/HomeHarbor.Agent ensure-smb-config
+ExecStart=/usr/bin/smbd --foreground --no-process-group --configfile=/var/lib/homeharbor/samba/smb.conf
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

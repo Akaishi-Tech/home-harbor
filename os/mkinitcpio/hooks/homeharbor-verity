@@ -1,0 +1,35 @@
+#!/usr/bin/ash
+
+homeharbor_verity_helper=/boot/init/homeharbor-verity
+
+homeharbor_halt_without_shell() {
+  echo "HomeHarbor emergency shell is disabled for this build; halting."
+  sync
+  poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null || true
+  while :; do
+    sleep 3600
+  done
+}
+
+homeharbor_run_verity_helper() {
+  if [ ! -x "${homeharbor_verity_helper}" ]; then
+    echo "HomeHarbor init helper is missing: ${homeharbor_verity_helper}"
+    homeharbor_halt_without_shell
+  fi
+
+  "${homeharbor_verity_helper}" "$1"
+}
+
+homeharbor_apply_helper_root() {
+  [ -f /run/homeharbor/root ] || return 0
+  IFS= read -r root </run/homeharbor/root || return 1
+}
+
+run_hook() {
+  homeharbor_run_verity_helper hook || return $?
+  homeharbor_apply_helper_root
+}
+
+run_latehook() {
+  homeharbor_run_verity_helper latehook
+}

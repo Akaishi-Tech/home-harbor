@@ -1,0 +1,14 @@
+[Unit]
+Description=Prepare HomeHarbor data directories
+Requires=homeharbor-storage-apply.service
+After=local-fs.target
+After=homeharbor-storage-apply.service
+Before=homeharbor-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch HomeHarbor system app apply requests
+
+[Path]
+PathChanged=/run/homeharbor/system-app-apply.request
+Unit=homeharbor-system-app-apply.service
+
+[Install]
+WantedBy=multi-user.target

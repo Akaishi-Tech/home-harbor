@@ -1,0 +1,368 @@
+schemaVersion: 1
+name: system
+architecture: x86_64
+bootMode: UEFI
+packages:
+  rootfs:
+    - base
+    - linux
+    - linux-firmware
+    - systemd
+    - systemd-resolvconf
+    - tpm2-tss
+    - networkmanager
+    - qemu-guest-agent
+    - openssh
+    - sudo
+    - arch-install-scripts
+    - android-tools
+    - erofs-utils
+    - cryptsetup
+    - device-mapper
+    - mdadm
+    - btrfs-progs
+    - xfsprogs
+    - dosfstools
+    - gptfdisk
+    - smartmontools
+    - podman
+    - samba
+    - caddy
+    - postgresql
+    - valkey
+    - wireguard-tools
+    - restic
+    - jq
+    - mokutil
+    - openssl
+    - avahi
+    - nss-mdns
+    - aspnet-runtime
+    - dotnet-runtime
+  recovery:
+    - base
+    - systemd
+    - systemd-resolvconf
+    - dotnet-runtime
+    - android-tools
+    - device-mapper
+    - erofs-utils
+    - gptfdisk
+    - dosfstools
+    - jq
+    - openssl
+rootfs:
+  hostname: homeharbor
+  directories:
+    - /etc/homeharbor
+    - /homeharbor-data
+    - /efi
+    - /usr/lib/modules
+    - /usr/lib/firmware
+    - /var/lib/systemd/linger
+  files:
+    - source: os/mkinitcpio/install/homeharbor-verity
+      destination: /etc/initcpio/install/homeharbor-verity
+      mode: "0755"
+    - source: os/mkinitcpio/hooks/homeharbor-verity
+      destination: /etc/initcpio/hooks/homeharbor-verity
+      mode: "0755"
+    - destination: /etc/systemd/network/20-homeharbor-wired.network
+      mode: "0644"
+      content: |
+        [Match]
+        Name=en* eth*
+
+        [Network]
+        DHCP=yes
+        IPv6AcceptRA=yes
+
+        [DHCPv4]
+        RouteMetric=100
+    - destination: /etc/NetworkManager/system-connections/homeharbor-wired.nmconnection
+      mode: "0600"
+      content: |
+        [connection]
+        id=HomeHarbor wired
+        uuid=7e4e5ec0-28f3-46fb-a4b8-25c0b7c0fbd0
+        type=ethernet
+        autoconnect=true
+        autoconnect-priority=100
+
+        [ethernet]
+
+        [ipv4]
+        method=auto
+
+        [ipv6]
+        addr-gen-mode=default
+        method=auto
+  fstab:
+    - spec: LABEL=state
+      mountPoint: /var
+      fileSystem: ext4
+      options: defaults
+      dump: 0
+      pass: 2
+    - spec: LABEL=esp
+      mountPoint: /efi
+      fileSystem: vfat
+      options: umask=0077,nofail,x-systemd.device-timeout=30s
+      dump: 0
+      pass: 2
+  createEmptyCrypttab: true
+  mkinitcpioHooks:
+    - base
+    - udev
+    - autodetect
+    - modconf
+    - kms
+    - keyboard
+    - keymap
+    - consolefont
+    - block
+    - homeharbor-verity
+    - filesystems
+    - fsck
+  users:
+    - name: homeharbor
+      system: true
+      homeDir: /var/lib/homeharbor
+      createHome: true
+      shell: /usr/bin/nologin
+      groups:
+        - valkey
+    - name: homeharbor-containers
+      system: true
+      homeDir: /var/lib/homeharbor-containers
+      createHome: true
+      shell: /usr/bin/nologin
+  groups:
+    - name: valkey
+      system: true
+    - name: homeharbor-smb
+      system: true
+  generatedUsers:
+    - prefix: homeharbor-smb
+      start: 1
+      end: 32
+      width: 3
+      system: true
+      homeDir: /var/lib/homeharbor
+      shell: /usr/bin/nologin
+      groups:
+        - homeharbor-smb
+  subIds:
+    - name: homeharbor-containers
+      start: 200000
+      count: 65536
+  lingerUsers:
+    - homeharbor-containers
+  systemdUnits:
+    - systemd-networkd
+    - systemd-networkd-wait-online
+    - systemd-resolved
+    - qemu-guest-agent
+    - caddy
+    - homeharbor-storage-apply
+    - homeharbor-storage-apply.path
+    - homeharbor-postgresql
+    - valkey
+    - homeharbor-api
+    - homeharbor-caddy-render
+    - homeharbor-storage-health.timer
+    - homeharbor-smbd
+    - homeharbor-nmbd
+    - homeharbor-smb-apply.path
+    - homeharbor-container-apply.path
+    - homeharbor-system-app-apply.path
+    - homeharbor-boot-attempt
+    - homeharbor-boot-success
+    - serial-getty@ttyS0
+    - getty@tty1
+recovery:
+  hostname: homeharbor-recovery
+  directories:
+    - /etc/homeharbor
+    - /efi
+    - /homeharbor-data
+  fstab:
+    - spec: LABEL=state
+      mountPoint: /var
+      fileSystem: ext4
+      options: defaults
+      dump: 0
+      pass: 2
+    - spec: LABEL=esp
+      mountPoint: /efi
+      fileSystem: vfat
+      options: umask=0077,nofail,x-systemd.device-timeout=30s
+      dump: 0
+      pass: 2
+  shells:
+    - /usr/lib/homeharbor/recovery/HomeHarbor.Recovery
+  users:
+    - name: recovery
+      system: true
+      userGroup: true
+      homeDir: /var/lib/homeharbor/recovery
+      createHome: true
+      shell: /usr/lib/homeharbor/recovery/HomeHarbor.Recovery
+  systemdUnits:
+    - systemd-networkd
+    - systemd-networkd-wait-online
+    - systemd-resolved
+    - homeharbor-fastbootd
+    - serial-getty@ttyS0
+    - getty@tty1
+partitions:
+  - name: esp
+    label: EFI System
+    sizeMib: 768
+    fileSystem: vfat
+    purpose: HomeHarbor EFI selector and boot slot state
+  - name: boot_a
+    label: HomeHarbor boot A
+    sizeMib: 512
+    fileSystem: raw-uki
+    purpose: normal boot UKI for boot slot A
+  - name: boot_b
+    label: HomeHarbor boot B
+    sizeMib: 512
+    fileSystem: raw-uki
+    purpose: normal boot UKI for boot slot B
+  - name: super
+    label: Android super
+    sizeMib: 7184
+    fileSystem: android-dynamic
+    purpose: dynamic partition container for verified root, modules, and firmware payloads
+  - name: state
+    label: HomeHarbor state
+    sizeMib: 1024
+    fileSystem: ext4
+    purpose: OTA boot metadata and persistent markers
+  - name: recovery_a
+    label: HomeHarbor recovery A
+    sizeMib: 1648
+    dataSizeMib: 1536
+    fileSystem: avb-erofs
+    payload: recovery
+    purpose: recovery rootfs, embedded recovery UKI, and appended AVB hashtree for slot A
+  - name: recovery_b
+    label: HomeHarbor recovery B
+    sizeMib: 1648
+    dataSizeMib: 1536
+    fileSystem: avb-erofs
+    payload: recovery
+    purpose: recovery rootfs, embedded recovery UKI, and appended AVB hashtree for slot B
+  - name: vbmeta_a
+    label: HomeHarbor vbmeta A
+    sizeMib: 16
+    fileSystem: avb-vbmeta
+    purpose: AVB descriptors for boot slot A
+  - name: vbmeta_b
+    label: HomeHarbor vbmeta B
+    sizeMib: 16
+    fileSystem: avb-vbmeta
+    purpose: AVB descriptors for boot slot B
+  - name: data
+    label: Encrypted family data
+    size: remaining
+    fileSystem: luks+btrfs
+    purpose: files, photos, backups, PostgreSQL data
+logicalPartitions:
+  - name: root_a
+    parent: super
+    sizeMib: 2304
+    dataSizeMib: 2048
+    fileSystem: avb-erofs
+    payload: rootfs
+    purpose: initial immutable rootfs plus appended AVB hashtree
+  - name: root_b
+    parent: super
+    sizeMib: 2304
+    dataSizeMib: 2048
+    fileSystem: avb-erofs
+    payload: rootfs
+    purpose: OTA target rootfs plus appended AVB hashtree
+  - name: modules_a
+    parent: super
+    sizeMib: 448
+    dataSizeMib: 384
+    fileSystem: avb-erofs
+    payload: modules
+    purpose: kernel modules plus appended AVB hashtree for boot slot A
+  - name: modules_b
+    parent: super
+    sizeMib: 448
+    dataSizeMib: 384
+    fileSystem: avb-erofs
+    payload: modules
+    purpose: kernel modules plus appended AVB hashtree for boot slot B
+  - name: firmware_a
+    parent: super
+    sizeMib: 832
+    dataSizeMib: 768
+    fileSystem: avb-erofs
+    payload: firmware
+    purpose: linux-firmware tree plus appended AVB hashtree for boot slot A
+  - name: firmware_b
+    parent: super
+    sizeMib: 832
+    dataSizeMib: 768
+    fileSystem: avb-erofs
+    payload: firmware
+    purpose: linux-firmware tree plus appended AVB hashtree for boot slot B
+super:
+  name: super
+  groupName: homeharbor
+  metadataSizeKib: 64
+  metadataSlots: 2
+  reservedMib: 16
+kernelArgs:
+  - console=tty0
+  - console=ttyS0,115200n8
+  - rd.homeharbor.verity=1
+  - homeharbor.super=/dev/disk/by-partlabel/super
+  - homeharbor.recovery=1
+  - homeharbor.boot_mode=${BOOT_MODE}
+artifacts:
+  vmlinuz:
+    path: artifacts/homeharbor-vmlinuz-${VERSION}
+    sha256: artifacts/homeharbor-vmlinuz-${VERSION}.sha256
+  initramfs:
+    path: artifacts/homeharbor-initramfs-${VERSION}.img
+    sha256: artifacts/homeharbor-initramfs-${VERSION}.img.sha256
+  modules:
+    path: artifacts/homeharbor-modules-${VERSION}.img
+    sha256: artifacts/homeharbor-modules-${VERSION}.img.sha256
+  firmware:
+    path: artifacts/homeharbor-firmware-${VERSION}.img
+    sha256: artifacts/homeharbor-firmware-${VERSION}.img.sha256
+  rootfs:
+    path: artifacts/homeharbor-rootfs-${VERSION}.img
+    sha256: artifacts/homeharbor-rootfs-${VERSION}.img.sha256
+  recovery:
+    path: artifacts/homeharbor-recovery-${VERSION}.img
+    sha256: artifacts/homeharbor-recovery-${VERSION}.img.sha256
+  vbmetaA:
+    path: artifacts/homeharbor-vbmeta-a-${VERSION}.img
+    sha256: artifacts/homeharbor-vbmeta-a-${VERSION}.img.sha256
+    digest: artifacts/homeharbor-vbmeta-a-${VERSION}.digest
+  vbmetaB:
+    path: artifacts/homeharbor-vbmeta-b-${VERSION}.img
+    sha256: artifacts/homeharbor-vbmeta-b-${VERSION}.img.sha256
+    digest: artifacts/homeharbor-vbmeta-b-${VERSION}.digest
+  boot:
+    path: artifacts/homeharbor-boot-${VERSION}.efi
+    sha256: artifacts/homeharbor-boot-${VERSION}.efi.sha256
+  bootloader:
+    path: artifacts/homeharbor-bootloader-${VERSION}.efi
+    sha256: artifacts/homeharbor-bootloader-${VERSION}.efi.sha256
+  bootx64:
+    path: artifacts/homeharbor-bootx64-${VERSION}.efi
+    sha256: artifacts/homeharbor-bootx64-${VERSION}.efi.sha256
+  superDump:
+    path: artifacts/homeharbor-${VERSION}-super.txt
+  plan:
+    path: artifacts/homeharbor-${VERSION}-plan.json

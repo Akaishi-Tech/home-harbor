@@ -1,0 +1,12 @@
+[Unit]
+Description=Commit healthy HomeHarbor OTA slot
+After=homeharbor-api.service
+RequiresMountsFor=/var/lib/homeharbor /efi
+ConditionPathExists=/var/lib/homeharbor/ota/pending.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent ota-commit
+
+[Install]
+WantedBy=multi-user.target

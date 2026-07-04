@@ -1,0 +1,40 @@
+schemaVersion: 1
+name: zfs
+kernel:
+  package: linux-lts
+  origin: upstream-arch-binary
+module:
+  package: zfs-linux-lts
+  origin: source-build
+  source:
+    gitUrl: https://aur.archlinux.org/zfs-linux-lts.git
+    packageOutput: .work/kernel/zfs/packages
+artifacts:
+  vmlinuz: artifacts/homeharbor-vmlinuz-zfs-${VERSION}
+  initramfs: artifacts/homeharbor-initramfs-zfs-${VERSION}.img
+  modules: artifacts/homeharbor-modules-zfs-${VERSION}.img
+  firmware: artifacts/homeharbor-firmware-zfs-${VERSION}.img
+  recovery: artifacts/homeharbor-recovery-zfs-${VERSION}.img
+artifactBuilds:
+  - label: zfs linux-lts artifacts
+    type: zfs-lts-artifacts
+    outputs:
+      - artifacts/homeharbor-vmlinuz-zfs-${VERSION}
+      - artifacts/homeharbor-initramfs-zfs-${VERSION}.img
+      - artifacts/homeharbor-modules-zfs-${VERSION}.img
+      - artifacts/homeharbor-firmware-zfs-${VERSION}.img
+      - artifacts/homeharbor-recovery-zfs-${VERSION}.img
+addons:
+  - key: zfs-utils
+    origin: source-build
+    image: artifacts/homeharbor-zfs-utils-addon-${VERSION}.erofs
+    source:
+      gitUrl: https://aur.archlinux.org/zfs-utils.git
+      pgpKeys:
+        - 4F3BA9AB6D1F8D683DC2DFB56AD860EED4598027
+      packageOutput: .work/kernel/zfs/zfs-utils-packages
+    build:
+      label: zfs-utils addon
+      type: zfs-utils-addon
+      outputs:
+        - ${OUTPUT}

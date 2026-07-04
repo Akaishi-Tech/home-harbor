@@ -1,0 +1,69 @@
+u homeharbor - "HomeHarbor service user" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-containers - "HomeHarbor rootless container user" /var/lib/homeharbor-containers /usr/bin/nologin
+m caddy homeharbor
+m homeharbor valkey
+g homeharbor-smb -
+u homeharbor-smb001 - "HomeHarbor SMB credential 001" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb002 - "HomeHarbor SMB credential 002" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb003 - "HomeHarbor SMB credential 003" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb004 - "HomeHarbor SMB credential 004" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb005 - "HomeHarbor SMB credential 005" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb006 - "HomeHarbor SMB credential 006" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb007 - "HomeHarbor SMB credential 007" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb008 - "HomeHarbor SMB credential 008" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb009 - "HomeHarbor SMB credential 009" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb010 - "HomeHarbor SMB credential 010" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb011 - "HomeHarbor SMB credential 011" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb012 - "HomeHarbor SMB credential 012" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb013 - "HomeHarbor SMB credential 013" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb014 - "HomeHarbor SMB credential 014" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb015 - "HomeHarbor SMB credential 015" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb016 - "HomeHarbor SMB credential 016" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb017 - "HomeHarbor SMB credential 017" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb018 - "HomeHarbor SMB credential 018" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb019 - "HomeHarbor SMB credential 019" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb020 - "HomeHarbor SMB credential 020" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb021 - "HomeHarbor SMB credential 021" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb022 - "HomeHarbor SMB credential 022" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb023 - "HomeHarbor SMB credential 023" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb024 - "HomeHarbor SMB credential 024" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb025 - "HomeHarbor SMB credential 025" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb026 - "HomeHarbor SMB credential 026" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb027 - "HomeHarbor SMB credential 027" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb028 - "HomeHarbor SMB credential 028" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb029 - "HomeHarbor SMB credential 029" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb030 - "HomeHarbor SMB credential 030" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb031 - "HomeHarbor SMB credential 031" /var/lib/homeharbor /usr/bin/nologin
+u homeharbor-smb032 - "HomeHarbor SMB credential 032" /var/lib/homeharbor /usr/bin/nologin
+m homeharbor-smb001 homeharbor-smb
+m homeharbor-smb002 homeharbor-smb
+m homeharbor-smb003 homeharbor-smb
+m homeharbor-smb004 homeharbor-smb
+m homeharbor-smb005 homeharbor-smb
+m homeharbor-smb006 homeharbor-smb
+m homeharbor-smb007 homeharbor-smb
+m homeharbor-smb008 homeharbor-smb
+m homeharbor-smb009 homeharbor-smb
+m homeharbor-smb010 homeharbor-smb
+m homeharbor-smb011 homeharbor-smb
+m homeharbor-smb012 homeharbor-smb
+m homeharbor-smb013 homeharbor-smb
+m homeharbor-smb014 homeharbor-smb
+m homeharbor-smb015 homeharbor-smb
+m homeharbor-smb016 homeharbor-smb
+m homeharbor-smb017 homeharbor-smb
+m homeharbor-smb018 homeharbor-smb
+m homeharbor-smb019 homeharbor-smb
+m homeharbor-smb020 homeharbor-smb
+m homeharbor-smb021 homeharbor-smb
+m homeharbor-smb022 homeharbor-smb
+m homeharbor-smb023 homeharbor-smb
+m homeharbor-smb024 homeharbor-smb
+m homeharbor-smb025 homeharbor-smb
+m homeharbor-smb026 homeharbor-smb
+m homeharbor-smb027 homeharbor-smb
+m homeharbor-smb028 homeharbor-smb
+m homeharbor-smb029 homeharbor-smb
+m homeharbor-smb030 homeharbor-smb
+m homeharbor-smb031 homeharbor-smb
+m homeharbor-smb032 homeharbor-smb

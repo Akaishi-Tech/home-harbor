@@ -1,0 +1,11 @@
+[Unit]
+Description=Initialize HomeHarbor PostgreSQL data directory
+Requires=homeharbor-storage-apply.service
+RequiresMountsFor=/homeharbor-data
+After=homeharbor-storage-apply.service
+Before=homeharbor-postgresql.service
+ConditionPathIsMountPoint=/homeharbor-data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent postgres-init

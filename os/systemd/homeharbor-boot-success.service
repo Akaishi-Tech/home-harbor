@@ -1,0 +1,12 @@
+[Unit]
+Description=Mark HomeHarbor boot successful after control plane health is ready
+After=multi-user.target homeharbor-api.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/lib/homeharbor/agent/HomeHarbor.Agent
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent boot-success
+
+[Install]
+WantedBy=multi-user.target

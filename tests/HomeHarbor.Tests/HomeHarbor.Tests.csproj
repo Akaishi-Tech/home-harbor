@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MSTest" Version="4.2.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HomeHarbor.Agent\HomeHarbor.Agent.csproj" />
+    <ProjectReference Include="..\..\src\HomeHarbor.Api\HomeHarbor.Api.csproj" />
+    <ProjectReference Include="..\..\src\HomeHarbor.Core\HomeHarbor.Core.csproj" />
+    <ProjectReference Include="..\..\src\HomeHarbor.ImageBuilder\HomeHarbor.ImageBuilder.csproj" />
+    <ProjectReference Include="..\..\src\HomeHarbor.Installer\HomeHarbor.Installer.csproj" />
+    <ProjectReference Include="..\..\src\HomeHarbor.Recovery\HomeHarbor.Recovery.csproj" />
+    <ProjectReference Include="..\..\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
+  </ItemGroup>
+
+</Project>

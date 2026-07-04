@@ -1,0 +1,12 @@
+[Unit]
+Description=Render HomeHarbor Caddy reverse proxy config
+Requires=homeharbor-api.service
+After=network-online.target homeharbor-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent render-caddyfile
+
+[Install]
+WantedBy=multi-user.target

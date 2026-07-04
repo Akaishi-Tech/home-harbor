@@ -1,0 +1,12 @@
+packages:
+  - frontend
+  - docs
+
+allowBuilds:
+  esbuild: true
+  sharp: false
+  workerd: true
+
+minimumReleaseAgeExclude:
+  - miniflare@4.20260630.0
+  - wrangler@4.106.0

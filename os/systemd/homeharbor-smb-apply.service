@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply HomeHarbor SMB runtime configuration
+Requires=homeharbor-api.service
+After=network-online.target homeharbor-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent apply-smb

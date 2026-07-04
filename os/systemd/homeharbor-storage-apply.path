@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch HomeHarbor storage OOBE apply requests
+
+[Path]
+PathChanged=/run/homeharbor/storage-apply.request
+Unit=homeharbor-storage-apply.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480" role="img" aria-labelledby="title desc">
+  <title id="title">HomeHarbor live installer splash</title>
+  <desc id="desc">HomeHarbor wordmark with an H-shaped home and harbor wave mark on a dark branded boot background.</desc>
+  <defs>
+    <linearGradient id="background" x1="68" y1="36" x2="572" y2="444" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f1a2e"/>
+      <stop offset="0.52" stop-color="#0b1f34"/>
+      <stop offset="1" stop-color="#06111d"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(320 224) rotate(90) scale(210 260)">
+      <stop offset="0" stop-color="#0ea5b7" stop-opacity="0.42"/>
+      <stop offset="0.5" stop-color="#69b84f" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#062f51" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ruleGradient" x1="210" y1="348" x2="430" y2="348" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0ea5b7" stop-opacity="0"/>
+      <stop offset="0.3" stop-color="#0ea5b7"/>
+      <stop offset="0.68" stop-color="#69b84f"/>
+      <stop offset="1" stop-color="#69b84f" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="markClip">
+      <circle cx="32" cy="32" r="30"/>
+    </clipPath>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#000000" flood-opacity="0.38"/>
+    </filter>
+  </defs>
+
+  <rect width="640" height="480" fill="url(#background)"/>
+  <rect width="640" height="480" fill="url(#halo)"/>
+  <path d="M72 374C152 334 212 404 304 362C397 320 471 342 568 286" fill="none" stroke="#0ea5b7" stroke-opacity="0.18" stroke-width="2"/>
+  <path d="M88 398C178 358 220 424 316 386C422 344 473 374 552 336" fill="none" stroke="#69b84f" stroke-opacity="0.13" stroke-width="2"/>
+
+  <g filter="url(#softShadow)" transform="translate(268 126) scale(1.625)">
+    <g clip-path="url(#markClip)">
+      <circle cx="32" cy="32" r="30" fill="#062f51"/>
+      <path d="M14 32.6 32 16l18 16.6h-5.4v13.8c-3.6 2.1-7.8 3.1-12.6 3.1s-9-1-12.6-3.1V32.6H14Z" fill="#f8fbff"/>
+      <path d="M24.1 32.1h5.5v6h4.8v-6h5.5V47h-5.5v-5.6h-4.8V47h-5.5V32.1Z" fill="#062f51"/>
+      <path d="M-3 44.2c10.8-4.6 18.8-4.6 28.4-.2 9.3 4.3 17.9 4.3 31.6-1.8 3.7-1.6 7.1-2.6 10-3v13.4c-8.8 1.3-16.6 5-28.6 2.3-11-2.5-18.5-9.2-41.4-2.1V44.2Z" fill="#f8fbff"/>
+      <path d="M-3 48.5c10.9-4.6 18.8-4.5 28.5-.1 9.2 4.2 17.8 4.2 31.5-1.8 3.7-1.6 7.1-2.6 10-3v21.3H-3V48.5Z" fill="#0ea5b7"/>
+      <path d="M-3 56.2c10.8-4.5 18.9-4.4 28.6-.1 9.2 4.1 17.9 4.1 31.4-1.7 3.7-1.6 7.1-2.5 10-2.9v13.4H-3V56.2Z" fill="#062f51"/>
+    </g>
+  </g>
+
+  <text x="320" y="290" text-anchor="middle" fill="#f8fbff" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="54" font-weight="700">HomeHarbor</text>
+  <text x="320" y="324" text-anchor="middle" fill="#b7c4d8" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18" font-weight="500" letter-spacing="3">LIVE INSTALLER</text>
+  <rect x="210" y="346" width="220" height="2" rx="1" fill="url(#ruleGradient)"/>
+</svg>

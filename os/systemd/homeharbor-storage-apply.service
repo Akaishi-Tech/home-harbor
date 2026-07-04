@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply pending HomeHarbor storage OOBE plan
+RequiresMountsFor=/var/lib/homeharbor /var/lib/homeharbor/secrets
+Before=homeharbor-postgresql-init.service homeharbor-postgresql.service homeharbor-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent storage-apply
+ExecStartPost=-/usr/lib/homeharbor/agent/HomeHarbor.Agent storage-postapply
+
+[Install]
+WantedBy=multi-user.target

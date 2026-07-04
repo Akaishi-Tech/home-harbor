@@ -1,0 +1,8 @@
+[Unit]
+Description=Record HomeHarbor storage health snapshot
+After=homeharbor-api.service
+Wants=homeharbor-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent storage-health

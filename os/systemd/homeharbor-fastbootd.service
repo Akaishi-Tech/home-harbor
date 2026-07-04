@@ -1,0 +1,19 @@
+[Unit]
+Description=HomeHarbor recovery fastboot over TCP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOMEHARBOR_FASTBOOTD_LISTEN=0.0.0.0
+Environment=HOMEHARBOR_FASTBOOTD_PORT=5554
+ExecStart=/usr/lib/homeharbor/recovery/HomeHarbor.Recovery --fastboot-tcp
+Restart=always
+RestartSec=2s
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/lib/homeharbor/recovery /run/homeharbor-recovery
+
+[Install]
+WantedBy=multi-user.target
