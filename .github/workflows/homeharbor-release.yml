@@ -63,7 +63,7 @@ jobs:
             exit 1
           fi
           # Keep the container non-privileged; the C# image builders use rootless user namespaces.
-          docker run --rm \
+          docker run --rm -i \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             -v "${PWD}:/workspace" \
