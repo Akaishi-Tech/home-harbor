@@ -316,10 +316,10 @@ public sealed class InstallerTuiTests
     {
         var descriptor = global::InstallDiskExecutor.ParseVerityDescriptorArg(
             "sha256:4096:4096:98304:402653184:706a80c552baf758cec245a5b42cb5a0b1ba07bfc7c435162e3ee68fca6a82ae:616a66d1d49d72f2e80d13afdd38283e55464789d2c8ea182868bcdd00ccacb5",
-            "modules_a",
+            "modules",
             "modules_a.verity");
 
-        Assert.AreEqual("modules_a", descriptor.PartitionName);
+        Assert.AreEqual("modules", descriptor.PartitionName);
         Assert.AreEqual("sha256", descriptor.HashAlgorithm);
         Assert.AreEqual(4096, descriptor.DataBlockSize);
         Assert.AreEqual(4096, descriptor.HashBlockSize);
@@ -351,18 +351,26 @@ public sealed class InstallerTuiTests
                   Data Block Size:       4096 bytes
                   Hash Block Size:       4096 bytes
                   Hash Algorithm:        sha256
-                  Partition Name:        root_a
+                  Partition Name:        root
                   Salt:                  0a0b
                   Root Digest:           0c0d
             """;
 
-        var descriptor = global::InstallDiskExecutor.ParseAvbInfoImageDescriptor(output, "root_a");
+        var descriptor = global::InstallDiskExecutor.ParseAvbInfoImageDescriptor(output, "root");
 
-        Assert.AreEqual("root_a", descriptor.PartitionName);
+        Assert.AreEqual("root", descriptor.PartitionName);
         Assert.AreEqual(2, descriptor.DataBlocks);
         Assert.AreEqual(8192, descriptor.ImageSizeBytes);
         Assert.AreEqual("0a0b", descriptor.Salt);
         Assert.AreEqual("0c0d", descriptor.RootDigest);
+    }
+
+    [TestMethod]
+    public void InstallDiskExecutor_AvbDescriptorPartitionName_Strips_Ab_Suffix()
+    {
+        Assert.AreEqual("root", HomeHarbor.Tooling.AvbPartitionNames.DescriptorName("root_a"));
+        Assert.AreEqual("modules", HomeHarbor.Tooling.AvbPartitionNames.DescriptorName("modules_b"));
+        Assert.AreEqual("vbmeta", HomeHarbor.Tooling.AvbPartitionNames.DescriptorName("vbmeta"));
     }
 
     [TestMethod]

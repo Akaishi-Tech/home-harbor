@@ -59,6 +59,7 @@ full-system bundle 包含 rootfs、modules、firmware、recovery、bootloader、
 ## A/B 与 AVB
 
 镜像布局包含 boot A/B、recovery A/B、vbmeta A/B 和 super 内 root/modules/firmware A/B 逻辑分区。构建过程会把 EROFS payload 写入固定大小逻辑镜像，并附加 AVB hashtree。
+AVB descriptor 的 partition name 是 slot-transparent 的（`root`、`modules`、`firmware`、`recovery`）；`vbmeta_a.img` 和 `vbmeta_b.img` 是为了 A/B 分区布局保留的镜像副本。
 
 generic boot cmdline 携带 sealed boot inputs，实际 A/B 选择由 boot selector 通过 EFI state 发布：
 

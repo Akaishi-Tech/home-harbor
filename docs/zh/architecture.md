@@ -103,8 +103,8 @@ flowchart LR
 | 5 | `state` | 4096M | ext4 | OTA boot metadata、`boot_a.env` / `boot_b.env` 与持久 marker。 |
 | 6 | `recovery_a` | 1648M | avb-erofs | slot A 的 recovery rootfs、内嵌 recovery UKI 与 AVB hashtree。 |
 | 7 | `recovery_b` | 1648M | avb-erofs | slot B 的 recovery rootfs、内嵌 recovery UKI 与 AVB hashtree。 |
-| 8 | `vbmeta_a` | 16M | avb-vbmeta | slot A 的 AVB descriptors。 |
-| 9 | `vbmeta_b` | 16M | avb-vbmeta | slot B 的 AVB descriptors。 |
+| 8 | `vbmeta_a` | 16M | avb-vbmeta | slot A 镜像保存的 slot-transparent AVB descriptors。 |
+| 9 | `vbmeta_b` | 16M | avb-vbmeta | slot B 镜像保存的 slot-transparent AVB descriptors。 |
 | 10 | `data` | 剩余磁盘 | LUKS + OOBE 选择的文件系统 | 文件、照片、备份、PostgreSQL 数据与其他家庭数据。 |
 
 `super` 内部使用 verified EROFS payload 作为逻辑分区：

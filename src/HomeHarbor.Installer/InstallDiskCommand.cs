@@ -901,14 +901,14 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             throw new InvalidOperationException("vbmeta B digest mismatch");
         }
 
-        var rootDescriptorA = await AvbDescriptorFromVbmetaAsync(Path.Combine(_systemRoot, "vbmeta_a.img"), "root_a", cancellationToken);
-        var rootDescriptorB = await AvbDescriptorFromVbmetaAsync(Path.Combine(_systemRoot, "vbmeta_b.img"), "root_b", cancellationToken);
-        var modulesDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "modules_a.verity"), "modules_a");
-        var modulesDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "modules_b.verity"), "modules_b");
-        var firmwareDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "firmware_a.verity"), "firmware_a");
-        var firmwareDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "firmware_b.verity"), "firmware_b");
-        var recoveryDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "recovery_a.verity"), "recovery_a");
-        var recoveryDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "recovery_b.verity"), "recovery_b");
+        var rootDescriptorA = await AvbDescriptorFromVbmetaAsync(Path.Combine(_systemRoot, "vbmeta_a.img"), "root", cancellationToken);
+        var rootDescriptorB = await AvbDescriptorFromVbmetaAsync(Path.Combine(_systemRoot, "vbmeta_b.img"), "root", cancellationToken);
+        var modulesDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "modules_a.verity"), "modules");
+        var modulesDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "modules_b.verity"), "modules");
+        var firmwareDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "firmware_a.verity"), "firmware");
+        var firmwareDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "firmware_b.verity"), "firmware");
+        var recoveryDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "recovery_a.verity"), "recovery");
+        var recoveryDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "recovery_b.verity"), "recovery");
 
         await WriteAvbErofsLogicalPairAsync(
             Path.Combine(_systemRoot, "rootfs.img"),
@@ -1104,6 +1104,11 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             throw new InvalidOperationException($"{label} AVB slots disagree on EROFS data size");
         }
 
+        if (!descriptorA.MatchesHashtree(descriptorB))
+        {
+            throw new InvalidOperationException($"{label} AVB descriptors differ across A/B slots");
+        }
+
         var logicalA = Path.Combine(_work, partitionA + ".logical");
         var logicalB = Path.Combine(_work, partitionB + ".logical");
         await WriteErofsLogicalAsync(erofsImage, logicalA, descriptorA.ImageSizeBytes, label, cancellationToken);
@@ -1127,7 +1132,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
                 "add_hashtree_footer",
                 "--image", image,
                 "--partition_size", partitionBytes.ToString(CultureInfo.InvariantCulture),
-                "--partition_name", partitionName,
+                "--partition_name", descriptor.PartitionName,
                 "--hash_algorithm", descriptor.HashAlgorithm,
                 "--salt", descriptor.Salt,
                 "--block_size", descriptor.DataBlockSize.ToString(CultureInfo.InvariantCulture),
@@ -1141,7 +1146,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             stream: false,
             cancellationToken: cancellationToken);
 
-        var actual = await AvbDescriptorFromVbmetaAsync(generatedVbmeta, partitionName, cancellationToken);
+        var actual = await AvbDescriptorFromVbmetaAsync(generatedVbmeta, descriptor.PartitionName, cancellationToken);
         if (!descriptor.MatchesHashtree(actual))
         {
             throw new InvalidOperationException(partitionName + " generated AVB hashtree descriptor mismatch");
@@ -1157,9 +1162,10 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         string partitionName,
         AvbHashtreeDescriptor descriptor)
     {
-        if (!string.Equals(descriptor.PartitionName, partitionName, StringComparison.Ordinal))
+        var descriptorPartitionName = AvbPartitionNames.DescriptorName(partitionName);
+        if (!string.Equals(descriptor.PartitionName, descriptorPartitionName, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException($"AVB descriptor partition mismatch: expected {partitionName}, got {descriptor.PartitionName}");
+            throw new InvalidOperationException($"AVB descriptor partition mismatch: expected {descriptorPartitionName}, got {descriptor.PartitionName}");
         }
 
         if (descriptor.DataBlockSize != descriptor.HashBlockSize)

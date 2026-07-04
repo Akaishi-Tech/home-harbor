@@ -373,7 +373,7 @@ internal static class OtaApplyCommand
                     throw new InvalidOperationException("target vbmeta digest mismatch");
                 }
 
-                rootDescriptorDigest = await AvbDescriptorDigestAsync(commandRunner, targetVbmeta, rootLogical, ct);
+                rootDescriptorDigest = await AvbDescriptorDigestAsync(commandRunner, targetVbmeta, AvbPartitionNames.DescriptorName(rootLogical), ct);
                 modulesDescriptorDigest = ActiveEnvValue(applyOptions, activeBootSlot, "HOMEHARBOR_MODULES_DESCRIPTOR_DIGEST") ?? string.Empty;
                 firmwareDescriptorDigest = ActiveEnvValue(applyOptions, activeBootSlot, "HOMEHARBOR_FIRMWARE_DESCRIPTOR_DIGEST") ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(modulesDescriptorDigest) || string.IsNullOrWhiteSpace(firmwareDescriptorDigest))
@@ -388,7 +388,7 @@ internal static class OtaApplyCommand
                 var activeRootVbmeta = Path.Combine(bundleRoot, "vbmeta_" + SlotLower(activeRootSlot) + ".img");
                 if (File.Exists(activeRootVbmeta))
                 {
-                    var expectedRootDescriptor = await AvbDescriptorDigestAsync(commandRunner, activeRootVbmeta, rootLogical, ct);
+                    var expectedRootDescriptor = await AvbDescriptorDigestAsync(commandRunner, activeRootVbmeta, AvbPartitionNames.DescriptorName(rootLogical), ct);
                     if (!string.Equals(expectedRootDescriptor, rootDescriptorDigest, StringComparison.Ordinal))
                     {
                         throw new InvalidOperationException("raw UKI kernel-only OTA root descriptor does not match the active root");

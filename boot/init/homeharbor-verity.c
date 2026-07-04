@@ -1483,7 +1483,7 @@ static void open_super_verity(const char *label, const char *logical, const char
     dm_remove(target);
     dm_remove(linear);
     super_create(linear, superdev, logical, true);
-    VerityDescriptor descriptor = avb_descriptor(vbmeta, logical, state.vbmeta_digest, "HomeHarbor AVB descriptor lookup failed");
+    VerityDescriptor descriptor = avb_descriptor(vbmeta, label, state.vbmeta_digest, "HomeHarbor AVB descriptor lookup failed");
     set_string(&state.vbmeta_digest, descriptor.vbmeta_digest);
     if (strcmp(label, "root") == 0) {
         set_string(&state.root_digest, descriptor.root_digest);
@@ -1653,11 +1653,9 @@ static void open_recovery_verity(void) {
         fail("HomeHarbor recovery vbmeta device not found: %s", recovery_vbmeta);
     }
     dm_remove("homeharbor-recovery-root");
-    char partition[256];
-    snprintf(partition, sizeof(partition), "recovery_%s", slot_label);
     VerityDescriptor descriptor = avb_descriptor(
         recovery_vbmetadev,
-        partition,
+        "recovery",
         recovery_vbmeta_digest,
         "HomeHarbor recovery AVB descriptor lookup failed");
     verity_open("recovery", recovery_rootdev, "homeharbor-recovery-root", &descriptor);

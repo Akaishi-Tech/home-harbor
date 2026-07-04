@@ -103,8 +103,8 @@ flowchart LR
 | 5 | `state` | 4096M | ext4 | OTA boot metadata, `boot_a.env` / `boot_b.env`, and persistent markers. |
 | 6 | `recovery_a` | 1648M | avb-erofs | Recovery rootfs, embedded recovery UKI, and appended AVB hashtree for slot A. |
 | 7 | `recovery_b` | 1648M | avb-erofs | Recovery rootfs, embedded recovery UKI, and appended AVB hashtree for slot B. |
-| 8 | `vbmeta_a` | 16M | avb-vbmeta | AVB descriptors for slot A. |
-| 9 | `vbmeta_b` | 16M | avb-vbmeta | AVB descriptors for slot B. |
+| 8 | `vbmeta_a` | 16M | avb-vbmeta | Slot-transparent AVB descriptors mirrored for slot A. |
+| 9 | `vbmeta_b` | 16M | avb-vbmeta | Slot-transparent AVB descriptors mirrored for slot B. |
 | 10 | `data` | Remaining disk | LUKS + OOBE-selected filesystem | Files, photos, backups, PostgreSQL data, and other family data. |
 
 Inside `super`, HomeHarbor keeps verified EROFS payloads as logical partitions:

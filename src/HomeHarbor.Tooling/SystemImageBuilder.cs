@@ -276,14 +276,14 @@ public sealed class SystemImageBuilder(
             ["recovery_b"] = Path.Combine(_work, "recovery_b.vbmeta")
         };
 
-        await AvbAddHashtreeAsync(LogicalPath("root_a"), LogicalSize("root_a"), "root_a", vbmetaFragments["root_a"], cancellationToken);
-        await AvbAddHashtreeAsync(LogicalPath("root_b"), LogicalSize("root_b"), "root_b", vbmetaFragments["root_b"], cancellationToken);
-        await AvbAddHashtreeAsync(LogicalPath("modules_a"), LogicalSize("modules_a"), "modules_a", vbmetaFragments["modules_a"], cancellationToken);
-        await AvbAddHashtreeAsync(LogicalPath("modules_b"), LogicalSize("modules_b"), "modules_b", vbmetaFragments["modules_b"], cancellationToken);
-        await AvbAddHashtreeAsync(LogicalPath("firmware_a"), LogicalSize("firmware_a"), "firmware_a", vbmetaFragments["firmware_a"], cancellationToken);
-        await AvbAddHashtreeAsync(LogicalPath("firmware_b"), LogicalSize("firmware_b"), "firmware_b", vbmetaFragments["firmware_b"], cancellationToken);
-        await AvbAddHashtreeAsync(LogicalPath("recovery_a"), PartitionSize("recovery_a"), "recovery_a", vbmetaFragments["recovery_a"], cancellationToken);
-        await AvbAddHashtreeAsync(LogicalPath("recovery_b"), PartitionSize("recovery_b"), "recovery_b", vbmetaFragments["recovery_b"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("root_a"), LogicalSize("root_a"), "root", vbmetaFragments["root_a"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("root_b"), LogicalSize("root_b"), "root", vbmetaFragments["root_b"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("modules_a"), LogicalSize("modules_a"), "modules", vbmetaFragments["modules_a"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("modules_b"), LogicalSize("modules_b"), "modules", vbmetaFragments["modules_b"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("firmware_a"), LogicalSize("firmware_a"), "firmware", vbmetaFragments["firmware_a"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("firmware_b"), LogicalSize("firmware_b"), "firmware", vbmetaFragments["firmware_b"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("recovery_a"), PartitionSize("recovery_a"), "recovery", vbmetaFragments["recovery_a"], cancellationToken);
+        await AvbAddHashtreeAsync(LogicalPath("recovery_b"), PartitionSize("recovery_b"), "recovery", vbmetaFragments["recovery_b"], cancellationToken);
 
         Truncate(LogicalPath("root_a"), LogicalSize("root_a"));
         Truncate(LogicalPath("root_b"), LogicalSize("root_b"));
@@ -294,18 +294,23 @@ public sealed class SystemImageBuilder(
         Truncate(LogicalPath("recovery_a"), PartitionSize("recovery_a"));
         Truncate(LogicalPath("recovery_b"), PartitionSize("recovery_b"));
 
-        var modulesVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["modules_a"], "modules_a", null, cancellationToken);
-        var modulesVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["modules_b"], "modules_b", null, cancellationToken);
-        var firmwareVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["firmware_a"], "firmware_a", null, cancellationToken);
-        var firmwareVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["firmware_b"], "firmware_b", null, cancellationToken);
-        var recoveryVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["recovery_a"], "recovery_a", null, cancellationToken);
-        var recoveryVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["recovery_b"], "recovery_b", null, cancellationToken);
+        var modulesVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["modules_a"], "modules", null, cancellationToken);
+        var modulesVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["modules_b"], "modules", null, cancellationToken);
+        var firmwareVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["firmware_a"], "firmware", null, cancellationToken);
+        var firmwareVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["firmware_b"], "firmware", null, cancellationToken);
+        var recoveryVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["recovery_a"], "recovery", null, cancellationToken);
+        var recoveryVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["recovery_b"], "recovery", null, cancellationToken);
         var kernelVerityArgs = KernelVerityCmdlineArgs(modulesVerityA, modulesVerityB, firmwareVerityA, firmwareVerityB, recoveryVerityA, recoveryVerityB);
 
         var vbmetaA = Path.Combine(_work, "vbmeta_a.img");
         var vbmetaB = Path.Combine(_work, "vbmeta_b.img");
+        EnsureSameBytes(vbmetaFragments["root_a"], vbmetaFragments["root_b"], "root AVB descriptors");
+        EnsureSameBytes(vbmetaFragments["modules_a"], vbmetaFragments["modules_b"], "modules AVB descriptors");
+        EnsureSameBytes(vbmetaFragments["firmware_a"], vbmetaFragments["firmware_b"], "firmware AVB descriptors");
+        EnsureSameBytes(vbmetaFragments["recovery_a"], vbmetaFragments["recovery_b"], "recovery AVB descriptors");
+
         await AvbMakeVbmetaAsync(vbmetaA, [vbmetaFragments["root_a"]], cancellationToken);
-        await AvbMakeVbmetaAsync(vbmetaB, [vbmetaFragments["root_b"]], cancellationToken);
+        File.Copy(vbmetaA, vbmetaB, overwrite: true);
         var vbmetaDigestA = await AvbVbmetaDigestAsync(vbmetaA, cancellationToken);
         var vbmetaDigestB = await AvbVbmetaDigestAsync(vbmetaB, cancellationToken);
         Truncate(vbmetaA, PartitionSize("vbmeta_a"));
@@ -868,6 +873,8 @@ public sealed class SystemImageBuilder(
                 partitionName,
                 "--hash_algorithm",
                 "sha256",
+                "--salt",
+                AvbSalt(partitionName),
                 "--do_not_generate_fec",
                 "--do_not_use_ab",
                 "--output_vbmeta_image",
@@ -877,6 +884,41 @@ public sealed class SystemImageBuilder(
                 "NONE"
             ],
             cancellationToken);
+    }
+
+    private static string AvbSalt(string partitionName)
+        => Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes("homeharbor-avb:" + partitionName))).ToLowerInvariant();
+
+    private static void EnsureSameBytes(string left, string right, string label)
+    {
+        using var leftStream = File.OpenRead(left);
+        using var rightStream = File.OpenRead(right);
+        if (leftStream.Length != rightStream.Length)
+        {
+            throw new InvalidOperationException(label + " differ across A/B slots");
+        }
+
+        var leftBuffer = new byte[8192];
+        var rightBuffer = new byte[leftBuffer.Length];
+        while (true)
+        {
+            var leftRead = leftStream.Read(leftBuffer, 0, leftBuffer.Length);
+            var rightRead = rightStream.Read(rightBuffer, 0, rightBuffer.Length);
+            if (leftRead != rightRead)
+            {
+                throw new InvalidOperationException(label + " differ across A/B slots");
+            }
+
+            if (leftRead == 0)
+            {
+                return;
+            }
+
+            if (!leftBuffer.AsSpan(0, leftRead).SequenceEqual(rightBuffer.AsSpan(0, rightRead)))
+            {
+                throw new InvalidOperationException(label + " differ across A/B slots");
+            }
+        }
     }
 
     private async Task AvbMakeVbmetaAsync(

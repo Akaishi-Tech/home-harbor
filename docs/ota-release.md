@@ -59,6 +59,7 @@ Each payload should have a hash. The manifest records those hashes and signs the
 ## A/B and AVB
 
 The image layout includes boot A/B, recovery A/B, vbmeta A/B, and A/B root/modules/firmware logical partitions inside `super`. The build writes EROFS payloads into fixed-size logical images and appends AVB hashtrees.
+AVB descriptor partition names are slot-transparent (`root`, `modules`, `firmware`, `recovery`); `vbmeta_a.img` and `vbmeta_b.img` are mirrored copies for the A/B partition layout.
 
 Generic boot cmdline carries sealed boot inputs while the boot selector publishes the active A/B choice through EFI state:
 

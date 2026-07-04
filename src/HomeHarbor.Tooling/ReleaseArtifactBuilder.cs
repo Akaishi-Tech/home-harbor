@@ -407,7 +407,7 @@ public sealed class ReleaseArtifactBuilder(
                 throw new FileNotFoundException("verity sidecar source is missing; run system-build before release-build", vbmeta);
             }
 
-            var output = await CaptureAsync(AvbHelperPath(), ["descriptor", vbmeta, partition], cancellationToken);
+            var output = await CaptureAsync(AvbHelperPath(), ["descriptor", vbmeta, AvbPartitionNames.DescriptorName(partition)], cancellationToken);
             var values = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
                 .Select(line => line.Split('=', 2))
                 .Where(parts => parts.Length == 2)
