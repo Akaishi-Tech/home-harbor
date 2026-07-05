@@ -186,10 +186,15 @@ public sealed class SystemImageBuilder(
         Directory.Move(Path.Combine(rootfs, "usr", "lib", "firmware"), firmwareRoot);
         EnsureDirectory(Path.Combine(rootfs, "usr", "lib", "modules"), 0755);
         EnsureDirectory(Path.Combine(rootfs, "usr", "lib", "firmware"), 0755);
-        DeleteDirectory(Path.Combine(recoveryRootfs, "usr", "lib", "modules"));
-        DeleteDirectory(Path.Combine(recoveryRootfs, "usr", "lib", "firmware"));
-        CopyDirectory(modulesRoot, Path.Combine(recoveryRootfs, "usr", "lib", "modules"));
-        CopyDirectory(firmwareRoot, Path.Combine(recoveryRootfs, "usr", "lib", "firmware"));
+        _ = RecoveryKernelTreePruner.Prune(
+            modulesRoot,
+            firmwareRoot,
+            Path.Combine(recoveryRootfs, "usr", "lib", "modules"),
+            Path.Combine(recoveryRootfs, "usr", "lib", "firmware"));
+        await RunMappedChrootAsync(recoveryRootfs, "depmod", ["-a", kernelRelease], cancellationToken);
+        var firmwarePrune = await MainFirmwareTreePruner.PruneAsync(modulesRoot, firmwareRoot, _runner, cancellationToken);
+        Console.WriteLine(
+            $"Pruned firmware tree for {firmwarePrune.KernelRelease}: kept {firmwarePrune.KeptEntries} entries ({firmwarePrune.KeptBytes} bytes), removed {firmwarePrune.RemovedEntries} entries ({firmwarePrune.OriginalBytes - firmwarePrune.KeptBytes} bytes)");
         RemoveBootKernelArtifacts(Path.Combine(rootfs, "boot"));
 
         var recoveryBoot = Path.Combine(_work, "recovery_boot.efi");
@@ -669,7 +674,7 @@ public sealed class SystemImageBuilder(
 
     private async Task RequireToolsAsync(CancellationToken cancellationToken)
     {
-        foreach (var tool in new[] { "avbtool", "makepkg", "pacman", "pnpm", "mkfs.erofs", "dump.erofs", "lpmake", "lpdump", "cc" })
+        foreach (var tool in new[] { "avbtool", "makepkg", "pacman", "pnpm", "mkfs.erofs", "dump.erofs", "lpmake", "lpdump", "modinfo", "cc" })
         {
             await NeedAsync(tool, cancellationToken);
         }

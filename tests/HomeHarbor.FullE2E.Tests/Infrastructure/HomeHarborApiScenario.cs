@@ -425,7 +425,6 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         using var stage = await _api.PostAsJsonAsync("/api/ota/stage", new
         {
             version = "0.2.0-e2e",
-            targetSlot = "B",
             rootfsHash = "sha256:rootfs",
             vbmetaAHash = "sha256:vbmeta-a",
             vbmetaBHash = "sha256:vbmeta-b",
@@ -440,7 +439,6 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         using var apply = await _api.PostAsJsonAsync("/api/ota/apply", new
         {
             version = "0.2.0-e2e",
-            targetSlot = "B",
             rootfsHash = "sha256:rootfs",
             vbmetaAHash = "sha256:vbmeta-a",
             vbmetaBHash = "sha256:vbmeta-b",

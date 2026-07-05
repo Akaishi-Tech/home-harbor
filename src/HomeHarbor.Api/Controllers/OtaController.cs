@@ -32,7 +32,6 @@ public sealed class OtaController : ControllerBase
             manifest.Version,
             channel,
             kernelChannel = manifest.KernelChannel is null ? null : KernelChannel.Require(manifest.KernelChannel, "OTA manifest kernelChannel"),
-            manifest.TargetSlot,
             manifest.Type,
             status = "apply-planned",
             next = "appliance OTA updater validates the bundle, writes the inactive boot slot resources and any requested root slot payloads, then reboots"
@@ -48,7 +47,6 @@ public sealed class OtaController : ControllerBase
             manifest.Version,
             channel,
             kernelChannel = manifest.KernelChannel is null ? null : KernelChannel.Require(manifest.KernelChannel, "OTA manifest kernelChannel"),
-            manifest.TargetSlot,
             manifest.Type,
             status = "staged-metadata-only",
             next = "appliance OTA updater will validate the bundle and stage the next boot slot environment"

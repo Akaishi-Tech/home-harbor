@@ -59,6 +59,7 @@ public sealed class KernelPackageBuilder(
         await NeedAsync("bsdtar", cancellationToken);
         await NeedAsync("mkfs.erofs", cancellationToken);
         await NeedAsync("dump.erofs", cancellationToken);
+        await NeedAsync("modinfo", cancellationToken);
         await NeedAsync("cc", cancellationToken);
 
         await DeleteWorkDirectoryAsync(_work, cancellationToken);
@@ -71,7 +72,7 @@ public sealed class KernelPackageBuilder(
         var modulePackageFile = await ResolveModulePackageAsync(module, cancellationToken);
         await RunPacstrapAsync(
             rootfs,
-            ["base", kernelPackage, "linux-firmware", "mkinitcpio", "cryptsetup", "device-mapper", "mdadm", "btrfs-progs", "xfsprogs", "erofs-utils", "android-tools", "jq", "openssl", "systemd"],
+            ["base", kernelPackage, "linux-firmware-broadcom", "linux-firmware-intel", "linux-firmware-realtek", "linux-firmware-other", "linux-firmware-whence", "mkinitcpio", "cryptsetup", "device-mapper", "mdadm", "btrfs-progs", "xfsprogs", "erofs-utils", "android-tools", "jq", "openssl", "systemd"],
             cancellationToken);
         PrepareWritableRootfs(rootfs);
 
@@ -123,14 +124,15 @@ public sealed class KernelPackageBuilder(
         var firmwareRoot = Path.Combine(_work, "firmware-root");
         Directory.Move(Path.Combine(rootfs, "usr", "lib", "modules"), modulesRoot);
         Directory.Move(Path.Combine(rootfs, "usr", "lib", "firmware"), firmwareRoot);
+        await BuildRecoveryRootfsAsync(recoveryRootfs, modulesRoot, firmwareRoot, avbHelper, kernelRelease, vmlinuz, initramfs, recovery, cancellationToken);
+        var firmwarePrune = await MainFirmwareTreePruner.PruneAsync(modulesRoot, firmwareRoot, _runner, cancellationToken);
+        Console.WriteLine($"Pruned firmware tree for {firmwarePrune.KernelRelease}: kept {firmwarePrune.KeptEntries} entries ({firmwarePrune.KeptBytes} bytes), removed {firmwarePrune.RemovedEntries} entries ({firmwarePrune.OriginalBytes - firmwarePrune.KeptBytes} bytes)");
         await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", modules, modulesRoot], cancellationToken);
         await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", firmware, firmwareRoot], cancellationToken);
         await RunAsync("dump.erofs", ["-s", modules], cancellationToken);
         await RunAsync("dump.erofs", ["-s", firmware], cancellationToken);
         WriteSha256(modules);
         WriteSha256(firmware);
-
-        await BuildRecoveryRootfsAsync(recoveryRootfs, modulesRoot, firmwareRoot, avbHelper, kernelRelease, vmlinuz, initramfs, recovery, cancellationToken);
     }
 
     private async Task BuildRecoveryRootfsAsync(
@@ -174,10 +176,12 @@ public sealed class KernelPackageBuilder(
 
         await RunMappedChrootAsync(recoveryRootfs, "useradd", ["--system", "--user-group", "--home-dir", "/var/lib/homeharbor/recovery", "--create-home", "--shell", shell, "recovery"], cancellationToken, allowFailure: true);
         await RunMappedChrootAsync(recoveryRootfs, "systemctl", ["enable", "systemd-networkd", "systemd-networkd-wait-online", "systemd-resolved", "homeharbor-fastbootd", "serial-getty@ttyS0", "getty@tty1"], cancellationToken);
-        DeleteDirectory(Path.Combine(recoveryRootfs, "usr", "lib", "modules"));
-        DeleteDirectory(Path.Combine(recoveryRootfs, "usr", "lib", "firmware"));
-        CopyDirectory(modulesRoot, Path.Combine(recoveryRootfs, "usr", "lib", "modules"));
-        CopyDirectory(firmwareRoot, Path.Combine(recoveryRootfs, "usr", "lib", "firmware"));
+        _ = RecoveryKernelTreePruner.Prune(
+            modulesRoot,
+            firmwareRoot,
+            Path.Combine(recoveryRootfs, "usr", "lib", "modules"),
+            Path.Combine(recoveryRootfs, "usr", "lib", "firmware"));
+        await RunMappedChrootAsync(recoveryRootfs, "depmod", ["-a", kernelRelease], cancellationToken);
 
         var recoveryBoot = Path.Combine(_work, "recovery_boot.efi");
         await BuildUkiAsync(recoveryBoot, vmlinuz, initramfs, Path.Combine(recoveryRootfs, "etc", "os-release"), kernelRelease, SecureBootAssets.RecoveryCmdline(), cancellationToken);

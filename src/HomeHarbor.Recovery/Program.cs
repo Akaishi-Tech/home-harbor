@@ -441,15 +441,15 @@ internal sealed class FastbootActions
         ["root_b"] = new(2304L * 1024 * 1024, "avb-erofs", true, true),
         ["modules_a"] = new(448L * 1024 * 1024, "avb-erofs", true, true),
         ["modules_b"] = new(448L * 1024 * 1024, "avb-erofs", true, true),
-        ["firmware_a"] = new(832L * 1024 * 1024, "avb-erofs", true, true),
-        ["firmware_b"] = new(832L * 1024 * 1024, "avb-erofs", true, true),
+        ["firmware_a"] = new(128L * 1024 * 1024, "avb-erofs", true, true),
+        ["firmware_b"] = new(128L * 1024 * 1024, "avb-erofs", true, true),
         ["boot_a"] = new(512L * 1024 * 1024, "raw-uki", true, true, "boot_a"),
         ["boot_b"] = new(512L * 1024 * 1024, "raw-uki", true, true, "boot_b"),
         ["recovery_a"] = new(1648L * 1024 * 1024, "avb-erofs", true, true, "recovery_a"),
         ["recovery_b"] = new(1648L * 1024 * 1024, "avb-erofs", true, true, "recovery_b"),
         ["vbmeta_a"] = new(16L * 1024 * 1024, "avb-vbmeta", true, true, "vbmeta_a"),
         ["vbmeta_b"] = new(16L * 1024 * 1024, "avb-vbmeta", true, true, "vbmeta_b"),
-        ["super"] = new(7184L * 1024 * 1024, "android-super", true, false),
+        ["super"] = new(5776L * 1024 * 1024, "android-super", true, false),
     };
 
     public string StateDir { get; } = Env.String("HOMEHARBOR_RECOVERY_STATE_DIR", "/var/lib/homeharbor/recovery");

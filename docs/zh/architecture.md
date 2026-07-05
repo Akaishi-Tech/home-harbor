@@ -78,7 +78,7 @@ flowchart LR
   Disk["目标 GPT 磁盘"] --> Esp["1 esp<br/>768M vfat"]
   Disk --> BootA["2 boot_a<br/>512M raw UKI"]
   Disk --> BootB["3 boot_b<br/>512M raw UKI"]
-  Disk --> Super["4 super<br/>7184M Android dynamic"]
+  Disk --> Super["4 super<br/>5776M Android dynamic"]
   Disk --> State["5 state<br/>4096M ext4"]
   Disk --> RecoveryA["6 recovery_a<br/>1648M avb-erofs"]
   Disk --> RecoveryB["7 recovery_b<br/>1648M avb-erofs"]
@@ -90,8 +90,8 @@ flowchart LR
   Super --> RootB["root_b<br/>2304M"]
   Super --> ModulesA["modules_a<br/>448M"]
   Super --> ModulesB["modules_b<br/>448M"]
-  Super --> FirmwareA["firmware_a<br/>832M"]
-  Super --> FirmwareB["firmware_b<br/>832M"]
+  Super --> FirmwareA["firmware_a<br/>128M"]
+  Super --> FirmwareB["firmware_b<br/>128M"]
 ```
 
 | 序号 | Label | 大小 | 格式 | 作用 |
@@ -99,7 +99,7 @@ flowchart LR
 | 1 | `esp` | 768M | vfat | EFI selector 与 boot slot state。 |
 | 2 | `boot_a` | 512M | raw UKI | slot A 的 normal boot payload。 |
 | 3 | `boot_b` | 512M | raw UKI | slot B 的 normal boot payload。 |
-| 4 | `super` | 7184M | Android dynamic | verified root、modules、firmware 逻辑分区容器。 |
+| 4 | `super` | 5776M | Android dynamic | verified root、modules、firmware 逻辑分区容器。 |
 | 5 | `state` | 4096M | ext4 | OTA boot metadata、`boot_a.env` / `boot_b.env` 与持久 marker。 |
 | 6 | `recovery_a` | 1648M | avb-erofs | slot A 的 recovery rootfs、内嵌 recovery UKI 与 AVB hashtree。 |
 | 7 | `recovery_b` | 1648M | avb-erofs | slot B 的 recovery rootfs、内嵌 recovery UKI 与 AVB hashtree。 |
@@ -115,8 +115,8 @@ flowchart LR
 | `root_b` | `super` | 2304M | slot B 的 immutable rootfs；A active 时也是 OTA target。 |
 | `modules_a` | `super` | 448M | slot A 的 kernel modules。 |
 | `modules_b` | `super` | 448M | slot B 的 kernel modules。 |
-| `firmware_a` | `super` | 832M | slot A 的 Linux firmware tree。 |
-| `firmware_b` | `super` | 832M | slot B 的 Linux firmware tree。 |
+| `firmware_a` | `super` | 128M | slot A 的裁剪版 Linux firmware tree。 |
+| `firmware_b` | `super` | 128M | slot B 的裁剪版 Linux firmware tree。 |
 
 安装时 installer 会用安装 payload 初始化 A/B 两组逻辑 slot。Normal boot 使用 `boot_a` 或 `boot_b`，从 `state` 读取对应 boot environment，映射选中的 `super` 逻辑分区，并通过对应的 `vbmeta_*` 分区校验。OTA 会先写入 inactive boot、vbmeta、root、modules、firmware target，再切换 boot state。
 

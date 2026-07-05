@@ -311,7 +311,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
     private const long RootImageBytes = 2304L * MiB;
     private const long RecoveryImageBytes = 1648L * MiB;
     private const long ModulesImageBytes = 448L * MiB;
-    private const long FirmwareImageBytes = 832L * MiB;
+    private const long FirmwareImageBytes = 128L * MiB;
     private const long VbmetaImageBytes = 16L * MiB;
     private const long StateSizeMiB = 4096;
     private const long DataMinMiB = 1024;

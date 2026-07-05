@@ -125,7 +125,6 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                         "packageKind",
                         "rootfsHash",
                         "schemaVersion",
-                        "targetSlot",
                         "type",
                         "vbmetaADigest",
                         "vbmetaAHash",
@@ -160,7 +159,6 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                     "packageKind",
                     "rootfsHash",
                     "schemaVersion",
-                    "targetSlot",
                     "type",
                     "vbmetaADigest",
                     "vbmetaAHash",
@@ -204,7 +202,6 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                 "packageKind",
                 "recoveryHash",
                 "schemaVersion",
-                "targetSlot",
                 "type",
                 "version"
             ]);
@@ -215,25 +212,25 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
         {
             if (!HasAnyProperty(manifest, "bootHash", "bootloaderHash", "fallbackBootHash", "firmwareHash", "kernelRelease", "modulesHash", "recoveryHash"))
             {
-                return CanonicalObject(manifest,
-                [
+                var minimalFields = new List<string>
+                {
                     "bootMode",
                     "channel",
                     "createdAt",
                     "packageKind",
                     "rootfsHash",
                     "schemaVersion",
-                    "targetSlot",
                     "type",
                     "vbmetaADigest",
                     "vbmetaAHash",
                     "vbmetaBDigest",
                     "vbmetaBHash",
                     "version"
-                ]);
+                };
+                return CanonicalObject(manifest, minimalFields);
             }
 
-            var fields = new List<string>
+            var extendedFields = new List<string>
             {
                 "bootHash",
                 "bootMode",
@@ -248,7 +245,6 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                 "recoveryHash",
                 "rootfsHash",
                 "schemaVersion",
-                "targetSlot",
                 "type",
                 "vbmetaADigest",
                 "vbmetaAHash",
@@ -258,10 +254,10 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
             };
             if (bootMode == "secure-boot-raw-uki")
             {
-                fields.Insert(fields.IndexOf("packageKind"), "mokManagerHash");
+                extendedFields.Insert(extendedFields.IndexOf("packageKind"), "mokManagerHash");
             }
 
-            return CanonicalObject(manifest, fields);
+            return CanonicalObject(manifest, extendedFields);
         }
 
         throw new InvalidOperationException("schema v1 raw UKI manifest requires packageKind=system/type=full-system or packageKind=kernel/type=kernel-only");

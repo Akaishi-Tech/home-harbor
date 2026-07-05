@@ -6,7 +6,11 @@ packages:
   rootfs:
     - base
     - linux
-    - linux-firmware
+    - linux-firmware-broadcom
+    - linux-firmware-intel
+    - linux-firmware-realtek
+    - linux-firmware-other
+    - linux-firmware-whence
     - systemd
     - systemd-resolvconf
     - tpm2-tss
@@ -233,7 +237,7 @@ partitions:
     purpose: normal boot UKI for boot slot B
   - name: super
     label: Android super
-    sizeMib: 7184
+    sizeMib: 5776
     fileSystem: android-dynamic
     purpose: dynamic partition container for verified root, modules, and firmware payloads
   - name: state
@@ -301,15 +305,15 @@ logicalPartitions:
     purpose: kernel modules plus appended AVB hashtree for boot slot B
   - name: firmware_a
     parent: super
-    sizeMib: 832
-    dataSizeMib: 768
+    sizeMib: 128
+    dataSizeMib: 96
     fileSystem: avb-erofs
     payload: firmware
     purpose: linux-firmware tree plus appended AVB hashtree for boot slot A
   - name: firmware_b
     parent: super
-    sizeMib: 832
-    dataSizeMib: 768
+    sizeMib: 128
+    dataSizeMib: 96
     fileSystem: avb-erofs
     payload: firmware
     purpose: linux-firmware tree plus appended AVB hashtree for boot slot B

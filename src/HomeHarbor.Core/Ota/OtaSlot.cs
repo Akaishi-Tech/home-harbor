@@ -9,7 +9,6 @@ public sealed record OtaSlot(
 
 public sealed record OtaManifest(
     string Version,
-    string TargetSlot,
     string RootfsHash,
     string VbmetaAHash,
     string VbmetaBHash,

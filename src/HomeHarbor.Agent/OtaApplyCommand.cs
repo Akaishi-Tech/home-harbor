@@ -301,21 +301,9 @@ internal static class OtaApplyCommand
 
             var activeBootSlot = NormalizeSlot(ActiveBootSlot(applyOptions), "active HomeHarbor boot slot");
             var activeRootSlot = NormalizeSlot(ActiveRootSlot(applyOptions), "active HomeHarbor root slot");
-            var requestedTarget = ManifestString(manifest, "targetSlot") ?? "inactive";
-            var targetBootSlot = activeBootSlot;
-            if (otaType == OtaType.KernelOnly)
-            {
-                targetBootSlot = requestedTarget switch
-                {
-                    "inactive" => OppositeSlot(activeBootSlot),
-                    "A" or "B" => requestedTarget,
-                    _ => throw new InvalidOperationException("OTA targetSlot must be inactive, A, or B, got: " + requestedTarget)
-                };
-                if (targetBootSlot == activeBootSlot)
-                {
-                    throw new InvalidOperationException("OTA target boot slot " + targetBootSlot + " is currently active");
-                }
-            }
+            var targetBootSlot = otaType == OtaType.KernelOnly
+                ? OppositeSlot(activeBootSlot)
+                : activeBootSlot;
 
             var targetRootSlot = activeRootSlot;
             var targetRootLower = SlotLower(targetRootSlot);
@@ -1381,7 +1369,6 @@ internal static class OtaApplyCommand
             ["targetBootSlot"] = plan.TargetBootSlot,
             ["targetRecoverySlot"] = plan.TargetRecoverySlot,
             ["targetRootSlot"] = plan.TargetRootSlot,
-            ["targetSlot"] = plan.TargetBootSlot,
             ["type"] = TypeText(plan.Type),
             ["vbmetaAHash"] = plan.VbmetaAHash,
             ["vbmetaBHash"] = plan.VbmetaBHash,
