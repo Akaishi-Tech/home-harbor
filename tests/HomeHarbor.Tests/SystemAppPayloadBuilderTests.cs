@@ -117,6 +117,115 @@ public sealed class SystemAppPayloadBuilderTests
         }
     }
 
+    [TestMethod]
+    [SupportedOSPlatform("linux")]
+    public async Task ExtractTarGzAsync_Rejects_File_Through_Archive_Symlink()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "homeharbor-system-app-extract-" + Guid.NewGuid().ToString("N"));
+        var archive = Path.Combine(tempDir, "payload.tar.gz");
+        var destination = Path.Combine(tempDir, "out");
+
+        try
+        {
+            _ = Directory.CreateDirectory(tempDir);
+            await using (var output = File.Create(archive))
+            await using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize))
+            await using (var writer = new TarWriter(gzip))
+            {
+                await writer.WriteEntryAsync(new PaxTarEntry(TarEntryType.SymbolicLink, "usr/lib")
+                {
+                    LinkName = "/usr/lib"
+                });
+                var bytes = Encoding.UTF8.GetBytes("must not be written\n");
+                await writer.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, "usr/lib/homeharbor-escape-test")
+                {
+                    DataStream = new MemoryStream(bytes)
+                });
+            }
+
+            var ex = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                SystemAppPayloadExtractor.ExtractTarGzAsync(archive, destination));
+            Assert.Contains("traverses symlink", ex.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    [SupportedOSPlatform("linux")]
+    public async Task ExtractTarGzAsync_Defers_Restrictive_Directory_Mode_Until_Complete()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "homeharbor-system-app-extract-" + Guid.NewGuid().ToString("N"));
+        var archive = Path.Combine(tempDir, "payload.tar.gz");
+        var destination = Path.Combine(tempDir, "out");
+        try
+        {
+            _ = Directory.CreateDirectory(tempDir);
+            await using (var output = File.Create(archive))
+            await using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize))
+            await using (var writer = new TarWriter(gzip))
+            {
+                await writer.WriteEntryAsync(new PaxTarEntry(TarEntryType.Directory, "usr/bin")
+                {
+                    Mode = UnixFileMode.UserRead | UnixFileMode.UserExecute |
+                           UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                           UnixFileMode.OtherRead | UnixFileMode.OtherExecute
+                });
+                var bytes = Encoding.UTF8.GetBytes("#!/bin/sh\n");
+                await writer.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, "usr/bin/example")
+                {
+                    DataStream = new MemoryStream(bytes)
+                });
+            }
+
+            await SystemAppPayloadExtractor.ExtractTarGzAsync(archive, destination);
+
+            Assert.IsTrue(File.Exists(Path.Combine(destination, "usr", "bin", "example")));
+        }
+        finally
+        {
+            var restrictiveDirectory = Path.Combine(destination, "usr", "bin");
+            if (Directory.Exists(restrictiveDirectory))
+            {
+                File.SetUnixFileMode(
+                    restrictiveDirectory,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ExtractTarGzAsync_Failure_Preserves_Previous_Destination_Atomically()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "homeharbor-system-app-extract-" + Guid.NewGuid().ToString("N"));
+        var archive = Path.Combine(tempDir, "payload.tar.gz");
+        var destination = Path.Combine(tempDir, "out");
+        var existing = Path.Combine(destination, "keep.txt");
+        try
+        {
+            _ = Directory.CreateDirectory(destination);
+            await File.WriteAllTextAsync(existing, "keep");
+            await WriteTarGzAsync(archive, [("etc/passwd", "nope\n")]);
+
+            _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                SystemAppPayloadExtractor.ExtractTarGzAsync(archive, destination));
+
+            Assert.AreEqual("keep", await File.ReadAllTextAsync(existing));
+            Assert.IsFalse(Directory.EnumerateFileSystemEntries(tempDir)
+                .Any(path => Path.GetFileName(path).Contains(".extract-", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static async Task WriteTarGzAsync(string path, IReadOnlyList<(string Name, string Contents)> files)
     {
         await using var output = File.Create(path);

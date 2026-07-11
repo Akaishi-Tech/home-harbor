@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using HomeHarbor.Tooling;
@@ -8,8 +9,192 @@ using Terminal.Gui.Drivers;
 namespace HomeHarbor.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public sealed class InstallerTuiTests
 {
+    [TestMethod]
+    public async Task InstallerDownload_Rejects_ContentLength_And_Streaming_Overflow_And_Cleans_Partials()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "homeharbor-installer-download-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = Directory.CreateDirectory(tempDir);
+            var destination = Path.Combine(tempDir, "payload.tar.gz");
+            using (var http = HttpClientFor(_ =>
+            {
+                var response = Response(new byte[1]);
+                response.Content.Headers.ContentLength = 9;
+                return response;
+            }))
+            {
+                _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                    InstallerAssets.DownloadFileAsync(
+                        http,
+                        "https://updates.example/payload.tar.gz",
+                        destination,
+                        8,
+                        TimeSpan.FromSeconds(5)));
+            }
+
+            Assert.IsFalse(File.Exists(destination));
+            Assert.IsEmpty(Directory.GetFiles(tempDir, "*.part.*"));
+
+            using (var http = HttpClientFor(_ => Response(new byte[16], includeLength: false)))
+            {
+                _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                    InstallerAssets.DownloadFileAsync(
+                        http,
+                        "https://updates.example/payload.tar.gz",
+                        destination,
+                        8,
+                        TimeSpan.FromSeconds(5)));
+            }
+
+            Assert.IsFalse(File.Exists(destination));
+            Assert.IsEmpty(Directory.GetFiles(tempDir, "*.part.*"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task InstallerDownload_Rejects_NonHttps_And_Https_To_Http_Redirect()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "homeharbor-installer-download-" + Guid.NewGuid().ToString("N"));
+        var destination = Path.Combine(tempDir, "payload.tar.gz");
+        var calls = 0;
+        try
+        {
+            _ = Directory.CreateDirectory(tempDir);
+            using var http = HttpClientFor(_ =>
+            {
+                calls++;
+                return new HttpResponseMessage(HttpStatusCode.Redirect)
+                {
+                    Headers = { Location = new Uri("http://attacker.invalid/payload.tar.gz") }
+                };
+            });
+
+            _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                InstallerAssets.DownloadFileAsync(
+                    http,
+                    "http://updates.example/payload.tar.gz",
+                    destination,
+                    1024,
+                    TimeSpan.FromSeconds(5)));
+            Assert.AreEqual(0, calls);
+
+            _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                InstallerAssets.DownloadFileAsync(
+                    http,
+                    "https://updates.example/payload.tar.gz",
+                    destination,
+                    1024,
+                    TimeSpan.FromSeconds(5)));
+            Assert.AreEqual(1, calls);
+            Assert.IsFalse(File.Exists(destination));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task InstallerDownloadLatest_Uses_Safe_Distinct_Names_And_Verifies_Hashes()
+    {
+        var systemBytes = Encoding.UTF8.GetBytes("system payload");
+        var kernelBytes = Encoding.UTF8.GetBytes("kernel payload");
+        var systemSha = Convert.ToHexString(SHA256.HashData(systemBytes)).ToLowerInvariant();
+        var kernelSha = Convert.ToHexString(SHA256.HashData(kernelBytes)).ToLowerInvariant();
+        var metadata = Encoding.UTF8.GetBytes($$"""
+            {
+              "channel": "stable",
+              "currentVersion": "1.2.3",
+              "systemOta": {
+                "bundle": {
+                  "url": "https://updates.example/homeharbor-system-ota-1.2.3.tar.gz",
+                  "sha256": "{{systemSha}}"
+                }
+              },
+              "kernelChannels": {
+                "generic": {
+                  "bundle": {
+                    "url": "https://updates.example/homeharbor-kernel-generic-ota-1.2.3.tar.gz",
+                    "sha256": "{{kernelSha}}"
+                  }
+                }
+              }
+            }
+            """);
+        using var http = HttpClientFor(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/channel-stable.json" => Response(metadata),
+            "/homeharbor-system-ota-1.2.3.tar.gz" => Response(systemBytes),
+            "/homeharbor-kernel-generic-ota-1.2.3.tar.gz" => Response(kernelBytes),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        });
+
+        var assets = await InstallerAssets.DownloadLatestAsync(
+            "stable",
+            "https://updates.example/channel-stable.json",
+            "/tmp/release.pub.pem",
+            http);
+        var work = Path.GetDirectoryName(assets.ChannelFile)!;
+        try
+        {
+            Assert.AreEqual("homeharbor-system-ota-1.2.3.tar.gz", Path.GetFileName(assets.SystemOta));
+            Assert.AreEqual("homeharbor-kernel-generic-ota-1.2.3.tar.gz", Path.GetFileName(assets.KernelOta));
+            CollectionAssert.AreEqual(systemBytes, await File.ReadAllBytesAsync(assets.SystemOta));
+            CollectionAssert.AreEqual(kernelBytes, await File.ReadAllBytesAsync(assets.KernelOta!));
+        }
+        finally
+        {
+            if (Directory.Exists(work)) Directory.Delete(work, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task InstallerDownloadLatest_Rejects_Empty_Bundle_File_Name_Before_Payload_Request()
+    {
+        var metadata = Encoding.UTF8.GetBytes("""
+            {
+              "channel": "stable",
+              "currentVersion": "1.2.3",
+              "systemOta": {
+                "bundle": {
+                  "url": "https://updates.example/download/",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "kernelChannels": {
+                "generic": {
+                  "bundle": {
+                    "url": "https://updates.example/homeharbor-kernel-generic-ota-1.2.3.tar.gz",
+                    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                  }
+                }
+              }
+            }
+            """);
+        var calls = 0;
+        using var http = HttpClientFor(_ =>
+        {
+            calls++;
+            return Response(metadata);
+        });
+
+        _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            InstallerAssets.DownloadLatestAsync(
+                "stable",
+                "https://updates.example/channel-stable.json",
+                "/tmp/release.pub.pem",
+                http));
+        Assert.AreEqual(1, calls);
+    }
+
     [TestMethod]
     public void TerminalGuiInstallerUi_ResolveDriverName_Defaults_To_Dotnet()
     {
@@ -94,6 +279,7 @@ public sealed class InstallerTuiTests
                   "model": "VirtIO Block Device",
                   "type": "disk",
                   "serial": "disk-a",
+                  "wwn": "wwn-a",
                   "tran": "virtio",
                   "mountpoints": [null, "/mnt/data"]
                 },
@@ -121,12 +307,69 @@ public sealed class InstallerTuiTests
         Assert.AreEqual(68719476736, disks[0].SizeBytes);
         Assert.AreEqual("VirtIO Block Device", disks[0].Model);
         Assert.AreEqual("disk-a", disks[0].Serial);
+        Assert.AreEqual("wwn-a", disks[0].Wwn);
+        Assert.AreEqual("/dev/vda", disks[0].ResolvedPath);
         Assert.AreEqual("virtio", disks[0].Transport);
         CollectionAssert.AreEqual(new[] { "/mnt/data" }, disks[0].Mountpoints.ToArray());
         Assert.IsTrue(disks[0].HasMounts);
         Assert.AreEqual("disk", disks[1].Model);
         Assert.AreEqual(34359738368, disks[1].SizeBytes);
         Assert.IsFalse(disks[1].HasMounts);
+    }
+
+    [TestMethod]
+    public void Installer_BuildInstallDiskArgs_Includes_Selected_Disk_Identity()
+    {
+        var disk = new global::DiskInfo("/dev/sdb", 4096, "Test Disk")
+        {
+            Serial = "disk-serial",
+            Wwn = "wwn-123",
+            ResolvedPath = "/dev/sdb"
+        };
+        var assets = new global::InstallerAssets(
+            "1.2.3",
+            "stable",
+            "/payload/system.tar.gz",
+            "/keys/release.pem",
+            null,
+            KernelOta: "/payload/kernel.tar.gz");
+
+        var args = global::Installer.BuildInstallDiskArgs(disk, assets, "ERASE /dev/sdb");
+
+        CollectionAssert.Contains(args, "--expected-size-bytes");
+        CollectionAssert.Contains(args, "4096");
+        CollectionAssert.Contains(args, "--expected-serial");
+        CollectionAssert.Contains(args, "disk-serial");
+        CollectionAssert.Contains(args, "--expected-wwn");
+        CollectionAssert.Contains(args, "wwn-123");
+        CollectionAssert.Contains(args, "--expected-resolved-path");
+    }
+
+    [TestMethod]
+    public void InstallDiskTargetIdentity_Rejects_Device_Changed_After_Selection()
+    {
+        var actual = global::InstallDiskTargetIdentity.ParseLsblkJson("""
+            {
+              "blockdevices": [
+                {
+                  "path": "/dev/sdb",
+                  "size": 4096,
+                  "type": "disk",
+                  "serial": "replacement-serial",
+                  "wwn": "replacement-wwn"
+                }
+              ]
+            }
+            """);
+
+        var ex = Assert.ThrowsExactly<InvalidOperationException>(() => actual.ValidateExpected(
+            "/dev/sdb",
+            "/dev/sdb",
+            4096,
+            "selected-serial",
+            "selected-wwn"));
+
+        Assert.Contains("serial changed after selection", ex.Message);
     }
 
     [TestMethod]
@@ -533,6 +776,35 @@ public sealed class InstallerTuiTests
     }
 
     [TestMethod]
+    public void InstallerAssets_Never_AutoTrusts_Adjacent_Release_Key()
+    {
+        var temp = Directory.CreateTempSubdirectory("homeharbor-installer-assets-");
+        try
+        {
+            var ota = Path.Combine(temp.FullName, "homeharbor-system-ota-0.1.0.tar.gz");
+            var adjacentKey = Path.Combine(temp.FullName, "release.pub.pem");
+            const string trustedKey = "/etc/homeharbor/release.pub.pem";
+            WriteSystemOta(ota, "stable");
+            File.WriteAllText(adjacentKey, "attacker-controlled key");
+
+            var production = global::InstallerAssets.FromSystemOtaFile(ota, trustedKey);
+            var directoryProduction = global::InstallerAssets.FromPayloadDirectory(temp.FullName, trustedKey);
+            var explicitDevelopment = global::InstallerAssets.FromSystemOtaFile(
+                ota,
+                trustedKey,
+                allowAdjacentDevelopmentKey: true);
+
+            Assert.AreEqual(Path.GetFullPath(trustedKey), production.PublicKey);
+            Assert.AreEqual(Path.GetFullPath(trustedKey), directoryProduction.PublicKey);
+            Assert.AreEqual(adjacentKey, explicitDevelopment.PublicKey);
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void InstallerAssets_FromPayloadDirectory_Reads_Channel_From_Sidecar_Manifest()
     {
         var temp = Directory.CreateTempSubdirectory("homeharbor-installer-assets-");
@@ -623,6 +895,53 @@ public sealed class InstallerTuiTests
         }
     }
 
+    [TestMethod]
+    [DataRow("findmnt")]
+    [DataRow("lsblk-mounts")]
+    public async Task InstallDisk_Aborts_Before_Sgdisk_When_Safety_Probe_Fails_After_Identity(string failedProbe)
+    {
+        var runner = new RecordingInstallerRunner((fileName, args) => (fileName, args) switch
+        {
+            ("readlink", ["-f", var path]) => new CommandResult(0, path + "\n", string.Empty, fileName),
+            ("lsblk", ["-J", "-b", "-d", "-o", _, "/dev/sdb"]) => new CommandResult(0, """
+                {"blockdevices":[{"path":"/dev/sdb","size":4096,"type":"disk","serial":"disk-serial","wwn":"wwn-123"}]}
+                """, string.Empty, fileName),
+            ("findmnt", _) when failedProbe == "findmnt" => new CommandResult(1, string.Empty, "probe failed", fileName),
+            ("findmnt", ["-n", "-o", "SOURCE", "/"]) => new CommandResult(0, "/dev/vda2\n", string.Empty, fileName),
+            ("lsblk", ["-nrpo", "PATH", "-s", "/dev/vda2"]) => new CommandResult(0, "/dev/vda2\n/dev/vda\n", string.Empty, fileName),
+            ("lsblk", ["--json", "--tree", "--output", "PATH,MOUNTPOINTS", "/dev/sdb"]) when failedProbe == "lsblk-mounts" =>
+                new CommandResult(1, string.Empty, "probe failed", fileName),
+            _ => new CommandResult(1, string.Empty, "unexpected command", fileName)
+        });
+        var options = new global::InstallDiskOptions(
+            Target: "/dev/sdb",
+            SystemOta: null,
+            SystemManifest: null,
+            KernelOta: null,
+            ChannelFile: null,
+            PublicKey: "/keys/release.pem",
+            VerifyScript: null,
+            Confirm: "ERASE /dev/sdb",
+            ExpectedSizeBytes: 4096,
+            ExpectedSerial: "disk-serial",
+            ExpectedWwn: "wwn-123",
+            ExpectedResolvedPath: "/dev/sdb",
+            Yes: true,
+            DryRun: false,
+            ListDisks: false,
+            ShowHelp: false);
+        var executor = new global::InstallDiskExecutor(
+            options,
+            new global::InstallDiskIo(_ => { }, TextReader.Null, inputInteractive: false),
+            runner);
+
+        _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            executor.ValidateAndCreatePartitionTableForBlockTargetAsync("/dev/sdb", CancellationToken.None));
+
+        Assert.Contains(call => call.FileName == "lsblk" && call.Arguments.Contains("-J"), runner.Calls);
+        Assert.DoesNotContain(call => call.FileName == "sgdisk", runner.Calls);
+    }
+
     private static void AssertCall(IReadOnlyList<CommandCall> calls, string fileName, string[] arguments)
     {
         Assert.Contains(
@@ -654,6 +973,40 @@ public sealed class InstallerTuiTests
         return Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant();
     }
 
+    private static HttpClient HttpClientFor(Func<HttpRequestMessage, HttpResponseMessage> callback)
+        => new(new CallbackHttpMessageHandler(callback), disposeHandler: true)
+        {
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
+        };
+
+    private static HttpResponseMessage Response(byte[] payload, bool includeLength = true)
+    {
+        var content = new StreamContent(new MemoryStream(payload, writable: false));
+        if (includeLength)
+        {
+            content.Headers.ContentLength = payload.LongLength;
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = content
+        };
+    }
+
+    private sealed class CallbackHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> callback)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var response = callback(request);
+            response.RequestMessage ??= request;
+            return Task.FromResult(response);
+        }
+    }
+
     private sealed class RecordingNetworkRunner : ICommandRunner
     {
         public List<CommandCall> Calls { get; } = [];
@@ -671,6 +1024,23 @@ public sealed class InstallerTuiTests
                 : string.Empty;
             Calls.Add(new CommandCall(fileName, args, payload));
             return Task.FromResult(new CommandResult(0, string.Empty, string.Empty, fileName + " " + string.Join(" ", args)));
+        }
+    }
+
+    private sealed class RecordingInstallerRunner(Func<string, string[], CommandResult> handler) : ICommandRunner
+    {
+        public List<CommandCall> Calls { get; } = [];
+
+        public Task<CommandResult> RunAsync(
+            string fileName,
+            IEnumerable<string> arguments,
+            CommandRunOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = arguments.ToArray();
+            Calls.Add(new CommandCall(fileName, args, string.Empty));
+            return Task.FromResult(handler(fileName, args));
         }
     }
 

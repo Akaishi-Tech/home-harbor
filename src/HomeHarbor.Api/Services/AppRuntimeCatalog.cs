@@ -8,6 +8,8 @@ namespace HomeHarbor.Api.Services;
 public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
 {
     private const string DefaultAppStoreBaseUrl = "https://akaishi-tech.github.io/home-harbor/apps";
+    private const long MaxStoreIndexBytes = 1024 * 1024;
+    private const long MaxAppManifestBytes = 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _http;
@@ -102,7 +104,15 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
         try
         {
             var indexUrl = StoreIndexUrl();
-            var indexJson = await ReadUriTextAsync(indexUrl, cancellationToken);
+            var fileRoot = AppStoreFileRoot(indexUrl);
+            var indexUri = BoundedUriFetcher.ValidateUri(indexUrl, allowedFileRoot: fileRoot, label: "app store index URL");
+            var indexJson = await ReadUriTextAsync(
+                indexUrl,
+                MaxStoreIndexBytes,
+                sameOriginAs: null,
+                fileRoot,
+                "app store index",
+                cancellationToken);
             var verifier = new HomeHarborAppManifestVerifier();
             var index = await verifier.VerifyStoreIndexJsonAsync(indexJson, publicKey, cancellationToken);
             var channel = OtaRuntime.Channel();
@@ -122,7 +132,13 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
 
                 try
                 {
-                    var manifestJson = await ReadUriTextAsync(entry.ManifestUrl, cancellationToken);
+                    var manifestJson = await ReadUriTextAsync(
+                        entry.ManifestUrl,
+                        MaxAppManifestBytes,
+                        indexUri,
+                        fileRoot,
+                        $"app manifest {entry.AppKey}",
+                        cancellationToken);
                     var actualSha = Sha256Hex(manifestJson);
                     if (!string.Equals(actualSha, entry.ManifestSha256, StringComparison.OrdinalIgnoreCase))
                     {
@@ -131,6 +147,18 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
                     }
 
                     var manifest = await verifier.VerifyAppManifestJsonAsync(manifestJson, publicKey, entry.ManifestUrl, cancellationToken);
+                    if (!string.Equals(manifest.AppKey, entry.AppKey, StringComparison.Ordinal) ||
+                        !string.Equals(manifest.Version, entry.Version, StringComparison.Ordinal))
+                    {
+                        _logger?.LogWarning(
+                            "Skipping app-store entry {EntryAppKey}; signed manifest identity {ManifestAppKey}@{ManifestVersion} does not match index version {EntryVersion}.",
+                            entry.AppKey,
+                            manifest.AppKey,
+                            manifest.Version,
+                            entry.Version);
+                        continue;
+                    }
+
                     if (!string.Equals(manifest.Channel, channel, StringComparison.Ordinal))
                     {
                         _logger?.LogWarning("Skipping app {AppKey}; manifest channel {ManifestChannel} does not match {Channel}.", manifest.AppKey, manifest.Channel, channel);
@@ -142,7 +170,19 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
                         continue;
                     }
 
-                    templates[manifest.AppKey] = ManagedAppTemplate.FromManifest(manifest, source: "remote");
+                    if (manifest.Install is HomeHarborSystemAppInstall systemInstall)
+                    {
+                        _ = BoundedUriFetcher.ValidateUri(
+                            systemInstall.ManifestUrl,
+                            indexUri,
+                            fileRoot,
+                            $"system app manifest URL for {manifest.AppKey}");
+                    }
+
+                    templates[manifest.AppKey] = ManagedAppTemplate.FromManifest(
+                        manifest,
+                        source: "remote",
+                        signedManifestJson: manifestJson);
                 }
                 catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException or JsonException or FormatException or CryptographicException)
                 {
@@ -156,66 +196,87 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
         }
     }
 
-    private async Task<string> ReadUriTextAsync(string uriText, CancellationToken cancellationToken)
-    {
-        if (!Uri.TryCreate(uriText, UriKind.Absolute, out var uri))
-        {
-            throw new InvalidOperationException("app store URL must be absolute: " + uriText);
-        }
-
-        if (uri.Scheme == Uri.UriSchemeFile)
-        {
-            return await File.ReadAllTextAsync(uri.LocalPath, cancellationToken);
-        }
-
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new InvalidOperationException("app store URL scheme is not allowed: " + uri.Scheme);
-        }
-
-        return await _http.GetStringAsync(uri, cancellationToken);
-    }
+    private Task<string> ReadUriTextAsync(
+        string uriText,
+        long maxBytes,
+        Uri? sameOriginAs,
+        string? fileRoot,
+        string label,
+        CancellationToken cancellationToken)
+        => BoundedUriFetcher.ReadUtf8TextAsync(
+            _http,
+            uriText,
+            maxBytes,
+            sameOriginAs,
+            fileRoot,
+            label,
+            cancellationToken);
 
     private static IReadOnlyList<ManagedAppTemplate> BuildBuiltInTemplates()
     {
+        var vaultwarden = ManagedAppTemplate.FromManifest(BuiltInContainer(
+            "vaultwarden",
+            "Password Vault",
+            "家庭密码库",
+            "Family password vault",
+            "productivity",
+            "docker.io/vaultwarden/server@sha256:d626d04934cd1192ad8ced1adb975099fca78cec33ab467d2d3c923cde7f3b0c",
+            hostPort: 8081,
+            containerPort: 80,
+            recommendedInSetup: false)) with
+        {
+            Available = false,
+            UnavailableReason = "Secure TLS ingress is not provisioned for the password vault yet."
+        };
+        var jellyfin = ManagedAppTemplate.FromManifest(BuiltInContainer(
+            "jellyfin",
+            "Media Library",
+            "媒体库",
+            "Movies, shows, and music",
+            "media",
+            "docker.io/jellyfin/jellyfin@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db",
+            hostPort: 8096,
+            containerPort: 8096,
+            recommendedInSetup: false)) with
+        {
+            Available = false,
+            UnavailableReason = "Media and configuration mounts are not safely isolated yet."
+        };
+        var syncthing = ManagedAppTemplate.FromManifest(BuiltInContainer(
+            "syncthing",
+            "Device Sync",
+            "设备同步",
+            "Peer device synchronization",
+            "sync",
+            "docker.io/syncthing/syncthing@sha256:4464f4161dd0251e20d46bb3aec83363db75d80cef1abdd5d5fd4054b04a004d",
+            hostPort: 8384,
+            containerPort: 8384,
+            recommendedInSetup: false)) with
+        {
+            Available = false,
+            UnavailableReason = "Syncthing configuration and family-data isolation are not implemented yet."
+        };
+        var immich = ManagedAppTemplate.FromManifest(BuiltInContainer(
+            "immich",
+            "Photo Library",
+            "照片库",
+            "Photo backup and timeline",
+            "photos",
+            "ghcr.io/immich-app/immich-server@sha256:14390f3dc9512dc3273b12ccee6363d9be16c388699abc3f3fe0498bb9829937",
+            hostPort: 2283,
+            containerPort: 2283,
+            recommendedInSetup: false)) with
+        {
+            Available = false,
+            UnavailableReason = "The required PostgreSQL, Redis, and media-storage services are not provisioned yet."
+        };
+
         return
         [
-            ManagedAppTemplate.FromManifest(BuiltInContainer(
-                "vaultwarden",
-                "Password Vault",
-                "家庭密码库",
-                "Family password vault",
-                "productivity",
-                "docker.io/vaultwarden/server:latest",
-                8081,
-                recommendedInSetup: true)),
-            ManagedAppTemplate.FromManifest(BuiltInContainer(
-                "jellyfin",
-                "Media Library",
-                "媒体库",
-                "Movies, shows, and music",
-                "media",
-                "docker.io/jellyfin/jellyfin:latest",
-                8096,
-                recommendedInSetup: true)),
-            ManagedAppTemplate.FromManifest(BuiltInContainer(
-                "syncthing",
-                "Device Sync",
-                "设备同步",
-                "Peer device synchronization",
-                "sync",
-                "docker.io/syncthing/syncthing:latest",
-                8384,
-                recommendedInSetup: true)),
-            ManagedAppTemplate.FromManifest(BuiltInContainer(
-                "immich",
-                "Photo Library",
-                "照片库",
-                "Photo backup and timeline",
-                "photos",
-                "ghcr.io/immich-app/immich-server:release",
-                2283,
-                recommendedInSetup: true))
+            vaultwarden,
+            jellyfin,
+            syncthing,
+            immich
         ];
     }
 
@@ -226,7 +287,8 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
         string description,
         string category,
         string image,
-        int port,
+        int hostPort,
+        int containerPort,
         bool recommendedInSetup)
     {
         var manifest = JsonSerializer.Serialize(new
@@ -246,7 +308,7 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
             {
                 type = "container",
                 image,
-                ports = new[] { new { hostPort = port, containerPort = port, protocol = "tcp" } },
+                ports = new[] { new { hostPort, containerPort, protocol = "tcp" } },
                 environment = new Dictionary<string, string>(),
                 volumes = Array.Empty<object>(),
                 command = Array.Empty<string>()
@@ -263,6 +325,19 @@ public sealed class AppRuntimeCatalog : IAppRuntimeCatalog, IDisposable
     private static string AppStoreBaseUrl()
         => (Environment.GetEnvironmentVariable("HOMEHARBOR_APP_STORE_BASE_URL")
             ?? DefaultAppStoreBaseUrl).TrimEnd('/');
+
+    private static string? AppStoreFileRoot(string indexUrl)
+    {
+        var configured = Environment.GetEnvironmentVariable("HOMEHARBOR_APP_STORE_FILE_ROOT");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return Path.GetFullPath(configured);
+        }
+
+        return Uri.TryCreate(indexUrl, UriKind.Absolute, out var indexUri) && indexUri.Scheme == Uri.UriSchemeFile
+            ? Path.GetDirectoryName(Path.GetFullPath(indexUri.LocalPath))
+            : null;
+    }
 
     private static string Sha256Hex(string text)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
@@ -293,12 +368,16 @@ public sealed record ManagedAppTemplate(
     string Source,
     IReadOnlyList<string> Commands,
     HomeHarborAppHotCheck? HotCheck,
+    string SignedManifestJson,
     string ManifestJson,
     HomeHarborAppManifest Manifest)
 {
     private static readonly JsonSerializerOptions ManifestJsonOptions = new(JsonSerializerDefaults.Web);
 
-    public static ManagedAppTemplate FromManifest(HomeHarborAppManifest manifest, string? source = null)
+    public static ManagedAppTemplate FromManifest(
+        HomeHarborAppManifest manifest,
+        string? source = null,
+        string? signedManifestJson = null)
     {
         var kind = manifest.Install.Type;
         return manifest.Install switch
@@ -323,6 +402,7 @@ public sealed record ManagedAppTemplate(
                 source ?? manifest.Source,
                 Commands: [],
                 HotCheck: null,
+                SignedManifestJson: signedManifestJson ?? string.Empty,
                 ToManifestJson(manifest),
                 manifest),
             HomeHarborSystemAppInstall system => new(
@@ -337,14 +417,15 @@ public sealed record ManagedAppTemplate(
                 null,
                 manifest.Version,
                 system.ManifestUrl,
-                manifest.RecommendedInSetup,
+                RecommendedInSetup: false,
                 RequiresReboot: true,
                 manifest.VisibleRoles,
-                Available: true,
-                UnavailableReason: string.Empty,
+                Available: false,
+                UnavailableReason: "Persistent system-app activation and boot-time wrapper reconstruction are not implemented yet.",
                 source ?? manifest.Source,
                 system.Commands,
                 system.HotCheck,
+                SignedManifestJson: signedManifestJson ?? string.Empty,
                 ToManifestJson(manifest),
                 manifest),
             _ => throw new InvalidOperationException("Unknown HHAF install type: " + kind)

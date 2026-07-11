@@ -91,6 +91,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
         }
 
         _ = ReleaseChannel.Require(StringProperty(manifest, "channel"), "OTA manifest channel");
+        _ = ReleaseSequenceProperty(manifest);
 
         if (packageKind == "kernel" && otaType == "kernel-only")
         {
@@ -105,7 +106,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                         "bootHash",
                         "bootMode"
                     };
-                    AddOptionalField(legacyKernelFields, manifest, "bootloaderHash");
+                    legacyKernelFields.Add("bootloaderHash");
                     legacyKernelFields.AddRange(
                     [
                         "channel",
@@ -123,6 +124,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                     legacyKernelFields.AddRange(
                     [
                         "packageKind",
+                        "releaseSequence",
                         "rootfsHash",
                         "schemaVersion",
                         "type",
@@ -140,7 +142,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                     "bootHash",
                     "bootMode"
                 };
-                AddOptionalField(oldKernelFields, manifest, "bootloaderHash");
+                oldKernelFields.Add("bootloaderHash");
                 oldKernelFields.AddRange(
                 [
                     "channel",
@@ -157,6 +159,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                 oldKernelFields.AddRange(
                 [
                     "packageKind",
+                    "releaseSequence",
                     "rootfsHash",
                     "schemaVersion",
                     "type",
@@ -182,7 +185,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                 "bootHash",
                 "bootMode"
             ]);
-            AddOptionalField(fields, manifest, "bootloaderHash");
+            fields.Add("bootloaderHash");
             fields.AddRange(
             [
                 "channel",
@@ -201,6 +204,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
             [
                 "packageKind",
                 "recoveryHash",
+                "releaseSequence",
                 "schemaVersion",
                 "type",
                 "version"
@@ -218,6 +222,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                     "channel",
                     "createdAt",
                     "packageKind",
+                    "releaseSequence",
                     "rootfsHash",
                     "schemaVersion",
                     "type",
@@ -243,6 +248,7 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                 "modulesHash",
                 "packageKind",
                 "recoveryHash",
+                "releaseSequence",
                 "rootfsHash",
                 "schemaVersion",
                 "type",
@@ -261,6 +267,19 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
         }
 
         throw new InvalidOperationException("schema v1 raw UKI manifest requires packageKind=system/type=full-system or packageKind=kernel/type=kernel-only");
+    }
+
+    public static long ReleaseSequenceProperty(JsonElement manifest)
+    {
+        if (!manifest.TryGetProperty("releaseSequence", out var value) ||
+            value.ValueKind != JsonValueKind.Number ||
+            !value.TryGetInt64(out var sequence) ||
+            sequence <= 0)
+        {
+            throw new InvalidOperationException("OTA manifest releaseSequence must be a positive integer");
+        }
+
+        return sequence;
     }
 
     private static string CanonicalObject(JsonElement manifest, IReadOnlyList<string> fields)

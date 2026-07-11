@@ -63,7 +63,7 @@ internal static partial class AgentProgram
         {
             "--api-socket" => parseResult.GetValue(apiSocketOption),
             "--api-url" or "--no-api-socket" => null,
-            _ => "/run/homeharbor/api.sock"
+            _ => "/run/homeharbor-api/api.sock"
         };
     }
 
@@ -135,9 +135,11 @@ internal static partial class AgentProgram
 
             Commands:
               firstboot
+              consume-setup-bootstrap
               postgres-init
               postgres-bootstrap
               ensure-caddy-config
+              display-tls-trust [--certificate PATH] [--consoles PATHS]
               render-caddyfile
               storage-health
               ensure-smb-config
@@ -145,7 +147,7 @@ internal static partial class AgentProgram
               apply-containers
               apply-system-apps
               boot-attempt [--state-dir PATH] [--esp PATH] [--window-seconds N] [--threshold N] [--now UNIX_SECONDS] [--dry-run]
-              boot-success [--state-dir PATH] [--timeout-seconds N] [--health-url PATH_OR_URL] [--api-url URL] [--api-socket PATH|--no-api-socket] [--dry-run]
+              boot-success [--state-dir PATH] [--ota-state-dir PATH] [--esp PATH] [--boot-env PATH] [--run-dir PATH] [--timeout-seconds N] [--health-url PATH_OR_URL] [--api-url URL] [--api-socket PATH|--no-api-socket] [--dry-run]
               ota-apply <bundle> [--public-key PATH] [--channel CHANNEL] [--boot-env PATH] [--dry-run]
               ota-commit [--state-dir PATH] [--esp PATH] [--boot-env PATH] [--run-dir PATH]
               storage-apply
@@ -158,8 +160,9 @@ internal static partial class AgentProgram
 
     private static async Task<int> FirstbootAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
-        await EnsureDirAsync(runner, "/var/lib/homeharbor", 0750, "homeharbor", "homeharbor", cancellationToken);
-        await EnsureDirAsync(runner, "/var/lib/homeharbor/ota", 0750, "homeharbor", "homeharbor", cancellationToken);
+        await EnsureDirAsync(runner, "/var/lib/homeharbor", 0750, "root", "homeharbor", cancellationToken);
+        await EnsureDirAsync(runner, "/var/lib/homeharbor/ota", 0750, "root", "homeharbor", cancellationToken);
+        await EnsureDirAsync(runner, "/var/lib/homeharbor/api", 0700, "homeharbor", "homeharbor", cancellationToken);
         await EnsureOtaChannelAsync(runner, cancellationToken);
         await EnsureKernelChannelAsync(runner, cancellationToken);
         await EnsureDirAsync(runner, "/var/lib/homeharbor/secrets", 0700, "root", "root", cancellationToken);
@@ -171,37 +174,51 @@ internal static partial class AgentProgram
         }
 
         await EnsureDirAsync(runner, "/var/lib/caddy", 0750, "caddy", "caddy", cancellationToken);
-        await EnsureDirAsync(runner, "/var/lib/caddy/homeharbor", 0750, "caddy", "caddy", cancellationToken);
+        await EnsureDirAsync(runner, "/var/lib/homeharbor-caddy", 0750, "root", "caddy", cancellationToken);
         await EnsureDirAsync(runner, "/var/lib/NetworkManager", 0755, null, null, cancellationToken);
         await EnsureDirAsync(runner, "/var/lib/containers", 0755, null, null, cancellationToken);
         await EnsureDirAsync(runner, "/run/homeharbor", 0750, "homeharbor", "homeharbor", cancellationToken);
-        await EnsureDirAsync(runner, "/run/homeharbor/smb-credentials", 0700, "homeharbor", "homeharbor", cancellationToken);
+        await EnsureDirAsync(runner, "/run/homeharbor-api", 2750, "homeharbor", "homeharbor-api", cancellationToken);
+        await EnsureDirAsync(runner, "/run/homeharbor-smb-credentials", 0700, "homeharbor", "homeharbor", cancellationToken);
 
         if ((await runner.RunAsync("id", ["-u", "homeharbor-containers"], cancellationToken: cancellationToken)).ExitCode == 0)
         {
-            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers", 0750, "homeharbor-containers", "homeharbor-containers", cancellationToken);
-            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.config/containers/systemd", 0750, "homeharbor-containers", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.config", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.config/containers", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.config/containers/systemd", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.local/share/containers", 0750, "homeharbor-containers", "homeharbor-containers", cancellationToken);
             await EnsureDirAsync(runner, "/var/lib/systemd/linger", 0755, null, null, cancellationToken);
             File.WriteAllText("/var/lib/systemd/linger/homeharbor-containers", string.Empty);
         }
 
         if (await IsHomeHarborDataMountAsync(runner, cancellationToken))
         {
-            await EnsureDirAsync(runner, "/homeharbor-data", 0711, "homeharbor", "homeharbor", cancellationToken);
-            await EnsureDirAsync(runner, "/homeharbor-data/apps", 0750, "homeharbor", "homeharbor", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data", 0751, "root", "homeharbor", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data/apps", 0711, "root", "root", cancellationToken);
             await EnsureDirAsync(runner, "/homeharbor-data/families", 0750, "homeharbor", "homeharbor", cancellationToken);
-            await EnsureDirAsync(runner, "/homeharbor-data/system-apps", 0750, "homeharbor", "homeharbor", cancellationToken);
-            await EnsureDirAsync(runner, "/homeharbor-data/system-apps/active", 0750, "homeharbor", "homeharbor", cancellationToken);
-            await EnsureDirAsync(runner, "/homeharbor-data/system-apps/staged", 0750, "homeharbor", "homeharbor", cancellationToken);
-            await EnsureDirAsync(runner, "/homeharbor-data/system-apps/versions", 0750, "homeharbor", "homeharbor", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data/system-apps", 0750, "root", "root", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data/system-apps/active", 0750, "root", "root", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data/system-apps/staged", 0700, "root", "root", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data/system-apps/versions", 0750, "root", "root", cancellationToken);
         }
         else
         {
             Console.WriteLine("homeharbor-data is not mounted; skipping data directory normalization.");
         }
 
+        var setupCodePath = SetupPath("HOMEHARBOR_SETUP_BOOTSTRAP_CODE_PATH", "HomeHarbor__Setup__BootstrapCodePath", SetupBootstrapCode.DefaultCodePath);
+        var setupCompletePath = SetupPath("HOMEHARBOR_SETUP_BOOTSTRAP_COMPLETE_PATH", "HomeHarbor__Setup__BootstrapCompletePath", SetupBootstrapCode.DefaultCompletePath);
+        await EnsureDirAsync(runner, Path.GetDirectoryName(setupCodePath) ?? "/var/lib/homeharbor/setup", 0750, "root", "homeharbor", cancellationToken);
+        var setupConsoles = Env.String("HOMEHARBOR_SETUP_PHYSICAL_CONSOLES", "/dev/console,/dev/tty1,/dev/ttyS0")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        _ = await SetupBootstrapCode.EnsureAndDisplayAsync(runner, setupCodePath, setupCompletePath, setupConsoles, cancellationToken);
+
         return 0;
     }
+
+    private static string SetupPath(string agentEnvironmentName, string apiEnvironmentName, string fallback)
+        => Env.Optional(agentEnvironmentName) ?? Env.Optional(apiEnvironmentName) ?? fallback;
 
     private static async Task EnsureOtaChannelAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
@@ -221,16 +238,17 @@ internal static partial class AgentProgram
         string defaultChannel,
         CancellationToken cancellationToken)
     {
+        _ = RootPathGuard.RequireNoSymlinkComponents(path, "OTA channel file");
         if (File.Exists(path))
         {
             _ = ReleaseChannel.Require((await File.ReadAllLinesAsync(path, cancellationToken)).FirstOrDefault(), "OTA channel file");
-            await NormalizeHomeHarborFileAsync(runner, path, 0640, cancellationToken);
+            await NormalizeRootReadableFileAsync(runner, path, 0640, cancellationToken);
             return;
         }
 
         var channel = ReleaseChannel.Require(defaultChannel, "HOMEHARBOR_CHANNEL");
         await FileWrites.AtomicWriteTextAsync(path, channel + Environment.NewLine, 0640, cancellationToken);
-        await NormalizeHomeHarborFileAsync(runner, path, 0640, cancellationToken);
+        await NormalizeRootReadableFileAsync(runner, path, 0640, cancellationToken);
     }
 
     internal static async Task EnsureKernelChannelFileAsync(
@@ -239,23 +257,24 @@ internal static partial class AgentProgram
         string defaultChannel,
         CancellationToken cancellationToken)
     {
+        _ = RootPathGuard.RequireNoSymlinkComponents(path, "kernel channel file");
         if (File.Exists(path))
         {
             _ = KernelChannel.Require((await File.ReadAllLinesAsync(path, cancellationToken)).FirstOrDefault(), "kernel channel file");
-            await NormalizeHomeHarborFileAsync(runner, path, 0640, cancellationToken);
+            await NormalizeRootReadableFileAsync(runner, path, 0640, cancellationToken);
             return;
         }
 
         var channel = KernelChannel.Require(defaultChannel, "HOMEHARBOR_KERNEL_CHANNEL");
         await FileWrites.AtomicWriteTextAsync(path, channel + Environment.NewLine, 0640, cancellationToken);
-        await NormalizeHomeHarborFileAsync(runner, path, 0640, cancellationToken);
+        await NormalizeRootReadableFileAsync(runner, path, 0640, cancellationToken);
     }
 
     private static async Task<int> PostgresInitAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var dataDir = Env.String("HOMEHARBOR_POSTGRES_DATA_DIR", "/homeharbor-data/postgresql/data");
         var parent = Path.GetDirectoryName(dataDir) ?? "/homeharbor-data/postgresql";
-        await EnsureDirAsync(runner, parent, 0700, "postgres", "postgres", cancellationToken);
+        await EnsureDirAsync(runner, parent, 0710, "root", "postgres", cancellationToken);
         await EnsureDirAsync(runner, dataDir, 0700, "postgres", "postgres", cancellationToken);
         if (new FileInfo(Path.Combine(dataDir, "PG_VERSION")).Exists)
         {
@@ -338,24 +357,50 @@ internal static partial class AgentProgram
 
     private static async Task<int> EnsureCaddyConfigAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
-        var caddyState = Env.String("HOMEHARBOR_CADDY_STATE_DIR", "/var/lib/caddy/homeharbor");
-        var caddyfile = Env.String("HOMEHARBOR_CADDYFILE", Path.Combine(caddyState, "Caddyfile"));
-        await EnsureDirAsync(runner, caddyState, 0750, "caddy", "caddy", cancellationToken);
+        await EnsureCaddyGroupIsolationAsync(runner, cancellationToken);
+        var caddyState = Env.String("HOMEHARBOR_CADDY_STATE_DIR", "/var/lib/homeharbor-caddy");
+        var caddyfile = RootPathGuard.RequireChildPath(
+            Env.String("HOMEHARBOR_CADDYFILE", Path.Combine(caddyState, "Caddyfile")),
+            caddyState,
+            "Caddyfile");
+        await EnsureDirAsync(runner, caddyState, 0750, "root", "caddy", cancellationToken);
         if (File.Exists(caddyfile) && new FileInfo(caddyfile).Length > 0)
         {
             return 0;
         }
 
         await FileWrites.AtomicWriteTextAsync(caddyfile, DefaultCaddyfile(), 0640, cancellationToken);
-        await ChownAsync(runner, caddyfile, "caddy", "caddy", cancellationToken);
+        await ChownAsync(runner, caddyfile, "root", "caddy", cancellationToken);
         return 0;
+    }
+
+    internal static async Task EnsureCaddyGroupIsolationAsync(ICommandRunner runner, CancellationToken cancellationToken)
+    {
+        var identity = await runner.RunAsync("id", ["-nG", "caddy"], cancellationToken: cancellationToken);
+        if (identity.ExitCode != 0)
+        {
+            throw new InvalidOperationException("caddy service user is missing");
+        }
+
+        var groups = identity.Stdout.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (!groups.Contains("homeharbor-api", StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException("caddy service user is missing the dedicated homeharbor-api group");
+        }
+        if (groups.Contains("homeharbor", StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException("caddy service user must not belong to the broad homeharbor group");
+        }
     }
 
     private static async Task<int> RenderCaddyfileAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
-        var caddyState = Env.String("HOMEHARBOR_CADDY_STATE_DIR", "/var/lib/caddy/homeharbor");
-        var caddyfile = Env.String("HOMEHARBOR_CADDYFILE", Path.Combine(caddyState, "Caddyfile"));
-        await EnsureDirAsync(runner, caddyState, 0750, "caddy", "caddy", cancellationToken);
+        var caddyState = Env.String("HOMEHARBOR_CADDY_STATE_DIR", "/var/lib/homeharbor-caddy");
+        var caddyfile = RootPathGuard.RequireChildPath(
+            Env.String("HOMEHARBOR_CADDYFILE", Path.Combine(caddyState, "Caddyfile")),
+            caddyState,
+            "Caddyfile");
+        await EnsureDirAsync(runner, caddyState, 0750, "root", "caddy", cancellationToken);
         var temp = caddyfile + ".new";
         if (File.Exists(temp))
         {
@@ -381,17 +426,49 @@ internal static partial class AgentProgram
             throw new InvalidOperationException("rendered Caddyfile was empty");
         }
 
-        await ChownAsync(runner, temp, "caddy", "caddy", cancellationToken);
+        await ChownAsync(runner, temp, "root", "caddy", cancellationToken);
         await ChmodAsync(runner, temp, 0640, cancellationToken);
-        File.Move(temp, caddyfile, overwrite: true);
-        var reload = await runner.RunAsync("caddy", ["reload", "--config", caddyfile, "--force"], cancellationToken: cancellationToken);
-        if (reload.ExitCode != 0)
+        _ = (await runner.RunAsync(
+            "runuser",
+            ["-u", "caddy", "--", "env", "HOME=/var/lib/caddy", "caddy", "validate", "--config", temp],
+            cancellationToken: cancellationToken))
+            .EnsureSuccess("rendered Caddyfile validation failed");
+        var backup = caddyfile + ".previous." + Guid.NewGuid().ToString("N");
+        var hadExisting = File.Exists(caddyfile);
+        if (hadExisting)
         {
-            var systemReload = await runner.RunAsync("systemctl", ["reload", "caddy.service"], cancellationToken: cancellationToken);
-            if (systemReload.ExitCode != 0)
+            File.Copy(caddyfile, backup, overwrite: false);
+        }
+
+        try
+        {
+            File.Move(temp, caddyfile, overwrite: true);
+            var reload = await runner.RunAsync(
+                "caddy",
+                ["reload", "--address", "unix//run/caddy/admin.sock", "--config", caddyfile, "--force"],
+                cancellationToken: cancellationToken);
+            if (reload.ExitCode != 0)
             {
-                _ = (await runner.RunAsync("systemctl", ["restart", "caddy.service"], cancellationToken: cancellationToken)).EnsureSuccess("failed to reload caddy");
+                if (hadExisting)
+                {
+                    File.Move(backup, caddyfile, overwrite: true);
+                    _ = await runner.RunAsync(
+                        "caddy",
+                        ["reload", "--address", "unix//run/caddy/admin.sock", "--config", caddyfile, "--force"],
+                        cancellationToken: cancellationToken);
+                }
+                else if (File.Exists(caddyfile))
+                {
+                    File.Delete(caddyfile);
+                }
+
+                _ = reload.EnsureSuccess("failed to reload Caddy with validated config; restored last-known-good config");
             }
+        }
+        finally
+        {
+            DeleteIfExists(temp);
+            DeleteIfExists(backup);
         }
 
         return 0;
@@ -399,14 +476,56 @@ internal static partial class AgentProgram
 
     private static async Task<int> StorageHealthAsync(CancellationToken cancellationToken)
     {
-        await ApiClient().PostJsonAsync("/api/storage/health/check", new { }, cancellationToken);
+        try
+        {
+            await ApiClient().PostJsonAsync("/api/storage/health/check", new { }, cancellationToken);
+        }
+        catch (HttpRequestException ex) when (IsExpectedStorageHealthDeferral(ex.StatusCode))
+        {
+            Console.WriteLine("storage health check deferred until encrypted storage and a family space are ready");
+        }
         return 0;
+    }
+
+    internal static bool IsExpectedStorageHealthDeferral(System.Net.HttpStatusCode? statusCode)
+        => IsExpectedPreOobeDeferral(statusCode);
+
+    internal static bool IsExpectedPreOobeDeferral(System.Net.HttpStatusCode? statusCode)
+        => statusCode is System.Net.HttpStatusCode.Conflict or System.Net.HttpStatusCode.ServiceUnavailable;
+
+    private static async Task<string?> GetReconcileDesiredOrDeferAsync(
+        string path,
+        string component,
+        CancellationToken cancellationToken)
+    {
+        using var api = ApiClient();
+        try
+        {
+            return await api.GetStringAsync(path, cancellationToken);
+        }
+        catch (HttpRequestException ex) when (IsExpectedPreOobeDeferral(ex.StatusCode))
+        {
+            using var health = JsonDocument.Parse(
+                await api.GetStringAsync("/api/system/health", cancellationToken));
+            if (health.RootElement.TryGetProperty("status", out var status) &&
+                status.ValueKind == JsonValueKind.String &&
+                string.Equals(status.GetString(), "storage-pending", StringComparison.Ordinal))
+            {
+                Console.WriteLine($"{component} reconcile deferred until encrypted storage and a family space are ready");
+                return null;
+            }
+
+            throw;
+        }
     }
 
     private static async Task<int> EnsureSmbConfigAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var state = Env.String("HOMEHARBOR_SMB_STATE_DIR", "/var/lib/homeharbor/samba");
-        var conf = Env.String("HOMEHARBOR_SMB_CONF", Path.Combine(state, "smb.conf"));
+        var conf = RootPathGuard.RequireChildPath(
+            Env.String("HOMEHARBOR_SMB_CONF", Path.Combine(state, "smb.conf")),
+            state,
+            "SMB config");
         foreach (var dir in new[] { state, Path.Combine(state, "private"), Path.Combine(state, "state"), Path.Combine(state, "cache"), Path.Combine(state, "lock") })
         {
             await EnsureDirAsync(runner, dir, 0750, null, null, cancellationToken);
@@ -425,9 +544,30 @@ internal static partial class AgentProgram
     private static async Task<int> ApplySmbAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var state = Env.String("HOMEHARBOR_SMB_STATE_DIR", "/var/lib/homeharbor/samba");
-        var conf = Env.String("HOMEHARBOR_SMB_CONF", Path.Combine(state, "smb.conf"));
-        var credentialDir = Env.String("HOMEHARBOR_SMB_CREDENTIAL_DIR", "/run/homeharbor/smb-credentials");
+        var conf = RootPathGuard.RequireChildPath(
+            Env.String("HOMEHARBOR_SMB_CONF", Path.Combine(state, "smb.conf")),
+            state,
+            "SMB config");
+        var credentialDir = Env.String("HOMEHARBOR_SMB_CREDENTIAL_DIR", "/run/homeharbor-smb-credentials");
         var dryRun = Env.Flag("HOMEHARBOR_DRY_RUN");
+        var configFile = Env.Optional("HOMEHARBOR_SMB_CONFIG_FILE");
+        if (!string.IsNullOrWhiteSpace(configFile))
+        {
+            throw new InvalidOperationException("raw SMB config overrides are not accepted; provide structured desired state instead");
+        }
+
+        var desiredFile = Env.Optional("HOMEHARBOR_SMB_DESIRED_FILE");
+        var desiredJson = !string.IsNullOrWhiteSpace(desiredFile)
+            ? await File.ReadAllTextAsync(desiredFile, cancellationToken)
+            : await GetReconcileDesiredOrDeferAsync(
+                "/api/smb/reconcile/desired",
+                "SMB",
+                cancellationToken);
+        if (desiredJson is null)
+        {
+            return 0;
+        }
+
         if (!dryRun)
         {
             foreach (var dir in new[] { state, Path.Combine(state, "private"), Path.Combine(state, "state"), Path.Combine(state, "cache"), Path.Combine(state, "lock") })
@@ -439,17 +579,11 @@ internal static partial class AgentProgram
             await EnsureDirAsync(runner, "/var/log/samba", 0755, null, null, cancellationToken);
         }
 
-        var configFile = Env.Optional("HOMEHARBOR_SMB_CONFIG_FILE");
+        var config = BuildValidatedSmbConfig(
+            desiredJson,
+            Env.String("HOMEHARBOR_SMB_DATA_ROOT", "/homeharbor-data"));
         if (dryRun)
         {
-            var config = !string.IsNullOrWhiteSpace(configFile)
-                ? await File.ReadAllTextAsync(configFile, cancellationToken)
-                : await ApiClient().GetStringAsync("/api/smb/config/smb.conf", cancellationToken);
-            if (config.Length == 0)
-            {
-                throw new InvalidOperationException("SMB config was empty");
-            }
-
             Console.WriteLine($"dry-run smb config {conf}");
         }
         else
@@ -457,22 +591,36 @@ internal static partial class AgentProgram
             var temp = Path.Combine(state, "smb.conf." + Guid.NewGuid().ToString("N"));
             try
             {
-                if (!string.IsNullOrWhiteSpace(configFile))
-                {
-                    File.Copy(configFile, temp, overwrite: true);
-                }
-                else
-                {
-                    await ApiClient().DownloadAsync("/api/smb/config/smb.conf", temp, cancellationToken);
-                }
+                await FileWrites.AtomicWriteTextAsync(temp, config, 0600, cancellationToken);
 
-                if (new FileInfo(temp).Length == 0)
-                {
-                    throw new InvalidOperationException("SMB config was empty");
-                }
-
+                _ = (await runner.RunAsync("testparm", ["-s", "--suppress-prompt", temp], cancellationToken: cancellationToken))
+                    .EnsureSuccess("SMB config validation failed");
                 RefuseReadOnlyRootfsPath(conf, "smb.conf");
+                var backup = conf + ".previous." + Guid.NewGuid().ToString("N");
+                var hadExisting = File.Exists(conf);
+                if (hadExisting)
+                {
+                    File.Copy(conf, backup, overwrite: false);
+                }
+
                 File.Move(temp, conf, overwrite: true);
+                var restart = await runner.RunAsync("systemctl", ["restart", "homeharbor-smbd.service", "homeharbor-nmbd.service"], cancellationToken: cancellationToken);
+                if (restart.ExitCode != 0)
+                {
+                    if (hadExisting)
+                    {
+                        File.Move(backup, conf, overwrite: true);
+                        _ = await runner.RunAsync("systemctl", ["restart", "homeharbor-smbd.service", "homeharbor-nmbd.service"], cancellationToken: cancellationToken);
+                    }
+                    else if (File.Exists(conf))
+                    {
+                        File.Delete(conf);
+                    }
+
+                    _ = restart.EnsureSuccess("SMB services rejected validated config; restored last-known-good config");
+                }
+
+                DeleteIfExists(backup);
             }
             finally
             {
@@ -488,14 +636,12 @@ internal static partial class AgentProgram
             : Enumerable.Empty<string>();
         foreach (var credentialFile in credentialFiles)
         {
+            _ = RootPathGuard.RequireNoSymlinkComponents(credentialFile, "SMB credential request");
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(credentialFile, cancellationToken));
             var root = doc.RootElement;
             var action = JsonString(root, "action") ?? "upsert";
             var unixUser = JsonString(root, "unixUser") ?? JsonString(root, "username") ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(unixUser))
-            {
-                throw new InvalidOperationException("missing unixUser in " + credentialFile);
-            }
+            ValidateSmbUnixUser(unixUser);
 
             if (dryRun)
             {
@@ -529,7 +675,6 @@ internal static partial class AgentProgram
 
         if (!dryRun)
         {
-            _ = await runner.RunAsync("systemctl", ["restart", "homeharbor-smbd.service", "homeharbor-nmbd.service"], cancellationToken: cancellationToken);
             await ReconcileSmbResultAsync(cancellationToken);
         }
 
@@ -541,8 +686,21 @@ internal static partial class AgentProgram
         var user = Env.String("HOMEHARBOR_CONTAINER_USER", "homeharbor-containers");
         var home = Env.String("HOMEHARBOR_CONTAINER_HOME", "/var/lib/homeharbor-containers");
         var quadletDir = Env.String("HOMEHARBOR_QUADLET_DIR", Path.Combine(home, ".config/containers/systemd"));
+        var dataRoot = Env.String("HOMEHARBOR_CONTAINER_DATA_ROOT", "/homeharbor-data");
         var dryRun = Env.Flag("HOMEHARBOR_DRY_RUN");
         RefuseReadOnlyRootfsPath(quadletDir, "Quadlet directory");
+
+        var desiredOverride = Env.Optional("HOMEHARBOR_CONTAINER_DESIRED_FILE");
+        var desiredJson = !string.IsNullOrWhiteSpace(desiredOverride)
+            ? await File.ReadAllTextAsync(desiredOverride, cancellationToken)
+            : await GetReconcileDesiredOrDeferAsync(
+                "/api/containers/reconcile/desired",
+                "container",
+                cancellationToken);
+        if (desiredJson is null)
+        {
+            return 0;
+        }
 
         var uid = dryRun
             ? (await runner.RunAsync("id", ["-u", user], cancellationToken: cancellationToken)).Stdout.Trim()
@@ -555,20 +713,18 @@ internal static partial class AgentProgram
 
         if (!dryRun)
         {
-            await EnsureDirAsync(runner, home, 0750, uid, gid, cancellationToken);
+            await EnsureDirAsync(runner, home, 0750, "root", gid, cancellationToken);
+            await EnsureDirAsync(runner, Path.Combine(home, ".config"), 0750, "root", gid, cancellationToken);
+            await EnsureDirAsync(runner, Path.Combine(home, ".config", "containers"), 0750, "root", gid, cancellationToken);
+            await EnsureDirAsync(runner, Path.Combine(home, ".local", "share", "containers"), 0750, uid, gid, cancellationToken);
         }
 
         if (!dryRun)
         {
-            await EnsureDirAsync(runner, quadletDir, 0750, null, null, cancellationToken);
-            _ = await runner.RunAsync("chown", ["-R", uid + ":" + gid, home], cancellationToken: cancellationToken);
-            await EnsureDirAsync(runner, "/run/user/" + uid, 0700, uid, gid, cancellationToken);
+            await EnsureDirAsync(runner, quadletDir, 0750, "root", gid, cancellationToken);
+            await EnsureContainerUserManagerAsync(runner, uid, cancellationToken);
         }
 
-        var desiredOverride = Env.Optional("HOMEHARBOR_CONTAINER_DESIRED_FILE");
-        var desiredJson = !string.IsNullOrWhiteSpace(desiredOverride)
-            ? await File.ReadAllTextAsync(desiredOverride, cancellationToken)
-            : await ApiClient().GetStringAsync("/api/containers/reconcile/desired", cancellationToken);
         using var doc = JsonDocument.Parse(desiredJson);
         var results = new List<object>();
         foreach (var item in doc.RootElement.EnumerateArray())
@@ -577,12 +733,22 @@ internal static partial class AgentProgram
             var serviceName = JsonString(item, "serviceName") ?? string.Empty;
             var unitName = JsonString(item, "unitName") ?? string.Empty;
             var quadletFile = JsonString(item, "quadletFile") ?? string.Empty;
+            ValidateContainerReconcileIdentity(id, serviceName, unitName, quadletFile);
             var desiredState = JsonString(item, "desiredState") ?? string.Empty;
             var requestedAction = JsonString(item, "requestedAction") ?? "none";
-            var target = Path.Combine(quadletDir, quadletFile);
+            if (desiredState is not ("running" or "stopped" or "deleted"))
+            {
+                throw new InvalidOperationException("unknown container desired state: " + desiredState);
+            }
+            if (requestedAction is not ("start" or "stop" or "restart" or "reload" or "none" or "delete"))
+            {
+                throw new InvalidOperationException("unknown container requested action: " + requestedAction);
+            }
+            var target = CheckedChildPath(quadletDir, quadletFile, "Quadlet file");
             RefuseReadOnlyRootfsPath(target, "Quadlet file");
             var runtimeState = desiredState;
             var error = string.Empty;
+            var quadletChanged = false;
 
             if (desiredState == "deleted" || requestedAction == "delete")
             {
@@ -596,11 +762,23 @@ internal static partial class AgentProgram
             }
             else
             {
-                var quadlet = JsonString(item, "quadlet") ?? string.Empty;
+                if (!dryRun)
+                {
+                    await PrepareContainerAppRootAsync(
+                        runner,
+                        dataRoot,
+                        Guid.Parse(id),
+                        user,
+                        uid,
+                        gid,
+                        cancellationToken);
+                }
+                var quadlet = BuildValidatedContainerQuadlet(item, dataRoot);
+                quadletChanged = ContainerQuadletNeedsUpdate(target, quadlet);
                 if (!dryRun)
                 {
                     await FileWrites.AtomicWriteTextAsync(target, quadlet, 0640, cancellationToken);
-                    await ChownAsync(runner, target, uid, gid, cancellationToken);
+                    await ChownAsync(runner, target, "root", gid, cancellationToken);
                 }
             }
 
@@ -620,13 +798,31 @@ internal static partial class AgentProgram
                     runtimeState = "running";
                     break;
                 case "reload":
-                case "none":
-                case "delete":
-                    if (desiredState == "running" && requestedAction == "reload")
+                    if (desiredState == "running")
                     {
                         await SystemctlUserAsync(runner, user, uid, dryRun, ["restart", unitName], cancellationToken);
                         runtimeState = "running";
                     }
+                    break;
+                case "none":
+                    if (desiredState == "running")
+                    {
+                        await SystemctlUserAsync(
+                            runner,
+                            user,
+                            uid,
+                            dryRun,
+                            [quadletChanged ? "restart" : "start", unitName],
+                            cancellationToken);
+                        runtimeState = "running";
+                    }
+                    else
+                    {
+                        await SystemctlUserAsync(runner, user, uid, dryRun, ["stop", unitName], cancellationToken, ignoreFailure: true);
+                        runtimeState = "stopped";
+                    }
+                    break;
+                case "delete":
                     break;
                 default:
                     error = "unknown requested action: " + requestedAction;
@@ -646,6 +842,10 @@ internal static partial class AgentProgram
         return 0;
     }
 
+    internal static bool ContainerQuadletNeedsUpdate(string path, string expected)
+        => !File.Exists(path) ||
+           !string.Equals(File.ReadAllText(path), expected, StringComparison.Ordinal);
+
     private static async Task<int> ApplySystemAppsAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var root = Env.String("HOMEHARBOR_SYSTEM_APPS_ROOT", "/homeharbor-data/system-apps");
@@ -654,13 +854,22 @@ internal static partial class AgentProgram
         var versionsRoot = Path.Combine(root, "versions");
         var wrapperRoot = Env.String("HOMEHARBOR_SYSTEM_APP_WRAPPER_DIR", "/run/homeharbor/system-apps/bin");
         var publicKey = Env.String("HOMEHARBOR_RELEASE_PUBLIC_KEY", "/etc/homeharbor/release.pub.pem");
+        var releaseChannel = ReleaseChannel.Require(
+            ReadFirstToken(Env.String("HOMEHARBOR_OTA_CHANNEL_FILE", "/var/lib/homeharbor/ota/channel")),
+            "system app current release channel");
+        var kernelChannel = KernelChannel.Require(
+            ReadFirstToken(Env.String("HOMEHARBOR_KERNEL_CHANNEL_FILE", "/var/lib/homeharbor/ota/kernel-channel")),
+            "system app current kernel channel");
+        RootPathGuard.RequireSystemAppRoots(root, wrapperRoot);
         RefuseReadOnlyRootfsPath(root, "system apps root");
         RefuseReadOnlyRootfsPath(wrapperRoot, "system app wrapper directory");
 
-        _ = Directory.CreateDirectory(activeRoot);
-        _ = Directory.CreateDirectory(stagedRoot);
-        _ = Directory.CreateDirectory(versionsRoot);
-        _ = Directory.CreateDirectory(wrapperRoot);
+        await EnsureDirAsync(runner, root, 0750, "root", "root", cancellationToken);
+        await EnsureDirAsync(runner, activeRoot, 0750, "root", "root", cancellationToken);
+        await EnsureDirAsync(runner, stagedRoot, 0700, "root", "root", cancellationToken);
+        await EnsureDirAsync(runner, versionsRoot, 0750, "root", "root", cancellationToken);
+        DeletePath(wrapperRoot);
+        await EnsureDirAsync(runner, wrapperRoot, 0755, "root", "root", cancellationToken);
 
         using var api = ApiClient();
         using var doc = JsonDocument.Parse(await api.GetStringAsync("/api/apps/reconcile/desired", cancellationToken));
@@ -670,9 +879,7 @@ internal static partial class AgentProgram
             var id = JsonString(item, "id") ?? string.Empty;
             var appKey = JsonString(item, "appKey") ?? string.Empty;
             var desiredState = JsonString(item, "desiredState") ?? string.Empty;
-            var manifestUrl = JsonString(item, "manifestUrl") ?? string.Empty;
             IReadOnlyList<string> commands = [];
-            SystemAppHotCheck? hotCheck = null;
             var runtimeState = "unknown";
             var error = string.Empty;
             var installedVersion = JsonString(item, "installedVersion") ?? string.Empty;
@@ -682,8 +889,16 @@ internal static partial class AgentProgram
             try
             {
                 ValidateSystemAppKey(appKey);
-                commands = SystemAppCommands(appKey, JsonStringArray(item, "commands"));
-                hotCheck = ReadSystemAppHotCheck(item);
+                var signedHhaf = await VerifyDesiredSystemAppManifestAsync(
+                    item,
+                    appKey,
+                    releaseChannel,
+                    publicKey,
+                    cancellationToken: cancellationToken);
+                var systemInstall = signedHhaf.Install as HomeHarborSystemAppInstall
+                    ?? throw new InvalidOperationException("signed HHAF does not describe a system app install");
+                var manifestUrl = systemInstall.ManifestUrl;
+                commands = SystemAppCommands(appKey, systemInstall.Commands);
                 if (desiredState == "deleted")
                 {
                     RemoveSystemApp(appKey, activeRoot, wrapperRoot, commands);
@@ -694,22 +909,18 @@ internal static partial class AgentProgram
                 }
                 else if (desiredState == "installed")
                 {
-                    if (string.IsNullOrWhiteSpace(manifestUrl))
-                    {
-                        throw new InvalidOperationException("system app manifest URL is missing");
-                    }
-
                     var applied = await InstallSystemAppPayloadAsync(
-                        runner,
                         appKey,
                         manifestUrl,
+                        signedHhaf.Version,
                         publicKey,
+                        releaseChannel,
+                        kernelChannel,
                         stagedRoot,
                         versionsRoot,
                         activeRoot,
                         wrapperRoot,
                         commands,
-                        hotCheck,
                         cancellationToken);
                     runtimeState = applied.RuntimeState;
                     installedVersion = applied.Version;
@@ -748,59 +959,93 @@ internal static partial class AgentProgram
     }
 
     private static async Task<SystemAppApplyState> InstallSystemAppPayloadAsync(
-        ICommandRunner runner,
         string appKey,
         string manifestUrl,
+        string expectedVersion,
         string publicKey,
+        string releaseChannel,
+        string kernelChannel,
         string stagedRoot,
         string versionsRoot,
         string activeRoot,
         string wrapperRoot,
         IReadOnlyList<string> commands,
-        SystemAppHotCheck? hotCheck,
         CancellationToken cancellationToken)
     {
+        const long maxSystemAppPayloadBytes = 2L * 1024 * 1024 * 1024;
         var work = Path.Combine(stagedRoot, appKey + "-" + Guid.NewGuid().ToString("N"));
         _ = Directory.CreateDirectory(work);
         try
         {
             var manifestPath = Path.Combine(work, "manifest.json");
             var payloadPath = Path.Combine(work, "payload.tar.gz");
-            await DownloadUriAsync(manifestUrl, manifestPath, cancellationToken);
+            var fileRoot = Env.Optional("HOMEHARBOR_SYSTEM_APP_FILE_ROOT");
+            var manifestUri = BoundedUriFetcher.ValidateUri(
+                manifestUrl,
+                allowedFileRoot: fileRoot,
+                label: "system app manifest URL");
+            using var http = BoundedUriFetcher.CreateHttpClient(TimeSpan.FromSeconds(30));
+            await BoundedUriFetcher.DownloadToFileAsync(
+                http,
+                manifestUrl,
+                manifestPath,
+                SystemAppPackageManifestVerifier.MaxManifestBytes,
+                allowedFileRoot: fileRoot,
+                label: "system app manifest",
+                cancellationToken: cancellationToken);
             var manifest = await new SystemAppPackageManifestVerifier().VerifyAsync(manifestPath, publicKey, cancellationToken);
             if (!string.Equals(manifest.AppKey, appKey, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException($"system app manifest appKey {manifest.AppKey} does not match requested app {appKey}");
             }
 
-            await DownloadUriAsync(manifest.PayloadUrl, payloadPath, cancellationToken);
+            if (!string.Equals(manifest.Version, expectedVersion, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"system app package version {manifest.Version} does not match signed HHAF version {expectedVersion}");
+            }
+
+            RequireSystemAppChannelMatch(manifest, releaseChannel, kernelChannel);
+
+            await BoundedUriFetcher.DownloadToFileAsync(
+                http,
+                manifest.PayloadUrl,
+                payloadPath,
+                maxSystemAppPayloadBytes,
+                sameOriginAs: manifestUri,
+                allowedFileRoot: fileRoot,
+                label: "system app payload",
+                cancellationToken: cancellationToken);
             var actualPayloadSha = await Sha256FileAsync(payloadPath, cancellationToken);
             if (!string.Equals(actualPayloadSha, manifest.PayloadSha256, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException($"system app payload hash mismatch: expected {manifest.PayloadSha256}, actual {actualPayloadSha}");
             }
 
-            var versionDir = Path.Combine(versionsRoot, appKey + "-" + SafeVersion(manifest.Version) + "-" + actualPayloadSha[..12]);
-            if (!Directory.Exists(versionDir))
+            var versionDir = Path.Combine(
+                versionsRoot,
+                appKey + "-" + SafeVersion(manifest.Version) + "-" + actualPayloadSha[..12] + "-" + Guid.NewGuid().ToString("N")[..8]);
+            var extractedVersionDir = Path.Combine(versionsRoot, "." + appKey + "-" + SafeVersion(manifest.Version) + ".next-" + Guid.NewGuid().ToString("N"));
+            try
             {
-                var extractedVersionDir = Path.Combine(versionsRoot, "." + appKey + "-" + SafeVersion(manifest.Version) + ".next-" + Guid.NewGuid().ToString("N"));
-                try
-                {
-                    await SystemAppPayloadExtractor.ExtractTarGzAsync(payloadPath, extractedVersionDir, cancellationToken);
-                    Directory.Move(extractedVersionDir, versionDir);
-                }
-                catch
-                {
-                    DeletePath(extractedVersionDir);
-                    throw;
-                }
+                await SystemAppPayloadExtractor.ExtractTarGzAsync(payloadPath, extractedVersionDir, cancellationToken);
+                Directory.Move(extractedVersionDir, versionDir);
             }
+            catch
+            {
+                DeletePath(extractedVersionDir);
+                throw;
+            }
+
+            ValidateSystemAppCommands(versionDir, commands);
             ActivateSystemApp(appKey, versionDir, activeRoot);
             WriteSystemAppWrappers(appKey, wrapperRoot, activeRoot, commands);
-            var hot = await ValidateSystemAppHotActivationAsync(runner, commands, hotCheck, wrapperRoot, cancellationToken);
-            return hot
-                ? new SystemAppApplyState(manifest.Version, "active-hot", RequiresReboot: true, Error: string.Empty)
-                : new SystemAppApplyState(manifest.Version, "active-pending-reboot", RequiresReboot: true, Error: "hot activation check did not pass; reboot required");
+            DeleteObsoleteSystemAppVersions(versionsRoot, appKey, versionDir);
+            return new SystemAppApplyState(
+                manifest.Version,
+                "active-pending-reboot",
+                RequiresReboot: true,
+                Error: "root-level hot activation is disabled; reboot is required");
         }
         finally
         {
@@ -811,29 +1056,79 @@ internal static partial class AgentProgram
         }
     }
 
-    private static async Task DownloadUriAsync(string uriText, string destination, CancellationToken cancellationToken)
+    internal static async Task<HomeHarborAppManifest> VerifyDesiredSystemAppManifestAsync(
+        JsonElement desired,
+        string expectedAppKey,
+        string currentReleaseChannel,
+        string publicKey,
+        ICommandRunner? signatureRunner = null,
+        CancellationToken cancellationToken = default)
     {
-        if (!Uri.TryCreate(uriText, UriKind.Absolute, out var uri))
+        if (!desired.TryGetProperty("hhafManifest", out var manifestElement) ||
+            manifestElement.ValueKind != JsonValueKind.Object)
         {
-            throw new InvalidOperationException("system app download URL must be absolute: " + uriText);
+            throw new InvalidOperationException("system app desired state is missing its original signed HHAF manifest");
         }
 
-        _ = Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? ".");
-        if (uri.Scheme == Uri.UriSchemeFile)
+        var verifier = new HomeHarborAppManifestVerifier(signatureRunner);
+        var manifest = await verifier.VerifyAppManifestJsonAsync(
+            manifestElement.GetRawText(),
+            publicKey,
+            source: "automation desired state",
+            cancellationToken);
+        if (!string.Equals(manifest.AppKey, expectedAppKey, StringComparison.Ordinal))
         {
-            await FileWrites.CopyFileAsync(uri.LocalPath, destination, 0640, cancellationToken);
-            return;
+            throw new InvalidOperationException(
+                $"signed HHAF appKey {manifest.AppKey} does not match desired app {expectedAppKey}");
         }
 
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        var releaseChannel = ReleaseChannel.Require(currentReleaseChannel, "current release channel");
+        if (!string.Equals(manifest.Channel, releaseChannel, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("system app download URL scheme is not allowed: " + uri.Scheme);
+            throw new InvalidOperationException(
+                $"signed HHAF channel {manifest.Channel} does not match current release channel {releaseChannel}");
         }
 
-        using var http = new HttpClient();
-        await using var input = await http.GetStreamAsync(uri, cancellationToken);
-        await using var output = File.Create(destination);
-        await input.CopyToAsync(output, cancellationToken);
+        if (manifest.Install is not HomeHarborSystemAppInstall)
+        {
+            throw new InvalidOperationException("signed HHAF does not describe a system app install");
+        }
+
+        return manifest;
+    }
+
+    internal static void RequireSystemAppChannelMatch(
+        SystemAppPackageManifest manifest,
+        string currentReleaseChannel,
+        string currentKernelChannel)
+    {
+        var release = ReleaseChannel.Require(currentReleaseChannel, "current release channel");
+        if (!string.Equals(manifest.Channel, release, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"system app channel {manifest.Channel} does not match current release channel {release}");
+        }
+
+        if (manifest.KernelChannel is { } requiredKernel)
+        {
+            var currentKernel = KernelChannel.Require(currentKernelChannel, "current kernel channel");
+            if (!string.Equals(requiredKernel, currentKernel, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"system app kernel channel {requiredKernel} does not match current kernel channel {currentKernel}");
+            }
+        }
+    }
+
+    private static string ReadFirstToken(string path)
+    {
+        if (!File.Exists(path))
+        {
+            throw new InvalidOperationException("required channel file was not found: " + path);
+        }
+
+        return File.ReadLines(path)
+            .Select(line => line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault())
+            .FirstOrDefault(token => !string.IsNullOrWhiteSpace(token))
+            ?? throw new InvalidOperationException("required channel file is empty: " + path);
     }
 
     private static async Task<string> Sha256FileAsync(string path, CancellationToken cancellationToken)
@@ -876,6 +1171,51 @@ internal static partial class AgentProgram
         }
     }
 
+    internal static void ValidateSystemAppCommands(string versionDir, IReadOnlyList<string> commands)
+    {
+        var versionRoot = RootPathGuard.RequireNoSymlinkComponents(
+            versionDir,
+            "system app version directory",
+            requireLeafDirectory: true);
+        foreach (var command in commands)
+        {
+            _ = HomeHarborAppManifestVerifier.ValidateCommandName(command);
+            var target = Path.GetFullPath(Path.Combine(versionRoot, "usr", "bin", command));
+            if (!target.StartsWith(versionRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("system app command escapes its version root: " + command);
+            }
+            _ = RootPathGuard.RequireNoSymlinkComponents(target, "system app command");
+            if (!File.Exists(target))
+            {
+                throw new InvalidOperationException("system app command is missing: " + command);
+            }
+            var attributes = File.GetAttributes(target);
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+            {
+                throw new InvalidOperationException("system app command must be a regular file: " + command);
+            }
+            var mode = File.GetUnixFileMode(target);
+            const UnixFileMode executeBits = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+            if ((mode & executeBits) == 0)
+            {
+                throw new InvalidOperationException("system app command is not executable: " + command);
+            }
+        }
+    }
+
+    private static void DeleteObsoleteSystemAppVersions(string versionsRoot, string appKey, string activeVersionDir)
+    {
+        var activeFull = Path.GetFullPath(activeVersionDir);
+        foreach (var candidate in Directory.EnumerateDirectories(versionsRoot, appKey + "-*", SearchOption.TopDirectoryOnly))
+        {
+            if (!string.Equals(Path.GetFullPath(candidate), activeFull, StringComparison.Ordinal))
+            {
+                DeletePath(candidate);
+            }
+        }
+    }
+
     private static IReadOnlyList<string> SystemAppCommands(string appKey, IReadOnlyList<string> desiredCommands)
     {
         _ = appKey;
@@ -889,33 +1229,6 @@ internal static partial class AgentProgram
             : [];
     }
 
-    private static async Task<bool> ValidateSystemAppHotActivationAsync(
-        ICommandRunner runner,
-        IReadOnlyList<string> commands,
-        SystemAppHotCheck? hotCheck,
-        string wrapperRoot,
-        CancellationToken cancellationToken)
-    {
-        if (hotCheck is null)
-        {
-            return false;
-        }
-
-        if (!commands.Contains(hotCheck.Command, StringComparer.Ordinal))
-        {
-            return false;
-        }
-
-        var command = Path.Combine(wrapperRoot, hotCheck.Command);
-        if (!File.Exists(command))
-        {
-            return false;
-        }
-
-        var result = await runner.RunAsync(command, hotCheck.Args, cancellationToken: cancellationToken);
-        return result.ExitCode == 0;
-    }
-
     private static string SafeVersion(string version)
     {
         var safe = new string([.. version.Select(c => char.IsLetterOrDigit(c) || c is '.' or '_' or '-' ? c : '-')]);
@@ -924,7 +1237,9 @@ internal static partial class AgentProgram
 
     private static void ValidateSystemAppKey(string appKey)
     {
-        if (string.IsNullOrWhiteSpace(appKey) || appKey.Any(c => !(char.IsLetterOrDigit(c) || c is '.' or '_' or '-')))
+        if (string.IsNullOrWhiteSpace(appKey) || appKey.Length > 64 ||
+            !(char.IsAsciiLetterLower(appKey[0]) || appKey[0] is >= '0' and <= '9') ||
+            appKey.Any(c => !(char.IsAsciiLetterLower(c) || c is >= '0' and <= '9' || c is '.' or '_' or '-')))
         {
             throw new InvalidOperationException("system app key is invalid: " + appKey);
         }
@@ -932,16 +1247,17 @@ internal static partial class AgentProgram
 
     private static void DeletePath(string path)
     {
+        var safePath = RootPathGuard.RequireNoSymlinkComponents(path, "root-managed delete path");
         try
         {
-            var attributes = File.GetAttributes(path);
+            var attributes = File.GetAttributes(safePath);
             if (attributes.HasFlag(FileAttributes.Directory) && !attributes.HasFlag(FileAttributes.ReparsePoint))
             {
-                Directory.Delete(path, recursive: true);
+                Directory.Delete(safePath, recursive: true);
                 return;
             }
 
-            File.Delete(path);
+            File.Delete(safePath);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -996,13 +1312,19 @@ internal static partial class AgentProgram
             {
                 _ = await http.GetStringAsync(healthUrl, cancellationToken);
                 _ = Directory.CreateDirectory(options.StateDir);
+                if (!options.DryRun)
+                {
+                    await OtaCommitAsync(
+                        new OtaCommitOptions(options.OtaStateDir, options.Esp, options.BootEnv, options.RunDir),
+                        runner,
+                        cancellationToken);
+                }
                 DeleteIfExists(Path.Combine(options.StateDir, "attempts"));
                 DeleteIfExists(Path.Combine(options.StateDir, "recovery-requested-at"));
                 await FileWrites.AtomicWriteTextAsync(Path.Combine(options.StateDir, "last-success-at"), DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture) + "\n", cancellationToken: cancellationToken);
-                await EfiBootVariables.ClearOneShotAsync(runner, cancellationToken);
                 if (!options.DryRun)
                 {
-                    _ = await runner.RunAsync("systemctl", ["start", "systemd-bless-boot.service"], cancellationToken: cancellationToken);
+                    await EfiBootVariables.ClearOneShotAsync(runner, cancellationToken);
                 }
 
                 return 0;
@@ -1060,9 +1382,13 @@ internal static partial class AgentProgram
     private static async Task<int> StorageApplyAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var stateDir = Env.String("HOMEHARBOR_STORAGE_STATE_DIR", "/var/lib/homeharbor/storage");
+        _ = RootPathGuard.RequireNoSymlinkComponents(stateDir, "storage state directory");
         var pendingPlan = Path.Combine(stateDir, "pending-plan.json");
         var statusFile = Path.Combine(stateDir, "status.json");
         var appliedPlan = Path.Combine(stateDir, "applied-plan.json");
+        _ = RootPathGuard.RequireNoSymlinkComponents(pendingPlan, "pending storage plan");
+        _ = RootPathGuard.RequireNoSymlinkComponents(statusFile, "storage status file");
+        _ = RootPathGuard.RequireNoSymlinkComponents(appliedPlan, "applied storage plan");
         var allowFiles = Env.Flag("HOMEHARBOR_STORAGE_APPLY_ALLOW_FILES");
         var dryRun = Env.Flag("HOMEHARBOR_STORAGE_APPLY_DRY_RUN");
         if (!File.Exists(pendingPlan))
@@ -1123,7 +1449,12 @@ internal static partial class AgentProgram
         var plannedTargets = root.GetProperty("devices").EnumerateArray()
             .Select(device => new PendingStorageTarget(
                 JsonString(device, "path") ?? string.Empty,
-                JsonString(device, "kind") ?? "whole-disk"))
+                JsonString(device, "kind") ?? "whole-disk",
+                JsonInt64(device, "sizeBytes") ?? 0,
+                JsonString(device, "model"),
+                JsonString(device, "serial"),
+                JsonString(device, "transport"),
+                JsonString(device, "stableId")))
             .Where(target => !string.IsNullOrWhiteSpace(target.Path))
             .ToArray();
         if (plannedTargets.Length == 0) await Fail("pending storage plan has no devices", planId);
@@ -1142,20 +1473,45 @@ internal static partial class AgentProgram
         }
 
         await WriteStorageStatusAsync(statusFile, "Running", 10, "Validating selected storage devices.", null, planId, cancellationToken);
-        var rootParent = await RootParentDeviceAsync(runner, cancellationToken);
+        var resolvedDevices = new HashSet<string>(StringComparer.Ordinal);
+        var validatedTargets = new List<PendingStorageTarget>();
         foreach (var target in plannedTargets)
         {
             var device = target.Path;
-            if (!device.StartsWith("/dev/", StringComparison.Ordinal)) await Fail("storage plan device is not an absolute /dev path: " + device, planId);
-            if (!await DeviceExistsAsync(runner, device, allowFiles, cancellationToken)) await Fail("storage plan device does not exist: " + device, planId);
-            var deviceReal = (await runner.RunAsync("readlink", ["-f", device], cancellationToken: cancellationToken)).Stdout.Trim();
-            if (!string.IsNullOrWhiteSpace(rootParent) && deviceReal == rootParent) await Fail("refusing to use the currently booted system disk: " + device, planId);
-            if (await DeviceHasProtectedLabelAsync(runner, device, cancellationToken)) await Fail("refusing to use HomeHarbor protected disk/partition: " + device, planId);
-            if (target.Kind == "main-reserved" && !await DeviceHasLabelAsync(runner, device, "data-candidate", cancellationToken))
+            string deviceReal;
+            try
             {
-                await Fail("main reserved storage target must be the data-candidate partition: " + device, planId);
+                deviceReal = await ValidateStorageTargetIdentityAsync(runner, target, allowFiles, cancellationToken);
             }
-            if (await DeviceHasMountsAsync(runner, device, cancellationToken)) await Fail("refusing to use a disk with mounted filesystems: " + device, planId);
+            catch (InvalidOperationException ex)
+            {
+                await Fail(ex.Message, planId);
+                throw;
+            }
+
+            if (!resolvedDevices.Add(deviceReal)) await Fail("storage plan contains the same device more than once: " + device, planId);
+            validatedTargets.Add(target with { ResolvedPath = deviceReal });
+        }
+
+        try
+        {
+            var rootAncestors = await RootAncestorDevicesAsync(runner, cancellationToken);
+            foreach (var target in validatedTargets)
+            {
+                var device = target.ResolvedPath!;
+                if (rootAncestors.Contains(device)) throw new InvalidOperationException("refusing to use the currently booted system disk: " + target.Path);
+                if (await DeviceHasProtectedLabelAsync(runner, device, cancellationToken)) throw new InvalidOperationException("refusing to use HomeHarbor protected disk/partition: " + target.Path);
+                if (target.Kind == "main-reserved" && !await DeviceHasLabelAsync(runner, device, "data-candidate", cancellationToken))
+                {
+                    throw new InvalidOperationException("main reserved storage target must be the data-candidate partition: " + target.Path);
+                }
+                if (await DeviceHasMountsAsync(runner, device, cancellationToken)) throw new InvalidOperationException("refusing to use a disk with mounted filesystems: " + target.Path);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            await Fail(ex.Message, planId);
+            throw;
         }
 
         try
@@ -1166,13 +1522,14 @@ internal static partial class AgentProgram
                 pendingPlan,
                 appliedPlan,
                 planId,
-                plannedTargets,
+                validatedTargets,
                 unlockMode,
                 fileSystem,
                 raidMode,
                 raidBackend,
                 dataProfile,
                 metadataProfile,
+                allowFiles,
                 dryRun,
                 cancellationToken);
         }
@@ -1254,12 +1611,13 @@ internal static partial class AgentProgram
         string raidBackend,
         string dataProfile,
         string metadataProfile,
+        bool allowFiles,
         bool dryRun,
         CancellationToken cancellationToken)
     {
         await WriteStorageStatusAsync(statusFile, "Running", 20, "Preparing data unlock.", null, planId, cancellationToken);
 
-        var devices = targets.Select(target => target.Path).ToArray();
+        var devices = targets.Select(target => target.ResolvedPath ?? target.Path).ToArray();
         var mapperNames = MapperNames(devices.Length);
         if (dryRun)
         {
@@ -1290,7 +1648,26 @@ internal static partial class AgentProgram
             var appliedDevices = new List<AppliedStorageDevice>();
             for (var i = 0; i < devices.Length; i++)
             {
-                var device = devices[i];
+                var target = targets[i];
+                var device = await ValidateStorageTargetIdentityAsync(runner, target, allowFiles, cancellationToken);
+                var currentRootAncestors = await RootAncestorDevicesAsync(runner, cancellationToken);
+                if (currentRootAncestors.Contains(device))
+                {
+                    throw new InvalidOperationException("refusing to format the currently booted system disk: " + target.Path);
+                }
+                if (await DeviceHasProtectedLabelAsync(runner, device, cancellationToken))
+                {
+                    throw new InvalidOperationException("refusing to format a HomeHarbor protected disk/partition: " + target.Path);
+                }
+                if (target.Kind == "main-reserved" && !await DeviceHasLabelAsync(runner, device, "data-candidate", cancellationToken))
+                {
+                    throw new InvalidOperationException("main reserved storage target is no longer the data-candidate partition: " + target.Path);
+                }
+                if (await DeviceHasMountsAsync(runner, device, cancellationToken))
+                {
+                    throw new InvalidOperationException("refusing to format a disk with mounted filesystems: " + target.Path);
+                }
+
                 var mapper = mapperNames[i];
                 _ = (await runner.RunAsync("cryptsetup", ["luksFormat", "--type", "luks2", "--batch-mode", "--key-file", keyFile, device], cancellationToken: cancellationToken))
                     .EnsureSuccess("failed to format data device");
@@ -1343,8 +1720,8 @@ internal static partial class AgentProgram
 
             await WriteStorageStatusAsync(statusFile, "Running", 80, "Mounting HomeHarbor data root.", null, planId, cancellationToken);
             await MountAppliedStorageAsync(runner, applied, cancellationToken);
-            await EnsureDirAsync(runner, "/homeharbor-data", 0711, "homeharbor", "homeharbor", cancellationToken);
-            await EnsureDirAsync(runner, "/homeharbor-data/apps", 0750, "homeharbor", "homeharbor", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data", 0751, "root", "homeharbor", cancellationToken);
+            await EnsureDirAsync(runner, "/homeharbor-data/apps", 0711, "root", "root", cancellationToken);
             await EnsureDirAsync(runner, "/homeharbor-data/families", 0750, "homeharbor", "homeharbor", cancellationToken);
 
             await WriteStorageStatusAsync(statusFile, "Running", 90, "Creating HomeHarbor database.", null, planId, cancellationToken);
@@ -1599,6 +1976,7 @@ internal static partial class AgentProgram
     private static async Task<string> ReadStorageApplyPassphraseAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var passphraseFile = Env.String("HOMEHARBOR_STORAGE_APPLY_PASSPHRASE_FILE", "/run/homeharbor/storage-apply.passphrase");
+        _ = RootPathGuard.RequireNoSymlinkComponents(passphraseFile, "storage apply passphrase file");
         if (!string.IsNullOrWhiteSpace(passphraseFile) && File.Exists(passphraseFile))
         {
             var line = (await File.ReadAllLinesAsync(passphraseFile, cancellationToken)).FirstOrDefault() ?? string.Empty;
@@ -1630,8 +2008,9 @@ internal static partial class AgentProgram
     private static async Task<string> WriteStorageApplyKeyFileAsync(string passphrase, CancellationToken cancellationToken)
     {
         var directory = Env.String("HOMEHARBOR_STORAGE_APPLY_RUNTIME_DIR", "/run/homeharbor");
-        _ = Directory.CreateDirectory(directory);
+        _ = RootPathGuard.CreateDirectory(directory, "storage apply runtime directory");
         var path = Path.Combine(directory, "storage-apply.key");
+        _ = RootPathGuard.RequireNoSymlinkComponents(path, "storage apply key file");
         await FileWrites.AtomicWriteTextAsync(path, passphrase, 0600, cancellationToken);
         return path;
     }
@@ -1639,7 +2018,8 @@ internal static partial class AgentProgram
     private static async Task WriteDataUnlockMetadataAsync(string unlockMode, CancellationToken cancellationToken)
     {
         var path = Env.String("HOMEHARBOR_DATA_UNLOCK_METADATA", "/var/lib/homeharbor/security/data-unlock.json");
-        _ = Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        _ = RootPathGuard.CreateDirectory(Path.GetDirectoryName(path) ?? ".", "data unlock metadata directory");
+        _ = RootPathGuard.RequireNoSymlinkComponents(path, "data unlock metadata file");
         var payload = JsonSerializer.Serialize(new
         {
             createdAt = DateTimeOffset.UtcNow,
@@ -1651,7 +2031,8 @@ internal static partial class AgentProgram
     private static async Task WriteBootUnlockEnvAsync(AppliedStoragePlan applied, CancellationToken cancellationToken)
     {
         var path = Env.String("HOMEHARBOR_DATA_BOOT_UNLOCK_ENV", "/var/lib/homeharbor/storage/boot-unlock.env");
-        _ = Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        _ = RootPathGuard.CreateDirectory(Path.GetDirectoryName(path) ?? ".", "boot unlock directory");
+        _ = RootPathGuard.RequireNoSymlinkComponents(path, "boot unlock environment file");
         var builder = new StringBuilder();
         _ = builder.Append("HOMEHARBOR_DATA_UNLOCK_MODE=").Append(applied.UnlockMode).Append('\n');
         _ = builder.Append("HOMEHARBOR_DATA_FILESYSTEM=").Append(applied.FileSystem).Append('\n');
@@ -1804,12 +2185,13 @@ internal static partial class AgentProgram
         return args;
     }
 
-    private static string ZfsTool(string command)
-    {
-        var root = Env.String("HOMEHARBOR_STORAGE_ZFS_TOOL_DIR", "/var/lib/homeharbor/storage/oobe-tools/bin");
-        var path = Path.Combine(root, command);
-        return File.Exists(path) ? path : command;
-    }
+    internal static string ZfsTool(string command)
+        => command switch
+        {
+            "zpool" => "/usr/bin/zpool",
+            "zfs" => "/usr/bin/zfs",
+            _ => throw new InvalidOperationException("unsupported ZFS command: " + command)
+        };
 
     internal static IReadOnlyList<string> MapperNames(int count)
         => Enumerable.Range(0, count)
@@ -1824,33 +2206,27 @@ internal static partial class AgentProgram
 
     private static async Task ReconcileSmbResultAsync(CancellationToken cancellationToken)
     {
-        try
-        {
-            var api = ApiClient();
-            using var doc = JsonDocument.Parse(await api.GetStringAsync("/api/smb/reconcile/desired", cancellationToken));
-            var shares = doc.RootElement.GetProperty("shares").EnumerateArray()
-                .Select(item => new { id = item.GetProperty("id").GetString(), state = "applied", error = "" })
-                .ToArray();
-            var credentials = doc.RootElement.GetProperty("credentials").EnumerateArray()
-                .Select(item => new
-                {
-                    id = item.GetProperty("id").GetString(),
-                    state = item.TryGetProperty("revokedAt", out var revoked) && revoked.ValueKind != JsonValueKind.Null ? "revoked" : "applied",
-                    error = ""
-                })
-                .ToArray();
-            await api.PostJsonAsync("/api/smb/reconcile/result", new { shares, credentials }, cancellationToken);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException)
-        {
-        }
+        using var api = ApiClient();
+        using var doc = JsonDocument.Parse(await api.GetStringAsync("/api/smb/reconcile/desired", cancellationToken));
+        var shares = doc.RootElement.GetProperty("shares").EnumerateArray()
+            .Select(item => new { id = item.GetProperty("id").GetString(), state = "applied", error = "" })
+            .ToArray();
+        var credentials = doc.RootElement.GetProperty("credentials").EnumerateArray()
+            .Select(item => new
+            {
+                id = item.GetProperty("id").GetString(),
+                state = item.TryGetProperty("revokedAt", out var revoked) && revoked.ValueKind != JsonValueKind.Null ? "revoked" : "applied",
+                error = ""
+            })
+            .ToArray();
+        await api.PostJsonAsync("/api/smb/reconcile/result", new { shares, credentials }, cancellationToken);
     }
 
     private static HomeHarborApiClient ApiClient()
     {
         var explicitUrl = Environment.GetEnvironmentVariable("HOMEHARBOR_API_URL");
         var socket = string.IsNullOrWhiteSpace(explicitUrl)
-            ? Env.String("HOMEHARBOR_API_SOCKET", "/run/homeharbor/api.sock")
+            ? Env.String("HOMEHARBOR_API_SOCKET", "/run/homeharbor-api/api.sock")
             : Env.Optional("HOMEHARBOR_API_SOCKET");
         return new HomeHarborApiClient(
             Env.String("HOMEHARBOR_API_URL", "http://homeharbor"),
@@ -1866,11 +2242,11 @@ internal static partial class AgentProgram
         string? group,
         CancellationToken cancellationToken)
     {
-        _ = Directory.CreateDirectory(path);
-        await ChmodAsync(runner, path, mode, cancellationToken);
+        var safePath = RootPathGuard.CreateDirectory(path, "root-managed directory");
+        await ChmodAsync(runner, safePath, mode, cancellationToken);
         if (!string.IsNullOrWhiteSpace(owner) || !string.IsNullOrWhiteSpace(group))
         {
-            await ChownAsync(runner, path, owner ?? string.Empty, group ?? string.Empty, cancellationToken);
+            await ChownAsync(runner, safePath, owner ?? string.Empty, group ?? string.Empty, cancellationToken);
         }
     }
 
@@ -1891,10 +2267,242 @@ internal static partial class AgentProgram
         => (await runner.RunAsync("chmod", [mode.ToString("0000", CultureInfo.InvariantCulture), path], cancellationToken: cancellationToken))
             .EnsureSuccess("chmod failed");
 
-    private static async Task NormalizeHomeHarborFileAsync(ICommandRunner runner, string path, int mode, CancellationToken cancellationToken)
+    private static async Task NormalizeRootReadableFileAsync(ICommandRunner runner, string path, int mode, CancellationToken cancellationToken)
     {
+        _ = RootPathGuard.RequireNoSymlinkComponents(path, "root-managed state file");
         await ChmodAsync(runner, path, mode, cancellationToken);
-        await ChownAsync(runner, path, "homeharbor", "homeharbor", cancellationToken);
+        await ChownAsync(runner, path, "root", "homeharbor", cancellationToken);
+    }
+
+    internal static void ValidateContainerReconcileIdentity(
+        string id,
+        string serviceName,
+        string unitName,
+        string quadletFile)
+    {
+        if (!Guid.TryParse(id, out var containerId))
+        {
+            throw new InvalidOperationException("container reconcile id must be a GUID");
+        }
+
+        var expectedServiceName = "homeharbor-" + containerId.ToString("N");
+        if (!string.Equals(serviceName, expectedServiceName, StringComparison.Ordinal) ||
+            !string.Equals(unitName, expectedServiceName + ".service", StringComparison.Ordinal) ||
+            !string.Equals(quadletFile, expectedServiceName + ".container", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("container reconcile service, unit, or Quadlet identity does not match its id");
+        }
+    }
+
+    internal static void ValidateSmbUnixUser(string unixUser)
+    {
+        const string prefix = "homeharbor-smb";
+        if (!unixUser.StartsWith(prefix, StringComparison.Ordinal) ||
+            unixUser.Length != prefix.Length + 3 ||
+            !int.TryParse(unixUser.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ||
+            number is < 1 or > 32)
+        {
+            throw new InvalidOperationException("SMB unixUser is outside the managed account pool: " + unixUser);
+        }
+    }
+
+    internal static string BuildValidatedSmbConfig(string desiredJson, string dataRoot)
+    {
+        using var document = JsonDocument.Parse(desiredJson);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("shares", out var shareElements) || shareElements.ValueKind != JsonValueKind.Array ||
+            !root.TryGetProperty("credentials", out var credentialElements) || credentialElements.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("SMB desired state must contain share and credential arrays");
+        }
+        if (shareElements.GetArrayLength() > 256 || credentialElements.GetArrayLength() > 256)
+        {
+            throw new InvalidOperationException("SMB desired state exceeds managed item limits");
+        }
+
+        var familyRoot = Path.GetFullPath(Path.Combine(dataRoot, "families"));
+        var shares = new Dictionary<Guid, DesiredSmbShare>();
+        var shareNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in shareElements.EnumerateArray())
+        {
+            if (JsonBoolean(item, "enabled") != true)
+            {
+                continue;
+            }
+
+            var id = RequireGuid(item, "id", "SMB share id");
+            var familyId = RequireGuid(item, "familyId", "SMB share familyId");
+            var shareName = JsonString(item, "shareName") ?? string.Empty;
+            if (!IsSafeSmbShareName(shareName) || !shareNames.Add(shareName))
+            {
+                throw new InvalidOperationException("SMB share name is invalid or duplicated: " + shareName);
+            }
+
+            var name = JsonString(item, "name") ?? string.Empty;
+            if (name.Length > 128 || name.Any(char.IsControl))
+            {
+                throw new InvalidOperationException("SMB share display name is invalid: " + shareName);
+            }
+
+            var expectedPath = Path.GetFullPath(Path.Combine(familyRoot, familyId.ToString("N")));
+            var path = JsonString(item, "path") ?? string.Empty;
+            if (!string.Equals(Path.GetFullPath(path), expectedPath, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "SMB share path does not match its family: " + shareName +
+                    " (expected " + expectedPath + ", received " + Path.GetFullPath(path) + ")");
+            }
+            RequireDirectoryWithoutSymlinks(expectedPath, "SMB share path");
+            if (!shares.TryAdd(id, new DesiredSmbShare(
+                id,
+                familyId,
+                name,
+                shareName,
+                expectedPath,
+                JsonBoolean(item, "readOnly") == true)))
+            {
+                throw new InvalidOperationException("SMB share id is duplicated: " + id);
+            }
+        }
+
+        var credentials = new List<DesiredSmbCredential>();
+        var credentialIds = new HashSet<Guid>();
+        var unixUsers = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in credentialElements.EnumerateArray())
+        {
+            var revoked = item.TryGetProperty("revokedAt", out var revokedAt) && revokedAt.ValueKind != JsonValueKind.Null;
+            if (JsonBoolean(item, "enabled") != true || revoked)
+            {
+                continue;
+            }
+
+            var id = RequireGuid(item, "id", "SMB credential id");
+            var familyId = RequireGuid(item, "familyId", "SMB credential familyId");
+            var shareId = RequireGuid(item, "shareId", "SMB credential shareId");
+            if (!credentialIds.Add(id))
+            {
+                throw new InvalidOperationException("SMB credential id is duplicated: " + id);
+            }
+            if (!shares.TryGetValue(shareId, out var share) || share.FamilyId != familyId)
+            {
+                throw new InvalidOperationException("SMB credential does not belong to its declared family share: " + id);
+            }
+
+            var unixUser = JsonString(item, "unixUser") ?? string.Empty;
+            ValidateSmbUnixUser(unixUser);
+            if (!unixUsers.Add(unixUser))
+            {
+                throw new InvalidOperationException("SMB unixUser is assigned more than once: " + unixUser);
+            }
+            credentials.Add(new DesiredSmbCredential(
+                id,
+                familyId,
+                shareId,
+                unixUser,
+                JsonBoolean(item, "readOnly") == true));
+        }
+
+        var builder = new StringBuilder(DefaultSmbConf());
+        foreach (var share in shares.Values.OrderBy(value => value.ShareName, StringComparer.Ordinal))
+        {
+            var users = credentials
+                .Where(credential => credential.ShareId == share.Id)
+                .OrderBy(credential => credential.UnixUser, StringComparer.Ordinal)
+                .ToArray();
+            _ = builder.AppendLine("[" + share.ShareName + "]");
+            _ = builder.AppendLine("   comment = " + share.Name);
+            _ = builder.AppendLine("   path = " + share.Path);
+            _ = builder.AppendLine("   browseable = yes");
+            _ = builder.AppendLine("   guest ok = no");
+            _ = builder.AppendLine("   read only = " + (share.ReadOnly ? "yes" : "no"));
+            _ = builder.AppendLine("   force user = homeharbor");
+            _ = builder.AppendLine("   force group = homeharbor");
+            _ = builder.AppendLine("   create mask = 0660");
+            _ = builder.AppendLine("   directory mask = 0770");
+            _ = builder.AppendLine("   valid users = " + (users.Length == 0 ? "nobody" : string.Join(' ', users.Select(user => user.UnixUser))));
+            var readUsers = users.Where(user => share.ReadOnly || user.ReadOnly).Select(user => user.UnixUser).ToArray();
+            var writeUsers = share.ReadOnly ? [] : users.Where(user => !user.ReadOnly).Select(user => user.UnixUser).ToArray();
+            if (readUsers.Length > 0) _ = builder.AppendLine("   read list = " + string.Join(' ', readUsers));
+            if (writeUsers.Length > 0) _ = builder.AppendLine("   write list = " + string.Join(' ', writeUsers));
+            _ = builder.AppendLine();
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsSafeSmbShareName(string value)
+        => value.Length is >= 1 and <= 64 &&
+           value is not ("ipc$" or "admin$") &&
+           value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-');
+
+    private static Guid RequireGuid(JsonElement item, string property, string label)
+        => Guid.TryParse(JsonString(item, property), out var value) && value != Guid.Empty
+            ? value
+            : throw new InvalidOperationException(label + " must be a non-empty GUID");
+
+    private static void RequireDirectoryWithoutSymlinks(string path, string label)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!Directory.Exists(fullPath))
+        {
+            throw new InvalidOperationException(label + " does not exist: " + fullPath);
+        }
+
+        var current = Path.GetPathRoot(fullPath) ?? Path.DirectorySeparatorChar.ToString();
+        foreach (var segment in fullPath[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException(label + " contains a symbolic link: " + current);
+            }
+        }
+    }
+
+    private static string CheckedChildPath(string root, string fileName, string label)
+    {
+        if (string.IsNullOrWhiteSpace(fileName) || Path.IsPathRooted(fileName) ||
+            !string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(label + " must be a single file name");
+        }
+
+        var rootFull = Path.GetFullPath(root);
+        var path = Path.GetFullPath(Path.Combine(rootFull, fileName));
+        if (!SecurityGuards.IsInsideDirectory(path, rootFull) || string.Equals(path, rootFull, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(label + " escapes its managed directory");
+        }
+
+        RefuseReadOnlyRootfsPath(path, label);
+        return path;
+    }
+
+    internal static async Task EnsureContainerUserManagerAsync(
+        ICommandRunner runner,
+        string uid,
+        CancellationToken cancellationToken)
+    {
+        if (!uint.TryParse(uid, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+        {
+            throw new InvalidOperationException("container user id is not numeric: " + uid);
+        }
+
+        _ = (await runner.RunAsync("systemctl", ["start", "user@" + uid + ".service"], cancellationToken: cancellationToken))
+            .EnsureSuccess("failed to start rootless container user manager");
+        var bus = "/run/user/" + uid + "/bus";
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            if ((await runner.RunAsync("test", ["-S", bus], cancellationToken: cancellationToken)).ExitCode == 0)
+            {
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+
+        throw new InvalidOperationException("rootless container user bus did not become ready: " + bus);
     }
 
     private static async Task ChownAsync(ICommandRunner runner, string path, string owner, string group, CancellationToken cancellationToken)
@@ -1905,7 +2513,8 @@ internal static partial class AgentProgram
             return;
         }
 
-        _ = await runner.RunAsync("chown", [spec, path], cancellationToken: cancellationToken);
+        _ = (await runner.RunAsync("chown", [spec, path], cancellationToken: cancellationToken))
+            .EnsureSuccess("chown failed");
     }
 
     private static async Task SystemctlUserAsync(
@@ -1933,22 +2542,22 @@ internal static partial class AgentProgram
         }
     }
 
-    private static string DefaultCaddyfile()
+    internal static string DefaultCaddyfile()
         => """
             {
                 auto_https disable_redirects
+                admin unix//run/caddy/admin.sock
             }
 
-            :80 {
-                reverse_proxy unix//run/homeharbor/api.sock {
-                    header_up Host {host}
-                }
-            }
-
+            """.Replace("            ", string.Empty, StringComparison.Ordinal) +
+            CaddyTrustConfiguration.HttpSiteBlock() + Environment.NewLine + Environment.NewLine +
+            """
             homeharbor.local {
                 tls internal
-                reverse_proxy unix//run/homeharbor/api.sock {
+                reverse_proxy unix//run/homeharbor-api/api.sock {
                     header_up Host {host}
+                    header_up X-Forwarded-For {remote_host}
+                    header_up X-Forwarded-Proto {scheme}
                 }
             }
             """.Replace("            ", string.Empty, StringComparison.Ordinal);
@@ -1961,20 +2570,35 @@ internal static partial class AgentProgram
                netbios name = HOMEHARBOR
                security = user
                map to guest = never
+               server min protocol = SMB3_00
+               server signing = mandatory
+               smb encrypt = required
+               ntlm auth = ntlmv2-only
                passdb backend = tdbsam
                private dir = /var/lib/homeharbor/samba/private
                state directory = /var/lib/homeharbor/samba/state
                cache directory = /var/lib/homeharbor/samba/cache
                lock directory = /var/lib/homeharbor/samba/lock
+               log file = /var/log/samba/homeharbor-%m.log
+               max log size = 1000
                disable spoolss = yes
                load printers = no
+               printing = bsd
+               dns proxy = no
+               smb ports = 445
+               follow symlinks = no
+               wide links = no
+               unix extensions = no
+
             """.Replace("            ", string.Empty, StringComparison.Ordinal);
 
     private static void RefuseReadOnlyRootfsPath(string path, string label)
     {
-        if (path.StartsWith("/etc/", StringComparison.Ordinal) || path.StartsWith("/usr/", StringComparison.Ordinal))
+        var fullPath = Path.GetFullPath(path);
+        if (fullPath == "/etc" || fullPath.StartsWith("/etc/", StringComparison.Ordinal) ||
+            fullPath == "/usr" || fullPath.StartsWith("/usr/", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException($"refusing to write {label} under read-only rootfs path {path}");
+            throw new InvalidOperationException($"refusing to write {label} under read-only rootfs path {fullPath}");
         }
     }
 
@@ -1983,35 +2607,36 @@ internal static partial class AgentProgram
             ? property.ValueKind == JsonValueKind.String ? property.GetString() : property.ToString()
             : null;
 
-    private static IReadOnlyList<string> JsonStringArray(JsonElement element, string name)
+    private static long? JsonInt64(JsonElement element, string name)
     {
-        return !element.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.Array
-            ? []
-            : [.. property.EnumerateArray()
-            .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.ToString())
-            .Where(value => !string.IsNullOrWhiteSpace(value))];
-    }
-
-    private static SystemAppHotCheck? ReadSystemAppHotCheck(JsonElement element)
-    {
-        if (!element.TryGetProperty("hotCheck", out var hotCheck) || hotCheck.ValueKind != JsonValueKind.Object)
+        if (!element.TryGetProperty(name, out var property))
         {
             return null;
         }
 
-        var command = JsonString(hotCheck, "command");
-        return string.IsNullOrWhiteSpace(command)
-            ? null
-            : new SystemAppHotCheck(
-            HomeHarborAppManifestVerifier.ValidateCommandName(command),
-            JsonStringArray(hotCheck, "args"));
+        return property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetInt64(out var value) => value,
+            JsonValueKind.String when long.TryParse(
+                property.GetString(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var value) => value,
+            _ => null
+        };
     }
+
+    private static bool? JsonBoolean(JsonElement element, string name)
+        => element.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? property.GetBoolean()
+            : null;
 
     private static void DeleteIfExists(string path)
     {
-        if (File.Exists(path))
+        var safePath = RootPathGuard.RequireNoSymlinkComponents(path, "root-managed file path");
+        if (File.Exists(safePath))
         {
-            File.Delete(path);
+            File.Delete(safePath);
         }
     }
 
@@ -2075,21 +2700,8 @@ internal static partial class AgentProgram
         }
     }
 
-    private static async Task<string?> RootParentDeviceAsync(ICommandRunner runner, CancellationToken cancellationToken)
-    {
-        var sourceResult = await runner.RunAsync("findmnt", ["-n", "-o", "SOURCE", "/"], cancellationToken: cancellationToken);
-        var source = sourceResult.Stdout.Trim();
-        if (sourceResult.ExitCode != 0 || string.IsNullOrWhiteSpace(source) || !source.StartsWith("/dev/", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        var parent = await runner.RunAsync("lsblk", ["-no", "PKNAME", source], cancellationToken: cancellationToken);
-        var parentName = parent.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
-        var candidate = parent.ExitCode == 0 && !string.IsNullOrWhiteSpace(parentName) ? "/dev/" + parentName : source;
-        var real = await runner.RunAsync("readlink", ["-f", candidate], cancellationToken: cancellationToken);
-        return real.ExitCode == 0 ? real.Stdout.Trim() : candidate;
-    }
+    private static Task<IReadOnlySet<string>> RootAncestorDevicesAsync(ICommandRunner runner, CancellationToken cancellationToken)
+        => BlockDeviceSafety.RootAncestorDevicesAsync(runner, cancellationToken);
 
     private static async Task<bool> DeviceExistsAsync(ICommandRunner runner, string path, bool allowFiles, CancellationToken cancellationToken)
     {
@@ -2097,11 +2709,120 @@ internal static partial class AgentProgram
         return block.ExitCode == 0 || (allowFiles && File.Exists(path));
     }
 
-    private static async Task<bool> DeviceHasMountsAsync(ICommandRunner runner, string path, CancellationToken cancellationToken)
+    internal static async Task<string> ValidateStorageTargetIdentityAsync(
+        ICommandRunner runner,
+        PendingStorageTarget target,
+        bool allowFiles,
+        CancellationToken cancellationToken)
     {
-        var result = await runner.RunAsync("lsblk", ["-nrpo", "MOUNTPOINTS", path], cancellationToken: cancellationToken);
-        return result.ExitCode == 0 && result.Stdout.Split('\n').Any(line => !string.IsNullOrWhiteSpace(line));
+        if (target.Kind is not ("whole-disk" or "main-reserved"))
+        {
+            throw new InvalidOperationException("unsupported storage target kind: " + target.Kind);
+        }
+        if (!target.Path.StartsWith("/dev/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("storage plan device is not an absolute /dev path: " + target.Path);
+        }
+        if (target.SizeBytes <= 0)
+        {
+            throw new InvalidOperationException("storage plan device is missing a valid planned size: " + target.Path);
+        }
+
+        var expectedSerial = NormalizeStorageIdentity(target.Serial);
+        var expectedStableId = NormalizeStorageIdentity(target.StableId);
+        if (target.Kind == "main-reserved" && expectedStableId is null)
+        {
+            throw new InvalidOperationException("main reserved storage target is missing its planned PARTUUID: " + target.Path);
+        }
+        if (target.Kind == "whole-disk" && expectedSerial is null && expectedStableId is null &&
+            !target.Path.StartsWith("/dev/disk/by-id/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("whole-disk storage target has no stable serial, WWN, or by-id path: " + target.Path);
+        }
+        if (!await DeviceExistsAsync(runner, target.Path, allowFiles, cancellationToken))
+        {
+            throw new InvalidOperationException("storage plan device does not exist: " + target.Path);
+        }
+
+        var resolve = await runner.RunAsync("readlink", ["-f", target.Path], cancellationToken: cancellationToken);
+        var resolvedPath = resolve.Stdout.Trim();
+        if (resolve.ExitCode != 0 || !resolvedPath.StartsWith("/dev/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("storage plan device could not be resolved safely: " + target.Path);
+        }
+        if (target.ResolvedPath is not null && !string.Equals(target.ResolvedPath, resolvedPath, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("storage target path resolved to a different device after validation: " + target.Path);
+        }
+
+        var identity = await runner.RunAsync(
+            "lsblk",
+            ["--json", "--bytes", "--nodeps", "--output", "PATH,SIZE,TYPE,MODEL,SERIAL,WWN,TRAN,PARTUUID", resolvedPath],
+            cancellationToken: cancellationToken);
+        if (identity.ExitCode != 0)
+        {
+            throw new InvalidOperationException("failed to read current storage target identity: " + target.Path);
+        }
+
+        JsonElement actual;
+        try
+        {
+            using var document = JsonDocument.Parse(identity.Stdout);
+            if (!document.RootElement.TryGetProperty("blockdevices", out var devices) ||
+                devices.ValueKind != JsonValueKind.Array ||
+                devices.GetArrayLength() != 1)
+            {
+                throw new InvalidOperationException("lsblk did not return exactly one storage target: " + target.Path);
+            }
+
+            actual = devices[0].Clone();
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException("lsblk returned invalid storage target identity JSON: " + target.Path, ex);
+        }
+
+        var actualPath = NormalizeStorageIdentity(JsonString(actual, "path"));
+        var actualType = NormalizeStorageIdentity(JsonString(actual, "type"));
+        var expectedType = target.Kind == "whole-disk" ? "disk" : "part";
+        if (!string.Equals(actualPath, resolvedPath, StringComparison.Ordinal) ||
+            !string.Equals(actualType, expectedType, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("storage target path or device type changed after planning: " + target.Path);
+        }
+
+        var actualSize = JsonInt64(actual, "size") ?? 0;
+        if (actualSize != target.SizeBytes)
+        {
+            throw new InvalidOperationException(
+                $"storage target size changed after planning: {target.Path} (planned {target.SizeBytes}, current {actualSize})");
+        }
+
+        RequireStorageIdentityMatch("model", target.Path, target.Model, JsonString(actual, "model"));
+        RequireStorageIdentityMatch("transport", target.Path, target.Transport, JsonString(actual, "tran"));
+        RequireStorageIdentityMatch("serial", target.Path, expectedSerial, JsonString(actual, "serial"));
+        RequireStorageIdentityMatch(
+            target.Kind == "main-reserved" ? "PARTUUID" : "WWN",
+            target.Path,
+            expectedStableId,
+            JsonString(actual, target.Kind == "main-reserved" ? "partuuid" : "wwn"));
+        return resolvedPath;
     }
+
+    private static void RequireStorageIdentityMatch(string label, string path, string? expected, string? actual)
+    {
+        expected = NormalizeStorageIdentity(expected);
+        if (expected is not null && !string.Equals(expected, NormalizeStorageIdentity(actual), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("storage target " + label + " changed after planning: " + path);
+        }
+    }
+
+    private static string? NormalizeStorageIdentity(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static async Task<bool> DeviceHasMountsAsync(ICommandRunner runner, string path, CancellationToken cancellationToken)
+        => await BlockDeviceSafety.DeviceHasMountsAsync(runner, path, cancellationToken);
 
     private static async Task<bool> DeviceHasProtectedLabelAsync(ICommandRunner runner, string path, CancellationToken cancellationToken)
     {
@@ -2133,13 +2854,6 @@ internal static partial class AgentProgram
         ICommandRunner runner,
         string path,
         CancellationToken cancellationToken)
-    {
-        var result = await runner.RunAsync("lsblk", ["-nrpo", "LABEL,PARTLABEL", path], cancellationToken: cancellationToken);
-        return result.ExitCode != 0
-            ? []
-            : [.. result.Stdout
-            .Split(['\n', '\r', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(label => !string.IsNullOrWhiteSpace(label))];
-    }
+        => await BlockDeviceSafety.DeviceLabelsAsync(runner, path, cancellationToken);
 
 }

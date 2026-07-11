@@ -10,6 +10,10 @@ internal static partial class AgentProgram
 
     private sealed record BootSuccessOptions(
         string StateDir,
+        string OtaStateDir,
+        string Esp,
+        string BootEnv,
+        string RunDir,
         int TimeoutSeconds,
         string HealthUrl,
         string ApiUrl,
@@ -41,7 +45,30 @@ internal static partial class AgentProgram
         string LuksUuid,
         string MapperName);
 
-    private sealed record PendingStorageTarget(string Path, string Kind);
+    internal sealed record PendingStorageTarget(
+        string Path,
+        string Kind,
+        long SizeBytes,
+        string? Model,
+        string? Serial,
+        string? Transport,
+        string? StableId,
+        string? ResolvedPath = null);
+
+    private sealed record DesiredSmbShare(
+        Guid Id,
+        Guid FamilyId,
+        string Name,
+        string ShareName,
+        string Path,
+        bool ReadOnly);
+
+    private sealed record DesiredSmbCredential(
+        Guid Id,
+        Guid FamilyId,
+        Guid ShareId,
+        string UnixUser,
+        bool ReadOnly);
 
     private sealed record CreatedDataStorage(string FileSystemUuid, string? MdadmName, string? MdadmUuid);
 
@@ -53,7 +80,4 @@ internal static partial class AgentProgram
         bool RequiresReboot,
         string Error);
 
-    private sealed record SystemAppHotCheck(
-        string Command,
-        IReadOnlyList<string> Args);
 }

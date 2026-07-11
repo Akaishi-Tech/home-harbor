@@ -47,7 +47,6 @@ import {
 import {
   useCatalog,
   useCreateBackup,
-  useCreatePeer,
   useCreateSmbCredential,
   useInstallApp,
 } from "@/hooks/queries";
@@ -184,53 +183,8 @@ function BackupSection() {
   );
 }
 
-type RemoteValues = {
-  name: string;
-  endpoint: string;
-};
-
-const remoteDefaults: RemoteValues = {
-  name: "Travel phone",
-  endpoint: "homeharbor.local:51820",
-};
-
 function RemoteSection() {
-  const createPeer = useCreatePeer();
-  const [secrets, setSecrets] = useState<SecretField[] | null>(null);
   const { t } = useTranslation();
-  const remoteSchema = useMemo(
-    () =>
-      z.object({
-        name: z.string().trim().min(1, t("validation.deviceNameRequired")),
-        endpoint: z.string().trim().min(1, t("validation.endpointRequired")),
-      }),
-    [t],
-  );
-  const form = useForm<RemoteValues>({
-    resolver: zodResolver(remoteSchema),
-    defaultValues: remoteDefaults,
-  });
-
-  function onSubmit(values: RemoteValues) {
-    createPeer.mutate(values, {
-      onSuccess: (response) => {
-        toast.success(t("toast.remoteConfigGenerated"));
-        const found = stringSecret(
-          response,
-          "config",
-          t("secretLabels.wireGuardConfig"),
-          true,
-        );
-        setSecrets(
-          found.length
-            ? found
-            : jsonSecret(response, t("secretLabels.config")),
-        );
-        form.reset(remoteDefaults);
-      },
-      onError: (error) => toast.error(errorMessage(error)),
-    });
-  }
 
   return (
     <SectionCard
@@ -238,56 +192,9 @@ function RemoteSection() {
       title={t("services.remote.title")}
       description={t("services.remote.description")}
     >
-      <Form {...form}>
-        <form className="space-y-3" onSubmit={form.handleSubmit(onSubmit)}>
-          <FormField
-            control={form.control}
-            name="name"
-                render={({ field }) => (
-                  <FormItem>
-                <FormLabel>{t("fields.deviceName")}</FormLabel>
-                <FormControl>
-                  <Input placeholder="Travel phone" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="endpoint"
-                render={({ field }) => (
-                  <FormItem>
-                <FormLabel>{t("fields.endpoint")}</FormLabel>
-                <FormControl>
-                  <Input placeholder="homeharbor.local:51820" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <Button
-            type="submit"
-            variant="outline"
-            disabled={createPeer.isPending}
-          >
-            <Plus className="size-4" />
-            {createPeer.isPending
-              ? t("services.remote.generatePending")
-              : t("services.remote.generate")}
-          </Button>
-        </form>
-      </Form>
-
-      <ResultSecretDialog
-        open={secrets !== null}
-        onOpenChange={(open) => {
-          if (!open) setSecrets(null);
-        }}
-        title={t("services.remote.title")}
-        description={t("services.remote.dialogDescription")}
-        secrets={secrets ?? []}
-      />
+      <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+        {t("services.remote.unavailable")}
+      </p>
     </SectionCard>
   );
 }
@@ -334,8 +241,12 @@ function SmbSection() {
               : jsonSecret(response, t("secretLabels.credentials")),
           );
           form.reset(smbDefaults);
+          createCredential.reset();
         },
-        onError: (error) => toast.error(errorMessage(error)),
+        onError: (error) => {
+          toast.error(errorMessage(error));
+          createCredential.reset();
+        },
       },
     );
   }
@@ -408,15 +319,20 @@ function AppsSection() {
   });
 
   const catalogItems = (catalog.data ?? []).filter(
-    (item) => item.kind === "container" && item.recommendedInSetup,
+    (item) =>
+      item.kind === "container" &&
+      item.recommendedInSetup &&
+      item.available &&
+      !item.installed,
   );
   const firstAppKey = catalogItems[0]?.appKey ?? "";
 
   useEffect(() => {
-    if (firstAppKey && !form.getValues("appKey")) {
+    const selected = form.getValues("appKey");
+    if (!catalogItems.some((item) => item.appKey === selected)) {
       form.setValue("appKey", firstAppKey);
     }
-  }, [firstAppKey, form]);
+  }, [catalogItems, firstAppKey, form]);
 
   function onInstall(values: AppsValues) {
     installApp.mutate(values, {

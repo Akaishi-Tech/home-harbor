@@ -1,6 +1,7 @@
 [Unit]
 Description=Commit healthy HomeHarbor OTA slot
-After=homeharbor-api.service
+After=homeharbor-boot-success.service
+Requires=homeharbor-boot-success.service
 RequiresMountsFor=/var/lib/homeharbor /efi
 ConditionPathExists=/var/lib/homeharbor/ota/pending.json
 

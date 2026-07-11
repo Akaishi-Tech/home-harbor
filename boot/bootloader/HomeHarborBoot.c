@@ -6,6 +6,10 @@
 #include "util.h"
 #include "variables.h"
 
+static int valid_slot(const char *slot) {
+    return slot && (slot[0] == 'A' || slot[0] == 'B') && slot[1] == 0;
+}
+
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     char slot[4];
     char root_slot[4];
@@ -13,6 +17,8 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     char mode[16];
     const CHAR16 *label = L"boot_a";
     const CHAR16 *vbmeta_label = L"vbmeta_a";
+    char vbmeta_digest[VBMETA_DIGEST_BUFFER_SIZE];
+    EFI_STATUS status;
     int secure_boot_active;
 
     gST = SystemTable;
@@ -30,23 +36,40 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     }
 
     if (mode[0] == 'r') {
-        if (recovery_slot[0] == 'B' || recovery_slot[0] == 'b') {
-            label = L"recovery_b";
+        if (!valid_slot(recovery_slot)) {
+            print(L"HomeHarborBoot: refusing invalid recovery slot\r\n");
+            return EFI_SECURITY_VIOLATION;
+        }
+        if (recovery_slot[0] == 'B') {
+            label = L"boot_b";
             vbmeta_label = L"vbmeta_b";
         } else {
-            label = L"recovery_a";
+            label = L"boot_a";
             vbmeta_label = L"vbmeta_a";
         }
-    } else if (slot[0] == 'B' || slot[0] == 'b') {
-        label = L"boot_b";
-        vbmeta_label = L"vbmeta_b";
+    } else {
+        if (!valid_slot(slot) || !valid_slot(root_slot)) {
+            print(L"HomeHarborBoot: refusing invalid normal boot slot\r\n");
+            return EFI_SECURITY_VIOLATION;
+        }
+        if (slot[0] == 'B') {
+            label = L"boot_b";
+        }
+        if (root_slot[0] == 'B') {
+            vbmeta_label = L"vbmeta_b";
+        }
     }
 
-    verify_vbmeta_signature_preflight(vbmeta_label, secure_boot_active);
-    write_efi_boot_current(slot, root_slot, mode, recovery_slot);
-    if (mode[0] == 'r') {
-        return boot_recovery_erofs_partition(ImageHandle, label);
+    if (!verify_vbmeta_signature_preflight(vbmeta_label, secure_boot_active, vbmeta_digest)) {
+        return EFI_SECURITY_VIOLATION;
     }
-    prompt_for_data_passphrase_if_needed();
+    status = write_efi_boot_current(slot, root_slot, mode, recovery_slot, vbmeta_digest);
+    if (status != EFI_SUCCESS) {
+        print(L"HomeHarborBoot: refusing to boot without a fresh vbmeta digest handoff\r\n");
+        return EFI_ERROR(status) ? status : EFI_SECURITY_VIOLATION;
+    }
+    if (mode[0] != 'r') {
+        prompt_for_data_passphrase_if_needed();
+    }
     return boot_raw_partition(ImageHandle, label);
 }

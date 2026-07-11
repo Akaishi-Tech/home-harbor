@@ -14,6 +14,7 @@ import {
   GlassCardTitle,
 } from "@/components/glass/glass-card";
 import { EmptyState } from "@/components/glass/empty-state";
+import { QueryErrorState } from "@/components/glass/query-error-state";
 import {
   ResultSecretDialog,
   type SecretField,
@@ -40,6 +41,8 @@ import {
 import { useCreateDevice, useDevices } from "@/hooks/queries";
 import { errorMessage, formatDateTime } from "@/lib/format";
 import { webDavSecrets } from "@/lib/secrets";
+import { useAuth } from "@/hooks/use-auth";
+import { isFamilyAdmin } from "@/lib/auth";
 
 type DeviceValues = {
   displayName: string;
@@ -49,6 +52,7 @@ type DeviceValues = {
 export function DevicesPage() {
   const devices = useDevices();
   const createDevice = useCreateDevice();
+  const canManage = isFamilyAdmin(useAuth());
   const [secrets, setSecrets] = useState<SecretField[] | null>(null);
   const { t } = useTranslation();
   const schema = useMemo(
@@ -72,8 +76,12 @@ export function DevicesPage() {
         const found = webDavSecrets(response);
         if (found.length) setSecrets(found);
         form.reset({ displayName: "Phone", kind: "mobile" });
+        createDevice.reset();
       },
-      onError: (error) => toast.error(errorMessage(error)),
+      onError: (error) => {
+        toast.error(errorMessage(error));
+        createDevice.reset();
+      },
     });
   }
 
@@ -85,8 +93,14 @@ export function DevicesPage() {
         description={t("pages.devices.description")}
       />
 
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,380px)_1fr]">
-        <GlassCard>
+      <div
+        className={
+          canManage
+            ? "grid gap-3 lg:grid-cols-[minmax(0,380px)_1fr]"
+            : "grid gap-3"
+        }
+      >
+        {canManage ? <GlassCard>
           <GlassCardHeader>
             <GlassCardTitle>{t("pages.devices.onboardTitle")}</GlassCardTitle>
             <GlassCardDescription>
@@ -156,7 +170,7 @@ export function DevicesPage() {
               </form>
             </Form>
           </GlassCardContent>
-        </GlassCard>
+        </GlassCard> : null}
 
         <GlassCard>
           <GlassCardHeader>
@@ -169,6 +183,11 @@ export function DevicesPage() {
                   <Skeleton key={index} className="h-14 rounded-xl" />
                 ))}
               </div>
+            ) : devices.isError ? (
+              <QueryErrorState
+                error={devices.error}
+                onRetry={() => void devices.refetch()}
+              />
             ) : devices.data && devices.data.length > 0 ? (
               <ul className="space-y-2">
                 {devices.data.map((device) => (

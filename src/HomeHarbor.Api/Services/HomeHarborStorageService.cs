@@ -14,12 +14,14 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
     {
         foreach (var area in Enum.GetValues<StorageArea>())
         {
-            _ = Directory.CreateDirectory(GetAreaRoot(familyId, area));
+            var root = GetAreaRoot(familyId, area);
+            _ = Directory.CreateDirectory(root);
+            _ = GetAreaRoot(familyId, area);
         }
     }
 
     public string GetAreaRoot(Guid familyId, StorageArea area)
-        => Path.Combine(_options.DataRoot, "families", familyId.ToString("N"), StoragePathPolicy.AreaDirectoryName(area));
+        => StoragePathPolicy.ResolvePhysicalPath(_options.DataRoot, familyId, area, "/");
 
     public string Resolve(Guid familyId, StorageArea area, string? davPath)
         => Resolve(familyId, area, davPath, out _);
@@ -43,8 +45,42 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
             ? []
             : [.. new DirectoryInfo(path)
             .EnumerateFileSystemInfos()
+            .Where(info => !StoragePathPolicy.IsReparsePoint(info.FullName))
             .OrderBy(f => (f.Attributes & FileAttributes.Directory) == 0)
             .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    public IReadOnlyList<FileInfo> EnumerateFiles(Guid familyId, StorageArea area)
+    {
+        var root = Resolve(familyId, area, "/");
+        if (!Directory.Exists(root)) return [];
+
+        var files = new List<FileInfo>();
+        EnumerateFilesWithoutLinks(new DirectoryInfo(root), files);
+        return files;
+    }
+
+    public FileStream OpenRead(Guid familyId, StorageArea area, string? davPath)
+    {
+        var path = Resolve(familyId, area, davPath, out var normalized);
+        FileStream? stream = null;
+        try
+        {
+            stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 81920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            _ = Resolve(familyId, area, normalized);
+            return stream;
+        }
+        catch
+        {
+            stream?.Dispose();
+            throw;
+        }
     }
 
     public async Task WriteFileAsync(Guid familyId, StorageArea area, string? davPath, Stream input, CancellationToken cancellationToken)
@@ -54,7 +90,13 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
         if (Directory.Exists(path)) throw new IOException("Cannot write a file over an existing directory.");
 
         var parent = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(parent)) _ = Directory.CreateDirectory(parent);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            _ = Directory.CreateDirectory(parent);
+            var verifiedPath = Resolve(familyId, area, normalized);
+            if (!string.Equals(path, verifiedPath, PathComparison))
+                throw new InvalidOperationException("Storage path changed while preparing the upload.");
+        }
 
         var tempPath = Path.Combine(parent ?? _options.DataRoot, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.upload");
         try
@@ -82,6 +124,7 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
                 }
             }
 
+            _ = Resolve(familyId, area, normalized);
             File.Move(tempPath, path, overwrite: true);
         }
         catch
@@ -93,8 +136,9 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
 
     public void CreateDirectory(Guid familyId, StorageArea area, string? davPath)
     {
-        var path = Resolve(familyId, area, davPath);
+        var path = Resolve(familyId, area, davPath, out var normalized);
         _ = Directory.CreateDirectory(path);
+        _ = Resolve(familyId, area, normalized);
     }
 
     public void Delete(Guid familyId, StorageArea area, string? davPath)
@@ -104,11 +148,17 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
 
         if (File.Exists(path))
         {
+            _ = Resolve(familyId, area, normalized);
             File.Delete(path);
             return;
         }
 
-        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        if (Directory.Exists(path))
+        {
+            ThrowIfTreeContainsReparsePoints(new DirectoryInfo(path));
+            _ = Resolve(familyId, area, normalized);
+            Directory.Delete(path, recursive: true);
+        }
     }
 
     public StorageTransferResult Copy(Guid familyId, StorageArea sourceArea, string? sourcePath, StorageArea destinationArea, string destinationPath, bool overwrite)
@@ -121,12 +171,18 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
         var sourceIsDirectory = Directory.Exists(source);
         if (!sourceIsFile && !sourceIsDirectory) return StorageTransferResult.SourceMissing;
         if (IsInvalidTransfer(source, destination, sourceIsDirectory)) return StorageTransferResult.Forbidden;
+        if (sourceIsDirectory) ThrowIfTreeContainsReparsePoints(new DirectoryInfo(source));
 
         var destinationExists = File.Exists(destination) || Directory.Exists(destination);
         if (destinationExists && !overwrite) return StorageTransferResult.PreconditionFailed;
-        if (destinationExists) DeletePhysical(destination);
+        if (destinationExists)
+        {
+            _ = Resolve(familyId, destinationArea, normalizedDestination);
+            DeletePhysical(destination);
+        }
 
         CopyPhysical(source, destination);
+        _ = Resolve(familyId, destinationArea, normalizedDestination);
         return destinationExists ? StorageTransferResult.Replaced : StorageTransferResult.Created;
     }
 
@@ -140,12 +196,18 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
         var sourceIsDirectory = Directory.Exists(source);
         if (!sourceIsFile && !sourceIsDirectory) return StorageTransferResult.SourceMissing;
         if (IsInvalidTransfer(source, destination, sourceIsDirectory)) return StorageTransferResult.Forbidden;
+        if (sourceIsDirectory) ThrowIfTreeContainsReparsePoints(new DirectoryInfo(source));
 
         var destinationExists = File.Exists(destination) || Directory.Exists(destination);
         if (destinationExists && !overwrite) return StorageTransferResult.PreconditionFailed;
-        if (destinationExists) DeletePhysical(destination);
+        if (destinationExists)
+        {
+            _ = Resolve(familyId, destinationArea, normalizedDestination);
+            DeletePhysical(destination);
+        }
 
         _ = Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? destination);
+        _ = Resolve(familyId, destinationArea, normalizedDestination);
         if (sourceIsFile) File.Move(source, destination);
         else Directory.Move(source, destination);
         return destinationExists ? StorageTransferResult.Replaced : StorageTransferResult.Created;
@@ -162,25 +224,60 @@ public sealed class HomeHarborStorageService(IOptions<HomeHarborStorageOptions> 
 
         if (!Directory.Exists(source)) throw new FileNotFoundException(source);
         _ = Directory.CreateDirectory(destination);
-        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
-        {
-            var relative = Path.GetRelativePath(source, directory);
-            _ = Directory.CreateDirectory(Path.Combine(destination, relative));
-        }
+        CopyDirectoryWithoutLinks(new DirectoryInfo(source), destination);
+    }
 
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+    private static void CopyDirectoryWithoutLinks(DirectoryInfo source, string destination)
+    {
+        foreach (var entry in source.EnumerateFileSystemInfos())
         {
-            var relative = Path.GetRelativePath(source, file);
-            var target = Path.Combine(destination, relative);
-            _ = Directory.CreateDirectory(Path.GetDirectoryName(target) ?? destination);
-            File.Copy(file, target);
+            if (StoragePathPolicy.IsReparsePoint(entry.FullName))
+                throw new InvalidOperationException("Storage path contains a symbolic link or reparse point that cannot be copied.");
+
+            var target = Path.Combine(destination, entry.Name);
+            if ((entry.Attributes & FileAttributes.Directory) != 0)
+            {
+                _ = Directory.CreateDirectory(target);
+                CopyDirectoryWithoutLinks((DirectoryInfo)entry, target);
+            }
+            else
+            {
+                File.Copy(entry.FullName, target);
+            }
         }
     }
 
     private static void DeletePhysical(string path)
     {
         if (File.Exists(path)) File.Delete(path);
-        else if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        else if (Directory.Exists(path))
+        {
+            ThrowIfTreeContainsReparsePoints(new DirectoryInfo(path));
+            Directory.Delete(path, recursive: true);
+        }
+    }
+
+    private static void EnumerateFilesWithoutLinks(DirectoryInfo directory, List<FileInfo> files)
+    {
+        foreach (var entry in directory.EnumerateFileSystemInfos())
+        {
+            if (StoragePathPolicy.IsReparsePoint(entry.FullName)) continue;
+            if ((entry.Attributes & FileAttributes.Directory) != 0)
+                EnumerateFilesWithoutLinks((DirectoryInfo)entry, files);
+            else if (entry is FileInfo file)
+                files.Add(file);
+        }
+    }
+
+    private static void ThrowIfTreeContainsReparsePoints(DirectoryInfo directory)
+    {
+        foreach (var entry in directory.EnumerateFileSystemInfos())
+        {
+            if (StoragePathPolicy.IsReparsePoint(entry.FullName))
+                throw new InvalidOperationException("Storage path trees cannot contain symbolic links or reparse points.");
+            if ((entry.Attributes & FileAttributes.Directory) != 0)
+                ThrowIfTreeContainsReparsePoints((DirectoryInfo)entry);
+        }
     }
 
     private static bool IsInvalidTransfer(string source, string destination, bool sourceIsDirectory)

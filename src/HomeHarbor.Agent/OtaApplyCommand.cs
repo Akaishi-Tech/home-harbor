@@ -40,12 +40,16 @@ internal static class OtaApplyCommand
                 Options:
                   --public-key PATH
                   --state-dir PATH
+                  --work-dir PATH
                   --channel CHANNEL
                   --channel-file PATH
                   --kernel-channel CHANNEL
                   --kernel-channel-file PATH
                   --esp PATH
                   --boot-env PATH
+                  --current-os-release PATH
+                  --current-cmdline PATH
+                  --allow-sequence-bootstrap
                   --dry-run
                   --no-reboot
                   --verify-script PATH
@@ -78,8 +82,7 @@ internal static class OtaApplyCommand
             throw new FileNotFoundException("release public key not found: " + options.PublicKey, options.PublicKey);
         }
 
-        var work = Path.Combine(Path.GetTempPath(), "homeharbor-ota-apply-" + Guid.NewGuid().ToString("N"));
-        _ = Directory.CreateDirectory(work);
+        var work = CreateWorkDirectory(options.WorkDirectory);
         var createdMaps = new List<string>();
         var rootfsMounted = false;
         try
@@ -113,6 +116,19 @@ internal static class OtaApplyCommand
                 return 0;
             }
 
+            if (plan.Type == OtaType.KernelOnly)
+            {
+                OtaEspBootAssetInstaller.ValidateKernelAssets(
+                    options.Esp,
+                    Path.Combine(bundleRoot, "HomeHarborBoot.efi"),
+                    plan.BootloaderHash,
+                    Path.Combine(bundleRoot, "BOOTX64.EFI"),
+                    plan.FallbackBootHash,
+                    Path.Combine(bundleRoot, "mmx64.efi"),
+                    plan.MokManagerHash,
+                    plan.BootMode);
+            }
+
             if (!await IsBlockDeviceAsync(runner, plan.SuperDevice, cancellationToken))
             {
                 throw new InvalidOperationException("target Android super block device is missing: " + plan.SuperDevice);
@@ -141,20 +157,52 @@ internal static class OtaApplyCommand
 
             if (plan.Type == OtaType.FullSystem)
             {
-                await RunRequiredAsync(runner, "dd", ["if=" + plan.RootfsPath, "of=" + rootDevice, "bs=4M", "conv=fsync", "status=progress"], "failed to write rootfs image", cancellationToken, stream: true);
+                await WriteCompletePartitionImageAsync(
+                    runner,
+                    plan.RootfsPath,
+                    rootDevice,
+                    "root " + plan.TargetRootSlot,
+                    cancellationToken);
                 await WriteRawPartitionImageAsync(runner, Path.Combine(bundleRoot, "vbmeta_" + SlotLower(plan.TargetRootSlot) + ".img"), plan.VbmetaDevice, "vbmeta " + plan.TargetRootSlot, cancellationToken);
             }
             else
             {
-                await RunRequiredAsync(runner, "dd", ["if=" + Path.Combine(bundleRoot, "modules.img"), "of=" + modulesDevice, "bs=4M", "conv=fsync", "status=progress"], "failed to write modules image", cancellationToken, stream: true);
-                await RunRequiredAsync(runner, "dd", ["if=" + Path.Combine(bundleRoot, "firmware.img"), "of=" + firmwareDevice, "bs=4M", "conv=fsync", "status=progress"], "failed to write firmware image", cancellationToken, stream: true);
+                await WriteCompletePartitionImageAsync(
+                    runner,
+                    Path.Combine(bundleRoot, "modules.img"),
+                    modulesDevice,
+                    "modules " + plan.TargetBootSlot,
+                    cancellationToken);
+                await WriteCompletePartitionImageAsync(
+                    runner,
+                    Path.Combine(bundleRoot, "firmware.img"),
+                    firmwareDevice,
+                    "firmware " + plan.TargetBootSlot,
+                    cancellationToken);
                 if (!await IsBlockDeviceAsync(runner, plan.RecoveryDevice, cancellationToken))
                 {
                     throw new InvalidOperationException("recovery block device is missing: " + plan.RecoveryDevice);
                 }
 
                 await WriteRawPartitionImageAsync(runner, Path.Combine(bundleRoot, "boot.efi"), plan.BootDevice, "boot " + plan.TargetBootSlot, cancellationToken);
-                await RunRequiredAsync(runner, "dd", ["if=" + Path.Combine(bundleRoot, "recovery.img"), "of=" + plan.RecoveryDevice, "bs=4M", "conv=fsync", "status=progress"], "failed to write recovery image", cancellationToken, stream: true);
+                await WriteCompletePartitionImageAsync(
+                    runner,
+                    Path.Combine(bundleRoot, "recovery.img"),
+                    plan.RecoveryDevice,
+                    "recovery " + plan.TargetRecoverySlot,
+                    cancellationToken);
+                await OtaEspBootAssetInstaller.InstallKernelAssetsAsync(
+                    runner,
+                    options.Esp,
+                    Path.Combine(bundleRoot, "HomeHarborBoot.efi"),
+                    plan.BootloaderHash,
+                    Path.Combine(bundleRoot, "BOOTX64.EFI"),
+                    plan.FallbackBootHash,
+                    Path.Combine(bundleRoot, "mmx64.efi"),
+                    plan.MokManagerHash,
+                    plan.BootMode,
+                    dryRun: false,
+                    cancellationToken);
                 await InstallKernelAddonsToStateAsync(options.StateDir, plan.TargetAddons, bundleRoot, cancellationToken);
                 await FileWrites.AtomicWriteTextAsync(options.KernelChannelFile, plan.KernelChannel + Environment.NewLine, 0640, cancellationToken);
             }
@@ -213,6 +261,13 @@ internal static class OtaApplyCommand
 
             var channel = RequiredManifestString(manifest, "channel");
             ValidateManifestChannel(channel, applyOptions);
+            var releaseSequence = OtaManifestVerifier.ReleaseSequenceProperty(manifest);
+            var trustedReleaseAnchors = TrustedCurrentReleaseAnchors(
+                applyOptions.CurrentOsRelease,
+                applyOptions.CurrentCmdline,
+                applyOptions.AllowSequenceBootstrap);
+            var trustedReleaseFloor = trustedReleaseAnchors.Floor;
+
             var bootMode = RequiredManifestString(manifest, "bootMode");
             if (bootMode == "legacy")
             {
@@ -243,14 +298,38 @@ internal static class OtaApplyCommand
             {
                 throw new InvalidOperationException("raw UKI OTA supports only system/full-system or kernel/kernel-only bundles");
             }
+            if (packageKind == "system")
+            {
+                RequireSystemBundleMatchesRunningKernel(releaseSequence, trustedReleaseAnchors.Kernel);
+                ReleaseSequence.RequireComponentUpgrade(
+                    releaseSequence,
+                    trustedReleaseAnchors.Root,
+                    trustedReleaseAnchors.Kernel);
+            }
+            else
+            {
+                ReleaseSequence.RequireComponentUpgrade(
+                    releaseSequence,
+                    trustedReleaseAnchors.Kernel,
+                    trustedReleaseAnchors.Root);
+            }
 
             var manifestAddons = ReadManifestAddons(manifest);
+            var currentKernelChannel = CurrentKernelChannel(applyOptions);
             var kernelChannel = packageKind == "kernel"
-                ? KernelChannel.Require(ManifestString(manifest, "kernelChannel"), "OTA manifest kernelChannel")
-                : CurrentKernelChannel(applyOptions);
+                ? RequireMatchingKernelChannel(
+                    KernelChannel.Require(ManifestString(manifest, "kernelChannel"), "OTA manifest kernelChannel"),
+                    currentKernelChannel)
+                : currentKernelChannel;
             if (packageKind != "kernel" && manifestAddons.Count > 0)
             {
                 throw new InvalidOperationException("kernel addons are only valid for kernel OTA manifests");
+            }
+
+            var currentBootMode = KernelArg("homeharbor.boot_mode");
+            if (!string.IsNullOrWhiteSpace(currentBootMode))
+            {
+                RequireMatchingBootMode(bootMode, currentBootMode);
             }
 
             var rootfsPath = Path.Combine(bundleRoot, "rootfs.img");
@@ -294,7 +373,7 @@ internal static class OtaApplyCommand
             else
             {
                 actualBootSha = ValidatePayloadHash(bundleRoot, "boot.efi", "boot.efi.sha256", manifest, "bootHash", "boot.efi");
-                actualBootloaderSha = ValidateOptionalPayloadHash(bundleRoot, "HomeHarborBoot.efi", "HomeHarborBoot.efi.sha256", manifest, "bootloaderHash", "HomeHarborBoot.efi");
+                actualBootloaderSha = ValidatePayloadHash(bundleRoot, "HomeHarborBoot.efi", "HomeHarborBoot.efi.sha256", manifest, "bootloaderHash", "HomeHarborBoot.efi");
                 actualFallbackBootSha = ValidateOptionalPayloadHash(bundleRoot, "BOOTX64.EFI", "BOOTX64.EFI.sha256", manifest, "fallbackBootHash", "BOOTX64.EFI");
                 actualMokManagerSha = ValidateOptionalPayloadHash(bundleRoot, "mmx64.efi", "mmx64.efi.sha256", manifest, "mokManagerHash", "mmx64.efi");
             }
@@ -394,12 +473,19 @@ internal static class OtaApplyCommand
             var targetDataUnlockMode = currentDataUnlockMode;
             if (otaType == OtaType.FullSystem && (!applyOptions.DryRun || !string.IsNullOrWhiteSpace(applyOptions.TargetCrypttab)))
             {
-                targetDataUnlockMode = await TargetDataUnlockModeAsync(applyOptions, rootfsPath, workDirectory, ct);
+                targetDataUnlockMode = await TargetDataUnlockModeAsync(
+                    applyOptions,
+                    rootfsPath,
+                    workDirectory,
+                    currentDataUnlockMode,
+                    ct);
                 GuardDataUnlockCompatibility(currentDataUnlockMode, targetDataUnlockMode);
             }
 
             return new OtaApplyPlan(
                 Version: version,
+                ReleaseSequence: releaseSequence,
+                TrustedReleaseFloor: trustedReleaseFloor,
                 PackageKind: packageKind,
                 Channel: channel,
                 KernelChannel: kernelChannel,
@@ -445,23 +531,54 @@ internal static class OtaApplyCommand
                 TargetAddons: targetAddons);
         }
 
-        async Task<string> TargetDataUnlockModeAsync(OtaApplyOptions applyOptions, string rootfs, string workDirectory, CancellationToken ct)
+        async Task<string> TargetDataUnlockModeAsync(
+            OtaApplyOptions applyOptions,
+            string rootfs,
+            string workDirectory,
+            string currentDataUnlockMode,
+            CancellationToken ct)
         {
             if (!string.IsNullOrWhiteSpace(applyOptions.TargetCrypttab))
             {
-                return CrypttabDataUnlockMode(applyOptions.TargetCrypttab)
-                    ?? throw new InvalidOperationException("could not read target rootfs crypttab: " + applyOptions.TargetCrypttab);
+                return ResolveTargetDataUnlockMode(applyOptions.TargetCrypttab, currentDataUnlockMode);
             }
 
             var mountDir = Path.Combine(workDirectory, "target-rootfs");
             _ = Directory.CreateDirectory(mountDir);
             await RunRequiredAsync(runner, "mount", ["-o", "loop,ro", rootfs, mountDir], "failed to mount target rootfs", ct);
             rootfsMounted = true;
-            var mode = CrypttabDataUnlockMode(Path.Combine(mountDir, "etc/crypttab"));
+            var mode = ResolveTargetDataUnlockMode(
+                Path.Combine(mountDir, "etc/crypttab"),
+                currentDataUnlockMode);
             await RunRequiredAsync(runner, "umount", [mountDir], "failed to unmount target rootfs", ct);
             rootfsMounted = false;
-            return mode ?? throw new InvalidOperationException("could not read target rootfs /etc/crypttab");
+            return mode;
         }
+    }
+
+    internal static string CreateWorkDirectory(string workRoot)
+    {
+        var safeRoot = RootPathGuard.CreateDirectory(workRoot, "OTA work root");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                safeRoot,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        var work = RootPathGuard.RequireChildPath(
+            Path.Combine(safeRoot, "apply-" + Guid.NewGuid().ToString("N")),
+            safeRoot,
+            "OTA work directory");
+        _ = Directory.CreateDirectory(work);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                work,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        return RootPathGuard.RequireChildPath(work, safeRoot, "OTA work directory");
     }
 
     private static async Task VerifyManifestAsync(
@@ -740,6 +857,28 @@ internal static class OtaApplyCommand
         return string.IsNullOrWhiteSpace(fromFile)
             ? KernelChannel.Generic
             : KernelChannel.Require(fromFile, "current kernel channel");
+    }
+
+    internal static string RequireMatchingKernelChannel(string manifestChannel, string currentChannel)
+    {
+        var manifest = KernelChannel.Require(manifestChannel, "OTA manifest kernelChannel");
+        var current = KernelChannel.Require(currentChannel, "current kernel channel");
+        return string.Equals(manifest, current, StringComparison.Ordinal)
+            ? manifest
+            : throw new InvalidOperationException($"OTA kernel channel {manifest} does not match current kernel channel {current}");
+    }
+
+    internal static void RequireMatchingBootMode(string manifestBootMode, string currentBootMode)
+    {
+        if (currentBootMode is not ("raw-uki" or "secure-boot-raw-uki"))
+        {
+            throw new InvalidOperationException("current boot mode is unsupported: " + currentBootMode);
+        }
+
+        if (!string.Equals(manifestBootMode, currentBootMode, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"OTA boot mode {manifestBootMode} does not match current boot mode {currentBootMode}");
+        }
     }
 
     private static string? FirstFileToken(string path)
@@ -1229,10 +1368,54 @@ internal static class OtaApplyCommand
             return null;
         }
 
+        return CrypttabDataUnlockMode(lines);
+    }
+
+    internal static string ResolveTargetDataUnlockMode(string targetCrypttab, string currentDataUnlockMode)
+    {
+        if (!File.Exists(targetCrypttab))
+        {
+            throw new InvalidOperationException("target rootfs crypttab is missing: " + targetCrypttab);
+        }
+
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(targetCrypttab);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException("could not read target rootfs crypttab: " + targetCrypttab, ex);
+        }
+
+        var activeLines = lines.Where(IsActiveCrypttabLine).ToArray();
+        if (activeLines.Length > 0)
+        {
+            var configuredMode = activeLines.Length == 1
+                ? CrypttabDataUnlockMode(activeLines)
+                : null;
+            return configuredMode
+                ?? throw new InvalidOperationException(
+                    "target rootfs crypttab must be empty or contain exactly one valid homeharbor-data entry: " + targetCrypttab);
+        }
+
+        if (currentDataUnlockMode is not ("passphrase" or "tpm2"))
+        {
+            throw new InvalidOperationException("current data unlock mode is unsupported: " + currentDataUnlockMode);
+        }
+
+        // Rootfs images intentionally ship an empty crypttab. Data-device identity and
+        // unlock policy live on the persistent state partition, so an empty target file
+        // inherits the already-validated current mode instead of inventing new policy.
+        return currentDataUnlockMode;
+    }
+
+    private static string? CrypttabDataUnlockMode(IEnumerable<string> lines)
+    {
         foreach (var rawLine in lines)
         {
             var line = rawLine.Trim();
-            if (line.Length == 0 || line.StartsWith('#'))
+            if (!IsActiveCrypttabLine(line))
             {
                 continue;
             }
@@ -1253,6 +1436,12 @@ internal static class OtaApplyCommand
         return null;
     }
 
+    private static bool IsActiveCrypttabLine(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.Length > 0 && !trimmed.StartsWith('#');
+    }
+
     private static void GuardDataUnlockCompatibility(string current, string target)
     {
         if (current is not ("passphrase" or "tpm2"))
@@ -1271,6 +1460,8 @@ internal static class OtaApplyCommand
         var builder = new StringBuilder();
         _ = builder.AppendLine("OTA bundle verified.");
         _ = builder.AppendLine("version=" + plan.Version);
+        _ = builder.AppendLine("releaseSequence=" + plan.ReleaseSequence.ToString(CultureInfo.InvariantCulture));
+        _ = builder.AppendLine("trustedReleaseFloor=" + plan.TrustedReleaseFloor.ToString(CultureInfo.InvariantCulture));
         _ = builder.AppendLine("packageKind=" + plan.PackageKind);
         _ = builder.AppendLine("channel=" + plan.Channel);
         _ = builder.AppendLine("kernelChannel=" + plan.KernelChannel);
@@ -1328,6 +1519,7 @@ internal static class OtaApplyCommand
         _ = builder.AppendLine("HOMEHARBOR_MODULES_DESCRIPTOR_DIGEST=" + plan.ModulesDescriptorDigest);
         _ = builder.AppendLine("HOMEHARBOR_FIRMWARE_DESCRIPTOR_DIGEST=" + plan.FirmwareDescriptorDigest);
         _ = builder.AppendLine("HOMEHARBOR_VERSION=" + plan.Version);
+        _ = builder.AppendLine(ReleaseSequence.OsReleaseKey + "=" + plan.ReleaseSequence.ToString(CultureInfo.InvariantCulture));
         var addonList = AddonList(plan.TargetAddons);
         if (!string.IsNullOrWhiteSpace(addonList))
         {
@@ -1362,6 +1554,7 @@ internal static class OtaApplyCommand
             ["modulesLogical"] = plan.ModulesLogical,
             ["mokManagerHash"] = plan.MokManagerHash,
             ["recoveryHash"] = plan.RecoveryHash,
+            ["releaseSequence"] = plan.ReleaseSequence,
             ["rootDescriptorDigest"] = plan.RootDescriptorDigest,
             ["rootfsHash"] = plan.RootfsHash,
             ["rootLogical"] = plan.RootLogical,
@@ -1437,6 +1630,39 @@ internal static class OtaApplyCommand
         await RunRequiredAsync(runner, "dd", ["if=" + image, "of=" + device, "bs=4M", "conv=fsync,notrunc", "status=progress"], "failed to write raw partition image", cancellationToken, stream: true);
     }
 
+    private static async Task WriteCompletePartitionImageAsync(
+        ICommandRunner runner,
+        string image,
+        string device,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(image))
+        {
+            throw new InvalidOperationException(label + " complete partition image is missing: " + image);
+        }
+        if (!await IsBlockDeviceAsync(runner, device, cancellationToken))
+        {
+            throw new InvalidOperationException(label + " block device is missing: " + device);
+        }
+
+        var sizeResult = await runner.RunAsync("blockdev", ["--getsize64", device], cancellationToken: cancellationToken);
+        _ = sizeResult.EnsureSuccess("failed to read complete partition size");
+        if (!long.TryParse(sizeResult.Stdout.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var deviceSize) ||
+            deviceSize <= 0 || new FileInfo(image).Length != deviceSize)
+        {
+            throw new InvalidOperationException(label + " image size does not exactly match its target partition");
+        }
+
+        await RunRequiredAsync(
+            runner,
+            "dd",
+            ["if=" + image, "of=" + device, "bs=4M", "conv=fsync", "status=progress"],
+            "failed to write complete " + label + " partition image",
+            cancellationToken,
+            stream: true);
+    }
+
     private static async Task<bool> IsBlockDeviceAsync(ICommandRunner runner, string path, CancellationToken cancellationToken)
     {
         var result = await runner.RunAsync("test", ["-b", path], cancellationToken: cancellationToken);
@@ -1457,6 +1683,43 @@ internal static class OtaApplyCommand
             new CommandRunOptions(StreamOutput: stream, StreamError: stream),
             cancellationToken);
         _ = result.EnsureSuccess(message);
+    }
+
+    internal static TrustedReleaseAnchors TrustedCurrentReleaseAnchors(
+        string osReleasePath,
+        string cmdlinePath,
+        bool allowSequenceBootstrap)
+    {
+        var rootSequence = ReleaseSequence.ReadOptionalOsRelease(osReleasePath);
+        var kernelSequence = ReleaseSequence.ReadOptionalKernelCommandLine(cmdlinePath);
+        if (!allowSequenceBootstrap && (rootSequence is null || kernelSequence is null))
+        {
+            throw new InvalidOperationException(
+                "current verified rootfs and signed kernel must both carry releaseSequence; " +
+                "use --allow-sequence-bootstrap only while transitioning both components from a legacy image");
+        }
+
+        return new TrustedReleaseAnchors(rootSequence ?? 0, kernelSequence ?? 0);
+    }
+
+    internal static void RequireSystemBundleMatchesRunningKernel(long targetSequence, long runningKernelSequence)
+    {
+        _ = ReleaseSequence.RequirePositive(targetSequence, "system OTA releaseSequence");
+        if (runningKernelSequence < 0)
+        {
+            throw new InvalidOperationException("running kernel releaseSequence cannot be negative");
+        }
+        if (targetSequence > runningKernelSequence)
+        {
+            throw new InvalidOperationException(
+                $"system OTA releaseSequence {targetSequence} is newer than the running kernel sequence {runningKernelSequence}; " +
+                "apply and boot the matching kernel bundle first");
+        }
+        if (targetSequence != runningKernelSequence)
+        {
+            throw new InvalidOperationException(
+                $"system OTA releaseSequence {targetSequence} must exactly match the running kernel sequence {runningKernelSequence}");
+        }
     }
 
     private static string RequiredManifestString(JsonElement element, string name)
@@ -1484,16 +1747,25 @@ internal static class OtaApplyCommand
 
     private sealed record VerifiedBundleManifest(string TopDirectory, string Path, string Sha256);
 
+    internal sealed record TrustedReleaseAnchors(long Root, long Kernel)
+    {
+        public long Floor => Math.Max(Root, Kernel);
+    }
+
     private sealed record OtaApplyOptions(
         string Bundle,
         string PublicKey,
         string StateDir,
+        string WorkDirectory,
         string ChannelFile,
         string? Channel,
         string KernelChannelFile,
         string? KernelChannel,
         string Esp,
         string BootEnv,
+        string CurrentOsRelease,
+        string CurrentCmdline,
+        bool AllowSequenceBootstrap,
         bool DryRun,
         bool Reboot,
         string DataUnlockMetadata,
@@ -1524,12 +1796,16 @@ internal static class OtaApplyCommand
                 new Argument<string>("bundle") { Description = "HomeHarbor OTA bundle." },
                 StringOption("--public-key", "/etc/homeharbor/release.pub.pem", "Release public key."),
                 StringOption("--state-dir", "/var/lib/homeharbor/ota", "OTA state directory."),
+                StringOption("--work-dir", "/homeharbor-data/.homeharbor-ota-work", "Root-owned OTA extraction work directory."),
                 NullableStringOption("--channel-file", "OTA channel file."),
                 NullableStringOption("--channel", "Expected OTA release channel."),
                 NullableStringOption("--kernel-channel-file", "Kernel channel file."),
                 NullableStringOption("--kernel-channel", "Expected kernel channel."),
                 StringOption("--esp", "/efi", "EFI system partition mount path."),
-                StringOption("--boot-env", "/run/homeharbor/boot.env", "Current boot environment file."),
+                StringOption("--boot-env", "/run/homeharbor-boot/boot.env", "Current boot environment file."),
+                StringOption("--current-os-release", "/usr/lib/os-release", "Verified current rootfs os-release path."),
+                StringOption("--current-cmdline", "/proc/cmdline", "Signed current kernel command line path."),
+                new Option<bool>("--allow-sequence-bootstrap") { Description = "Allow a controlled transition from a legacy image missing releaseSequence anchors." },
                 new Option<bool>("--dry-run") { Description = "Print the OTA plan without applying it." },
                 new Option<bool>("--reboot") { Description = "Reboot after applying the OTA." },
                 new Option<bool>("--no-reboot") { Description = "Do not reboot after applying the OTA." },
@@ -1556,12 +1832,16 @@ internal static class OtaApplyCommand
                 parseResult.GetValue(options.Bundle)!,
                 parseResult.GetValue(options.PublicKey)!,
                 stateDir,
+                parseResult.GetValue(options.WorkDirectory)!,
                 channelFile,
                 parseResult.GetValue(options.Channel),
                 kernelChannelFile,
                 parseResult.GetValue(options.KernelChannel),
                 parseResult.GetValue(options.Esp)!,
                 parseResult.GetValue(options.BootEnv)!,
+                parseResult.GetValue(options.CurrentOsRelease)!,
+                parseResult.GetValue(options.CurrentCmdline)!,
+                parseResult.GetValue(options.AllowSequenceBootstrap),
                 parseResult.GetValue(options.DryRun),
                 RebootValue(parseResult, options),
                 parseResult.GetValue(options.DataUnlockMetadata)!,
@@ -1605,12 +1885,16 @@ internal static class OtaApplyCommand
             Argument<string> Bundle,
             Option<string> PublicKey,
             Option<string> StateDir,
+            Option<string> WorkDirectory,
             Option<string?> ChannelFile,
             Option<string?> Channel,
             Option<string?> KernelChannelFile,
             Option<string?> KernelChannel,
             Option<string> Esp,
             Option<string> BootEnv,
+            Option<string> CurrentOsRelease,
+            Option<string> CurrentCmdline,
+            Option<bool> AllowSequenceBootstrap,
             Option<bool> DryRun,
             Option<bool> Reboot,
             Option<bool> NoReboot,
@@ -1631,12 +1915,16 @@ internal static class OtaApplyCommand
                 command.Arguments.Add(Bundle);
                 command.Options.Add(PublicKey);
                 command.Options.Add(StateDir);
+                command.Options.Add(WorkDirectory);
                 command.Options.Add(ChannelFile);
                 command.Options.Add(Channel);
                 command.Options.Add(KernelChannelFile);
                 command.Options.Add(KernelChannel);
                 command.Options.Add(Esp);
                 command.Options.Add(BootEnv);
+                command.Options.Add(CurrentOsRelease);
+                command.Options.Add(CurrentCmdline);
+                command.Options.Add(AllowSequenceBootstrap);
                 command.Options.Add(DryRun);
                 command.Options.Add(Reboot);
                 command.Options.Add(NoReboot);
@@ -1665,6 +1953,8 @@ internal static class OtaApplyCommand
 
     private sealed record OtaApplyPlan(
         string Version,
+        long ReleaseSequence,
+        long TrustedReleaseFloor,
         string PackageKind,
         string Channel,
         string KernelChannel,

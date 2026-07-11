@@ -19,6 +19,8 @@ export function Sparkline({
   color = "currentColor",
   filled = true,
 }: SparklineProps) {
+  const gradientId = useId();
+
   if (data.length < 2) {
     return (
       <svg
@@ -50,8 +52,6 @@ export function Sparkline({
     )
     .join(" ");
   const area = `${line} L${width} ${height} L0 ${height} Z`;
-  const gradientId = useId();
-
   return (
     <svg
       width={width}

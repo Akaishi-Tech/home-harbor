@@ -19,7 +19,8 @@ public sealed class StorageController(
     public async Task<IActionResult> Check([FromBody] StorageHealthRequest request, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
-        if (resolved is null) return BadRequest(new { error = "Create a family space first." });
+        if (resolved is null)
+            return Conflict(new { error = "Create a family space first.", code = "family-space-not-ready" });
 
         var snapshot = health.Check(resolved.Value);
         _ = db.StorageHealthSnapshots.Add(snapshot);
@@ -28,6 +29,7 @@ public sealed class StorageController(
     }
 
     [HttpGet("health")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> History([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);

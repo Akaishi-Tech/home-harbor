@@ -1,4 +1,6 @@
 using HomeHarbor.Api.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace HomeHarbor.Tests;
 
@@ -6,57 +8,107 @@ namespace HomeHarbor.Tests;
 public sealed class SetupPairingServiceTests
 {
     [TestMethod]
-    public void IsValid_Returns_False_For_Null_Or_Blank_Code()
+    public void BootstrapCode_Is_Read_From_RootProvisioned_File_And_Compared_Case_Insensitively()
     {
-        var pairings = CreateService();
+        using var fixture = PairingFixture.Create();
+        File.WriteAllText(fixture.Options.BootstrapCodePath, "ABCD-EFGH-JKLM-NPQR\n");
 
-        Assert.IsFalse(pairings.IsValid(null));
-        Assert.IsFalse(pairings.IsValid(""));
-        Assert.IsFalse(pairings.IsValid("   "));
+        Assert.IsTrue(fixture.Service.IsBootstrapCodeValid("  abcd-efgh-jklm-npqr  "));
+        Assert.IsFalse(fixture.Service.IsBootstrapCodeValid("ABCD-EFGH-JKLM-NPQX"));
     }
 
     [TestMethod]
-    public void IsValid_Returns_True_For_Current_Ticket_Code()
+    public void Missing_BootstrapCode_Fails_Closed()
     {
-        var pairings = CreateService();
-        var ticket = pairings.GetOrCreate("https://homeharbor.test");
+        using var fixture = PairingFixture.Create();
 
-        Assert.IsTrue(pairings.IsValid(ticket.Code));
+        Assert.IsFalse(fixture.Service.IsBootstrapCodeValid("ABCD-EFGH-JKLM-NPQR"));
     }
 
     [TestMethod]
-    public void IsValid_Trims_And_Ignores_Code_Case()
+    public void ConsumeBootstrapCode_Invalidates_In_Process_And_Writes_Agent_Request_Contract()
     {
-        var pairings = CreateService();
-        var ticket = pairings.GetOrCreate("https://homeharbor.test");
+        using var fixture = PairingFixture.Create();
+        File.WriteAllText(fixture.Options.BootstrapCodePath, "ABCD-EFGH-JKLM-NPQR");
 
-        Assert.IsTrue(pairings.IsValid($"  {ticket.Code.ToLowerInvariant()}  "));
+        fixture.Service.ConsumeBootstrapCode("ABCD-EFGH-JKLM-NPQR");
+
+        Assert.IsFalse(fixture.Service.IsBootstrapCodeValid("ABCD-EFGH-JKLM-NPQR"));
+        Assert.AreEqual("consume", File.ReadAllText(fixture.Options.ConsumeRequestPath).Trim());
+        Assert.IsTrue(File.Exists(fixture.Options.BootstrapCodePath), "The unprivileged API must not delete the root-owned code directly.");
     }
 
     [TestMethod]
-    public void Consume_Allows_Null_Or_Blank_Code_As_No_Op()
+    public void BootstrapComplete_Uses_RootOwned_Marker()
     {
-        var pairings = CreateService();
-        var ticket = pairings.GetOrCreate("https://homeharbor.test");
+        using var fixture = PairingFixture.Create();
+        Assert.IsFalse(fixture.Service.IsBootstrapComplete());
 
-        pairings.Consume(null);
-        pairings.Consume("");
-        pairings.Consume("   ");
+        File.WriteAllText(fixture.Options.BootstrapCompletePath, "complete\n");
 
-        Assert.IsTrue(pairings.IsValid(ticket.Code));
+        Assert.IsTrue(fixture.Service.IsBootstrapComplete());
     }
 
     [TestMethod]
-    public void Consume_Invalidates_Current_Ticket_Code()
+    public void DeviceCode_Is_Single_Use()
     {
-        var pairings = CreateService();
-        var ticket = pairings.GetOrCreate("https://homeharbor.test");
+        using var fixture = PairingFixture.Create();
+        var familyId = Guid.NewGuid();
+        var ticket = fixture.Service.GetOrCreate("https://homeharbor.test", familyId);
 
-        pairings.Consume(ticket.Code);
-
-        Assert.IsFalse(pairings.IsValid(ticket.Code));
+        Assert.IsTrue(fixture.Service.IsDeviceCodeValid(ticket.Code));
+        Assert.IsTrue(fixture.Service.TryConsumeDeviceCode(ticket.Code, out var consumed));
+        Assert.AreEqual(familyId, consumed!.FamilyId);
+        Assert.IsFalse(fixture.Service.IsDeviceCodeValid(ticket.Code));
+        Assert.IsFalse(fixture.Service.TryConsumeDeviceCode(ticket.Code, out _));
     }
 
-    private static SetupPairingService CreateService()
-        => new(new TokenGenerator());
+    [TestMethod]
+    public void DeviceCode_Is_Placed_In_Url_Fragment_Not_Http_Request_Target()
+    {
+        using var fixture = PairingFixture.Create();
+
+        var ticket = fixture.Service.GetOrCreate("https://homeharbor.test/base/", Guid.NewGuid());
+        var uri = new Uri(ticket.PairingUrl);
+
+        Assert.AreEqual("/base/pair", uri.AbsolutePath);
+        Assert.AreEqual(string.Empty, uri.Query);
+        Assert.AreEqual($"#code={Uri.EscapeDataString(ticket.Code)}", uri.Fragment);
+    }
+
+    private sealed class PairingFixture : IDisposable
+    {
+        private PairingFixture(string root, SetupPairingOptions options, SetupPairingService service)
+        {
+            Root = root;
+            Options = options;
+            Service = service;
+        }
+
+        public string Root { get; }
+        public SetupPairingOptions Options { get; }
+        public SetupPairingService Service { get; }
+
+        public static PairingFixture Create()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "homeharbor-pairing-" + Guid.NewGuid().ToString("N"));
+            _ = Directory.CreateDirectory(root);
+            var options = new SetupPairingOptions
+            {
+                BootstrapCodePath = Path.Combine(root, "bootstrap-code"),
+                BootstrapCompletePath = Path.Combine(root, "bootstrap-complete"),
+                ConsumeRequestPath = Path.Combine(root, "consume-request")
+            };
+            var service = new SetupPairingService(
+                new TokenGenerator(),
+                Microsoft.Extensions.Options.Options.Create(options),
+                NullLogger<SetupPairingService>.Instance);
+            return new PairingFixture(root, options, service);
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true);
+        }
+    }
 }

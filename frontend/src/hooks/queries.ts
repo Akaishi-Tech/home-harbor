@@ -2,12 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, post } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import { authStore } from "@/lib/auth-store";
+import { authFromResponse } from "@/lib/auth";
 import { encryptVault } from "@/lib/vault";
+import { i18n } from "@/i18n";
 import type {
-  AuthResponse,
   BackupTarget,
   Container,
   DashboardData,
+  DevicePairingResponse,
   DeviceRecord,
   OtaStatus,
   Overview,
@@ -36,31 +38,42 @@ export type ContainerAction = "start" | "stop" | "restart";
 export function useSetupStatus() {
   return useQuery({
     queryKey: queryKeys.setup,
-    queryFn: () => api<SetupStatus>("/api/setup"),
+    queryFn: ({ signal }) =>
+      api<SetupStatus>("/api/setup", { auth: false, signal }),
   });
 }
 
-export function usePairing(enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.pairing,
-    queryFn: () => api<PairingTicket>("/api/setup/pairing"),
-    enabled,
-  });
+function setupCodeHeaders(setupCode: string): HeadersInit {
+  return { "X-HomeHarbor-Setup-Code": setupCode };
 }
 
-export function useStorageInventory(enabled = true) {
+export function useStorageInventory(setupCode: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.storageInventory,
-    queryFn: () => api<StorageInventory>("/api/setup/storage/inventory"),
-    enabled,
+    queryFn: ({ signal }) =>
+      api<StorageInventory>("/api/setup/storage/inventory", {
+        auth: false,
+        headers: setupCodeHeaders(setupCode),
+        signal,
+      }),
+    enabled: enabled && Boolean(setupCode),
     staleTime: 30_000,
   });
 }
 
-export function useStorageStatus(options: { poll?: boolean } = {}) {
+export function useStorageStatus(
+  setupCode: string,
+  options: { poll?: boolean; enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: queryKeys.storageStatus,
-    queryFn: () => api<StorageApplyStatus>("/api/setup/storage/status"),
+    queryFn: ({ signal }) =>
+      api<StorageApplyStatus>("/api/setup/storage/status", {
+        auth: false,
+        headers: setupCodeHeaders(setupCode),
+        signal,
+      }),
+    enabled: (options.enabled ?? true) && Boolean(setupCode),
     refetchInterval: options.poll ? 2_000 : false,
   });
 }
@@ -79,10 +92,11 @@ export function usePolicy() {
   });
 }
 
-export function useOta() {
+export function useOta(enabled = true) {
   return useQuery({
     queryKey: queryKeys.ota,
     queryFn: () => api<OtaStatus>("/api/ota/status"),
+    enabled,
   });
 }
 
@@ -136,10 +150,11 @@ export function useSmbCredentials() {
   });
 }
 
-export function useContainers() {
+export function useContainers(enabled = true) {
   return useQuery({
     queryKey: queryKeys.containers,
     queryFn: () => api<Container[]>("/api/containers"),
+    enabled,
   });
 }
 
@@ -153,22 +168,46 @@ export function useVaultItems() {
 export function useVaultItem(id: string | null, enabled = true) {
   return useQuery({
     queryKey: id ? queryKeys.vaultItem(id) : queryKeys.vaultItem(""),
-    queryFn: () => api<VaultItem>(`/api/vault/items/${id}`),
+    queryFn: ({ signal }) =>
+      api<VaultItem>(`/api/vault/items/${encodeURIComponent(id ?? "")}`, {
+        signal,
+      }),
     enabled: enabled && Boolean(id),
   });
 }
 
 export function useLogin() {
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { displayName: string; password: string }) =>
-      post<AuthResponse>("/api/identity/login", input),
-    onSuccess: (response) => {
-      authStore.setFromResponse(response);
+    mutationFn: async (input: { displayName: string; password: string }) => {
+      const response = await post<unknown>("/api/identity/login", input, false);
+      return authFromResponse(response);
+    },
+    onSuccess: (auth) => {
+      // Query keys are deliberately family-agnostic. Never expose data cached
+      // for a previous signed-in member to the new session.
+      queryClient.removeQueries();
+      authStore.set(auth);
     },
   });
 }
 
+export function useRecoverOwner() {
+  return useMutation({
+    mutationFn: (input: { recoveryCode: string; newPassword: string }) =>
+      post<unknown>("/api/identity/recover-owner", input, false),
+  });
+}
+
+export function useRotateRecoveryCode() {
+  return useMutation({
+    mutationFn: (input: { currentPassword: string }) =>
+      post<unknown>("/api/identity/recovery-code/rotate", input),
+  });
+}
+
 export function useLogout() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
       try {
@@ -177,29 +216,41 @@ export function useLogout() {
         // best-effort: clear local session regardless of server outcome
       }
     },
-    onSettled: () => authStore.clear(),
+    onSettled: () => {
+      authStore.clear();
+      queryClient.clear();
+    },
   });
 }
 
 export function useCompleteSetup() {
   return useMutation({
-    mutationFn: (input: {
+    mutationFn: async (input: {
       familyName: string;
       ownerDisplayName: string;
       ownerPassword: string;
       deviceName: string;
       pairingCode: string;
-    }) => api<SetupResponse>("/api/setup", { body: input }),
+    }) => {
+      const response = await api<SetupResponse>("/api/setup", {
+        auth: false,
+        body: input,
+      });
+      authFromResponse(response?.auth);
+      return response;
+    },
     onSuccess: (response) => {
       authStore.setFromResponse(response.auth);
     },
   });
 }
 
-export function useStorageRecommendation() {
+export function useStorageRecommendation(setupCode: string) {
   return useMutation({
     mutationFn: (profile: StorageUseProfile) =>
       api<StorageRecommendation>("/api/setup/storage/recommendation", {
+        auth: false,
+        headers: setupCodeHeaders(setupCode),
         body: profile,
       }),
   });
@@ -217,7 +268,12 @@ export function useStoragePlan() {
       dataProfile?: string;
       metadataProfile?: string;
       allowRemovable: boolean;
-    }) => api<StoragePlan>("/api/setup/storage/plan", { body: input }),
+      pairingCode: string;
+    }) =>
+      api<StoragePlan>("/api/setup/storage/plan", {
+        auth: false,
+        body: input,
+      }),
   });
 }
 
@@ -228,8 +284,12 @@ export function useStorageApply() {
       planId: string;
       confirmation: string;
       recoveryPassphrase: string;
+      pairingCode: string;
     }) =>
-      api<StorageApplyStatus>("/api/setup/storage/apply", { body: input }),
+      api<StorageApplyStatus>("/api/setup/storage/apply", {
+        auth: false,
+        body: input,
+      }),
     onSuccess: (status) => {
       queryClient.setQueryData(queryKeys.storageStatus, status);
     },
@@ -241,6 +301,9 @@ export function useCreateDevice() {
   return useMutation({
     mutationFn: async (input: { displayName: string; kind: string }) => {
       const ticket = await api<PairingTicket>("/api/setup/pairing");
+      if (!ticket.code) {
+        throw new Error(i18n.t("api.missingPairingCode"));
+      }
       return post<unknown>("/api/devices", {
         displayName: input.displayName,
         kind: input.kind,
@@ -256,11 +319,32 @@ export function useCreateDevice() {
   });
 }
 
+export function usePairDevice() {
+  return useMutation({
+    mutationFn: (input: {
+      displayName: string;
+      kind: "browser" | "mobile" | "desktop";
+      pairingCode: string;
+    }) =>
+      post<DevicePairingResponse>(
+        "/api/devices",
+        {
+          displayName: input.displayName,
+          kind: input.kind,
+          pairingCode: input.pairingCode,
+          issueWebDavToken: true,
+          scope: "All",
+        },
+        false,
+      ),
+  });
+}
+
 export function useCreateBackup() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: { repositoryUri: string }) =>
-      post<unknown>("/api/backups/one-click", input),
+      post<unknown>("/api/backups/targets", input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.backupTargets });
       queryClient.invalidateQueries({ queryKey: queryKeys.overview });
@@ -331,7 +415,9 @@ export function useDeleteVaultItem() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api<unknown>(`/api/vault/items/${id}`, { method: "DELETE" }),
+      api<unknown>(`/api/vault/items/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
     onSuccess: (_response, id) => {
       queryClient.removeQueries({ queryKey: queryKeys.vaultItem(id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.overview });
@@ -357,7 +443,9 @@ export function useUninstallApp() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api<unknown>(`/api/apps/installs/${id}`, { method: "DELETE" }),
+      api<unknown>(`/api/apps/installs/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.catalog });
       queryClient.invalidateQueries({ queryKey: queryKeys.containers });
@@ -401,7 +489,9 @@ export function useRevokeSmbCredential() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api(`/api/smb/credentials/${id}`, { method: "DELETE" }),
+      api(`/api/smb/credentials/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.smbCredentials });
       const previous = queryClient.getQueryData<SmbCredential[]>(
@@ -454,7 +544,10 @@ export function useContainerAction() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, action }: { id: string; action: ContainerAction }) =>
-      post<unknown>(`/api/containers/${id}/${action}`, {}),
+      post<unknown>(
+        `/api/containers/${encodeURIComponent(id)}/${action}`,
+        {},
+      ),
     onMutate: async ({ id, action }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.containers });
       const previous = queryClient.getQueryData<Container[]>(

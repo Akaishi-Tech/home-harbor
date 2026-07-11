@@ -15,7 +15,10 @@ public sealed class DatabaseModelTests
             new[]
             {
                 "20260704092632_InitialPostgresSchema",
-                "20260704095947_AddOverviewStatisticsIndexes"
+                "20260704095947_AddOverviewStatisticsIndexes",
+                "20260711101552_AddFamilyRecoveryCode",
+                "20260711103029_RemovePersistedPrivateKeys",
+                "20260711103624_FixActiveEntityUniqueness"
             },
             db.Database.GetMigrations().ToArray());
     }
@@ -45,6 +48,12 @@ public sealed class DatabaseModelTests
         AssertHasIndex<SyncStateEntity>(db, nameof(SyncStateEntity.FamilyId), nameof(SyncStateEntity.UpdatedAt));
         AssertHasIndex<WebDavTokenEntity>(db, nameof(WebDavTokenEntity.FamilyId), nameof(WebDavTokenEntity.CreatedAt));
         AssertHasIndex<WireGuardPeerEntity>(db, nameof(WireGuardPeerEntity.FamilyId), nameof(WireGuardPeerEntity.CreatedAt));
+        Assert.IsNull(db.Model.FindEntityType(typeof(WireGuardPeerEntity))?.FindProperty("PrivateKey"));
+        Assert.IsNull(db.Model.FindEntityType(typeof(CertificateEntity))?.FindProperty("PrivateKeyPem"));
+        AssertUniqueIndex<FamilyMemberEntity>(db, null, nameof(FamilyMemberEntity.FamilyId), nameof(FamilyMemberEntity.DisplayName));
+        AssertUniqueIndex<ManagedContainerEntity>(db, "\"DeletedAt\" IS NULL", nameof(ManagedContainerEntity.FamilyId), nameof(ManagedContainerEntity.Name));
+        AssertUniqueIndex<SmbCredentialEntity>(db, "\"RevokedAt\" IS NULL", nameof(SmbCredentialEntity.Username));
+        AssertUniqueIndex<SmbCredentialEntity>(db, "\"RevokedAt\" IS NULL", nameof(SmbCredentialEntity.UnixUser));
     }
 
     private static HomeHarborDbContext CreateDbContext()
@@ -65,5 +74,15 @@ public sealed class DatabaseModelTests
         Assert.IsTrue(
             indexExists,
             $"{typeof(TEntity).Name} is missing index ({string.Join(", ", propertyNames)}).");
+    }
+
+    private static void AssertUniqueIndex<TEntity>(HomeHarborDbContext db, string? filter, params string[] propertyNames)
+    {
+        var entityType = db.Model.FindEntityType(typeof(TEntity));
+        Assert.IsNotNull(entityType);
+        var index = entityType.GetIndexes().Single(candidate =>
+            candidate.Properties.Select(property => property.Name).SequenceEqual(propertyNames));
+        Assert.IsTrue(index.IsUnique);
+        Assert.AreEqual(filter, index.GetFilter());
     }
 }

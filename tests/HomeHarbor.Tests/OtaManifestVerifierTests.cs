@@ -14,6 +14,7 @@ public sealed class OtaManifestVerifierTests
               "schemaVersion": "1",
               "type": "full-system",
               "packageKind": "system",
+              "releaseSequence": 42,
               "version": "0.2.0",
               "channel": "dev",
               "createdAt": "2026-07-05T00:00:00Z",
@@ -29,7 +30,7 @@ public sealed class OtaManifestVerifierTests
         var payload = OtaManifestVerifier.CanonicalPayload(doc.RootElement);
 
         Assert.AreEqual(
-            "{\"bootMode\":\"raw-uki\",\"channel\":\"dev\",\"createdAt\":\"2026-07-05T00:00:00Z\",\"packageKind\":\"system\",\"rootfsHash\":\"root\",\"schemaVersion\":\"1\",\"type\":\"full-system\",\"vbmetaADigest\":\"digest-a\",\"vbmetaAHash\":\"vbmeta-a\",\"vbmetaBDigest\":\"digest-b\",\"vbmetaBHash\":\"vbmeta-b\",\"version\":\"0.2.0\"}\n",
+            "{\"bootMode\":\"raw-uki\",\"channel\":\"dev\",\"createdAt\":\"2026-07-05T00:00:00Z\",\"packageKind\":\"system\",\"releaseSequence\":42,\"rootfsHash\":\"root\",\"schemaVersion\":\"1\",\"type\":\"full-system\",\"vbmetaADigest\":\"digest-a\",\"vbmetaAHash\":\"vbmeta-a\",\"vbmetaBDigest\":\"digest-b\",\"vbmetaBHash\":\"vbmeta-b\",\"version\":\"0.2.0\"}\n",
             payload);
     }
 
@@ -41,6 +42,7 @@ public sealed class OtaManifestVerifierTests
               "schemaVersion": "1",
               "type": "kernel-only",
               "packageKind": "kernel",
+              "releaseSequence": 42,
               "version": "0.2.0",
               "channel": "dev",
               "kernelChannel": "generic",
@@ -50,12 +52,47 @@ public sealed class OtaManifestVerifierTests
               "modulesHash": "modules",
               "firmwareHash": "firmware",
               "recoveryHash": "recovery",
-              "bootHash": "boot"
+              "bootHash": "boot",
+              "bootloaderHash": "selector"
             }
             """);
 
         var payload = OtaManifestVerifier.CanonicalPayload(doc.RootElement);
 
         Assert.Contains("\"type\":\"kernel-only\"", payload);
+        Assert.Contains("\"bootloaderHash\":\"selector\"", payload);
+    }
+
+    [TestMethod]
+    public void CanonicalPayload_Rejects_Missing_ReleaseSequence()
+    {
+        using var doc = JsonDocument.Parse("""
+            {
+              "schemaVersion": "1",
+              "type": "full-system",
+              "packageKind": "system",
+              "version": "0.2.0",
+              "channel": "dev",
+              "createdAt": "2026-07-05T00:00:00Z",
+              "bootMode": "raw-uki"
+            }
+            """);
+
+        var error = Assert.ThrowsExactly<InvalidOperationException>(
+            () => OtaManifestVerifier.CanonicalPayload(doc.RootElement));
+
+        StringAssert.Contains(error.Message, "releaseSequence");
+    }
+
+    [TestMethod]
+    [DataRow("0")]
+    [DataRow("-1")]
+    [DataRow("\"42\"")]
+    public void ReleaseSequenceProperty_Rejects_NonPositive_Or_NonNumeric_Values(string jsonValue)
+    {
+        using var doc = JsonDocument.Parse("{\"releaseSequence\":" + jsonValue + "}");
+
+        _ = Assert.ThrowsExactly<InvalidOperationException>(
+            () => OtaManifestVerifier.ReleaseSequenceProperty(doc.RootElement));
     }
 }

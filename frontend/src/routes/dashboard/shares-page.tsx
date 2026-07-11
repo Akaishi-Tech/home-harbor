@@ -14,6 +14,7 @@ import {
   GlassCardTitle,
 } from "@/components/glass/glass-card";
 import { EmptyState } from "@/components/glass/empty-state";
+import { QueryErrorState } from "@/components/glass/query-error-state";
 import {
   ResultSecretDialog,
   type SecretField,
@@ -139,8 +140,12 @@ export function SharesPage() {
               : jsonSecret(response, t("secretLabels.credentials")),
           );
           credentialForm.reset(credentialDefaults);
+          createCredential.reset();
         },
-        onError: (error) => toast.error(errorMessage(error)),
+        onError: (error) => {
+          toast.error(errorMessage(error));
+          createCredential.reset();
+        },
       },
     );
   }
@@ -239,6 +244,11 @@ export function SharesPage() {
                     <Skeleton key={index} className="h-16 rounded-xl" />
                   ))}
                 </div>
+              ) : shares.isError ? (
+                <QueryErrorState
+                  error={shares.error}
+                  onRetry={() => void shares.refetch()}
+                />
               ) : shares.data && shares.data.length > 0 ? (
                 <ul className="space-y-2">
                   {shares.data.map((share) => (
@@ -387,6 +397,11 @@ export function SharesPage() {
                     <Skeleton key={index} className="h-14 rounded-xl" />
                   ))}
                 </div>
+              ) : credentials.isError ? (
+                <QueryErrorState
+                  error={credentials.error}
+                  onRetry={() => void credentials.refetch()}
+                />
               ) : credentials.data && credentials.data.length > 0 ? (
                 <ul className="space-y-2">
                   {credentials.data.map((credential) => (

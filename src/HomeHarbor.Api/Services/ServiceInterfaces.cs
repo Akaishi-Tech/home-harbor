@@ -25,9 +25,12 @@ public interface IJwtTokenService
 
 public interface ISetupPairingService
 {
-    SetupPairingTicket GetOrCreate(string publicOrigin);
-    bool IsValid(string? code);
-    void Consume(string? code);
+    SetupPairingTicket GetOrCreate(string publicOrigin, Guid familyId);
+    bool IsBootstrapComplete();
+    bool IsBootstrapCodeValid(string? code);
+    bool IsDeviceCodeValid(string? code);
+    bool TryConsumeDeviceCode(string? code, out SetupPairingTicket? ticket);
+    void ConsumeBootstrapCode(string? code);
 }
 
 public interface IFamilyResolver
@@ -45,6 +48,8 @@ public interface IHomeHarborStorageService
     string Resolve(Guid familyId, StorageArea area, string? davPath);
     FileSystemInfo? Stat(Guid familyId, StorageArea area, string? davPath);
     IReadOnlyList<FileSystemInfo> Enumerate(Guid familyId, StorageArea area, string? davPath);
+    IReadOnlyList<FileInfo> EnumerateFiles(Guid familyId, StorageArea area);
+    FileStream OpenRead(Guid familyId, StorageArea area, string? davPath);
     Task WriteFileAsync(Guid familyId, StorageArea area, string? davPath, Stream input, CancellationToken cancellationToken);
     void CreateDirectory(Guid familyId, StorageArea area, string? davPath);
     void Delete(Guid familyId, StorageArea area, string? davPath);
@@ -67,11 +72,6 @@ public interface IHomeHarborStorageService
 public interface IMediaIndexer
 {
     Task<IReadOnlyList<MediaAssetEntity>> IndexAsync(Guid familyId, CancellationToken cancellationToken);
-}
-
-public interface ICertificateService
-{
-    GeneratedCertificate CreateSelfSigned(string hostname, TimeSpan lifetime);
 }
 
 public interface IReverseProxyConfigService
@@ -121,6 +121,7 @@ public interface IRuntimeSignalService
     void RequestSmbApply();
     void RequestContainerApply();
     void RequestSystemAppApply();
+    void RequestCaddyRender();
     Task WriteSmbPasswordAsync(
         Guid credentialId,
         string username,
@@ -139,6 +140,10 @@ public interface IManagedContainerSpecService
     ContainerDefinition Normalize(Guid familyId, Guid containerId, ContainerDefinitionRequest request);
     string Serialize(ContainerDefinition definition);
     ContainerDefinition Deserialize(string json);
+    void EnsurePortsAvailable(
+        ContainerDefinition definition,
+        IEnumerable<ManagedContainerEntity> existingContainers,
+        Guid? excludeContainerId = null);
     string BuildQuadlet(ManagedContainerEntity container);
     string BuildQuadlet(ManagedContainerEntity container, ContainerDefinition definition);
 }

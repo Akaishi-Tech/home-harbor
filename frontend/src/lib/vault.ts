@@ -8,6 +8,8 @@ const VAULT_KEY_ITERATIONS = 310_000;
 const VAULT_KEY_SALT_BYTES = 16;
 const MIN_SUPPORTED_ITERATIONS = 100_000;
 const MAX_SUPPORTED_ITERATIONS = 1_000_000;
+export const MIN_VAULT_SECRET_LENGTH = 12;
+export const MAX_VAULT_SECRET_LENGTH = 1_024;
 
 export type EncryptedVaultPayload = {
   payload: string;
@@ -32,6 +34,13 @@ export async function encryptVault(
   payload: Record<string, string>,
   vaultSecret: string,
 ): Promise<EncryptedVaultPayload> {
+  if (
+    vaultSecret.length < MIN_VAULT_SECRET_LENGTH ||
+    vaultSecret.length > MAX_VAULT_SECRET_LENGTH
+  ) {
+    throw new Error(i18n.t("pages.vault.weakSecret"));
+  }
+
   const salt = crypto.getRandomValues(new Uint8Array(VAULT_KEY_SALT_BYTES));
   const keyHint = buildKeyHint(salt, VAULT_KEY_ITERATIONS);
   const key = await deriveVaultKey(vaultSecret, salt, VAULT_KEY_ITERATIONS, [

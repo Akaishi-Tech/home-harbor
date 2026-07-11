@@ -19,6 +19,7 @@ export type NavItem = {
   to: string;
   icon: ComponentType<LucideProps>;
   end?: boolean;
+  access?: "member" | "admin";
 };
 
 export const navItems: NavItem[] = [
@@ -36,6 +37,7 @@ export const navItems: NavItem[] = [
     descriptionKey: "nav.devices.description",
     to: "/dashboard/devices",
     icon: Smartphone,
+    access: "admin",
   },
   {
     id: "family",
@@ -57,6 +59,7 @@ export const navItems: NavItem[] = [
     descriptionKey: "nav.shares.description",
     to: "/dashboard/shares",
     icon: HardDrive,
+    access: "admin",
   },
   {
     id: "backups",
@@ -64,6 +67,7 @@ export const navItems: NavItem[] = [
     descriptionKey: "nav.backups.description",
     to: "/dashboard/backups",
     icon: Archive,
+    access: "member",
   },
   {
     id: "remote",
@@ -71,6 +75,7 @@ export const navItems: NavItem[] = [
     descriptionKey: "nav.remote.description",
     to: "/dashboard/remote",
     icon: Globe,
+    access: "admin",
   },
   {
     id: "vault",
@@ -78,6 +83,7 @@ export const navItems: NavItem[] = [
     descriptionKey: "nav.vault.description",
     to: "/dashboard/vault",
     icon: KeyRound,
+    access: "admin",
   },
   {
     id: "system",

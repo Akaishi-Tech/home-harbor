@@ -1,9 +1,12 @@
+using System.Data.Common;
+using HomeHarbor.Api.Auth;
 using HomeHarbor.Api.Data;
 using HomeHarbor.Api.Services;
 using HomeHarbor.Core.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using QRCoder;
 
 namespace HomeHarbor.Api.Controllers;
@@ -14,11 +17,16 @@ namespace HomeHarbor.Api.Controllers;
 public sealed class SetupController(
     IServiceProvider services,
     IHomeHarborStorageService storage,
+    IStorageHealthService storageHealth,
     IStorageOobeService storageOobe,
     ITokenGenerator tokenGenerator,
     IJwtTokenService jwtTokens,
-    ISetupPairingService pairings) : ControllerBase
+    ISetupPairingService pairings,
+    IAuthorizationService authorization,
+    IOptions<HomeHarborApiOptions> apiOptions) : ControllerBase
 {
+    private static readonly SemaphoreSlim InitializationGate = new(1, 1);
+
     [HttpGet]
     public async Task<IActionResult> Status(CancellationToken cancellationToken)
     {
@@ -26,14 +34,25 @@ public sealed class SetupController(
         FamilySpaceEntity? family = null;
         if (storageStatus.State == StorageApplyState.Succeeded)
         {
-            var db = services.GetRequiredService<HomeHarborDbContext>();
-            family = await db.FamilySpaces.AsNoTracking().OrderBy(f => f.CreatedAt).FirstOrDefaultAsync(cancellationToken);
+            try
+            {
+                var db = services.GetRequiredService<HomeHarborDbContext>();
+                family = await db.FamilySpaces.AsNoTracking().OrderBy(f => f.CreatedAt).FirstOrDefaultAsync(cancellationToken);
+            }
+            catch (DbException) when (pairings.IsBootstrapComplete())
+            {
+                // The root-owned completion marker keeps setup closed while the database is unavailable.
+            }
         }
+        var initialized = pairings.IsBootstrapComplete() || family is not null;
+        var mayViewFamily = initialized && await CurrentUserIsFamilyAdminAsync();
 
         return Ok(new
         {
-            initialized = family is not null,
-            family = family is null ? null : new { family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt },
+            initialized,
+            family = !mayViewFamily || family is null
+                ? null
+                : new { family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt },
             onboarding = new
             {
                 pairing = "/api/setup/pairing",
@@ -42,12 +61,8 @@ public sealed class SetupController(
             },
             storage = new
             {
-                status = storageStatus.State,
-                storageStatus.Progress,
-                storageStatus.Message,
-                storageStatus.Error,
-                storageStatus.PlanId,
-                storageStatus.UpdatedAt,
+                state = storageStatus.State,
+                ready = storageStatus.State == StorageApplyState.Succeeded,
                 endpoints = new
                 {
                     inventory = "/api/setup/storage/inventory",
@@ -63,12 +78,25 @@ public sealed class SetupController(
     [HttpGet("pairing")]
     public async Task<IActionResult> Pairing(CancellationToken cancellationToken)
     {
-        var storageReady = await storageOobe.IsReadyAsync(cancellationToken);
-        var initialized = storageReady && await IsInitializedAsync(cancellationToken);
-        var ticket = pairings.GetOrCreate(BuildPublicOrigin());
+        var initialized = await IsInitializedAsync(cancellationToken);
+        if (!initialized)
+        {
+            return Ok(new
+            {
+                initialized = false,
+                codeRequired = true,
+                expiresAt = (DateTimeOffset?)null
+            });
+        }
+
+        if (!await CurrentUserIsFamilyAdminAsync()) return PairingDenied();
+
+        var familyId = Guid.Parse(User.FindFirst(AuthClaims.FamilyId)!.Value);
+        var ticket = pairings.GetOrCreate(PublicOriginPolicy.Normalize(apiOptions.Value.PublicOrigin), familyId);
         return Ok(new
         {
-            initialized,
+            initialized = true,
+            codeRequired = false,
             ticket.Code,
             ticket.PairingUrl,
             ticket.ExpiresAt,
@@ -84,9 +112,13 @@ public sealed class SetupController(
     }
 
     [HttpGet("pairing.svg")]
-    public IActionResult PairingSvg()
+    public async Task<IActionResult> PairingSvg(CancellationToken cancellationToken)
     {
-        var ticket = pairings.GetOrCreate(BuildPublicOrigin());
+        if (!await IsInitializedAsync(cancellationToken)) return NotFound();
+        if (!await CurrentUserIsFamilyAdminAsync()) return PairingDenied();
+
+        var familyId = Guid.Parse(User.FindFirst(AuthClaims.FamilyId)!.Value);
+        var ticket = pairings.GetOrCreate(PublicOriginPolicy.Normalize(apiOptions.Value.PublicOrigin), familyId);
         using var generator = new QRCodeGenerator();
         using var data = generator.CreateQrCode(ticket.PairingUrl, QRCodeGenerator.ECCLevel.Q);
         var qr = new SvgQRCode(data);
@@ -97,81 +129,95 @@ public sealed class SetupController(
     [HttpPost]
     public async Task<IActionResult> CreateFamily([FromBody] CreateFamilyRequest request, CancellationToken cancellationToken)
     {
-        if (!await storageOobe.IsReadyAsync(cancellationToken))
+        if (!TryValidateOwnerPassword(request.OwnerPassword, out var passwordError))
         {
-            return Conflict(new { error = "Complete encrypted storage setup before creating a family space." });
+            return BadRequest(new { error = passwordError });
+        }
+        if (TryFindOversizedName(request, out var oversizedField))
+        {
+            return BadRequest(new { error = $"{oversizedField} must not exceed 96 characters." });
         }
 
-        var db = services.GetRequiredService<HomeHarborDbContext>();
-        var existing = await db.FamilySpaces.AsNoTracking().AnyAsync(cancellationToken);
-        if (existing) return Conflict(new { error = "HomeHarbor has already been initialized." });
-        if (!pairings.IsValid(request.PairingCode))
-            return BadRequest(new { error = "Initialization credential is expired or invalid. Please retry setup." });
+        await InitializationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (pairings.IsBootstrapComplete())
+                return Conflict(new { error = "HomeHarbor has already been initialized." });
+            if (!await storageOobe.IsReadyAsync(cancellationToken))
+                return Conflict(new { error = "Complete encrypted storage setup before creating a family space." });
+            var db = services.GetRequiredService<HomeHarborDbContext>();
+            if (await db.FamilySpaces.AsNoTracking().AnyAsync(cancellationToken))
+                return Conflict(new { error = "HomeHarbor has already been initialized." });
+            if (!pairings.IsBootstrapCodeValid(request.PairingCode))
+                return BadRequest(new { error = "Initialization credential is expired or invalid. Check the code shown on the appliance." });
 
-        var now = DateTimeOffset.UtcNow;
-        var family = new FamilySpaceEntity
-        {
-            Id = Guid.NewGuid(),
-            Name = string.IsNullOrWhiteSpace(request.FamilyName) ? "Home" : request.FamilyName.Trim(),
-            OwnerDisplayName = string.IsNullOrWhiteSpace(request.OwnerDisplayName) ? "Owner" : request.OwnerDisplayName.Trim(),
-            CreatedAt = now
-        };
-        var device = new DeviceEntity
-        {
-            Id = Guid.NewGuid(),
-            FamilyId = family.Id,
-            DisplayName = string.IsNullOrWhiteSpace(request.DeviceName) ? "First device" : request.DeviceName.Trim(),
-            Kind = "browser",
-            CreatedAt = now
-        };
-        var owner = new FamilyMemberEntity
-        {
-            Id = Guid.NewGuid(),
-            FamilyId = family.Id,
-            DisplayName = family.OwnerDisplayName,
-            Role = FamilyRoles.Owner,
-            PasswordHash = string.IsNullOrWhiteSpace(request.OwnerPassword)
-                ? null
-                : BCrypt.Net.BCrypt.HashPassword(request.OwnerPassword),
-            CreatedAt = now
-        };
-        var plaintext = tokenGenerator.GenerateSecret();
-        var token = new WebDavTokenEntity
-        {
-            Id = Guid.NewGuid(),
-            FamilyId = family.Id,
-            DeviceId = device.Id,
-            Username = tokenGenerator.GenerateUsername(),
-            TokenHash = BCrypt.Net.BCrypt.HashPassword(plaintext),
-            Scope = WebDavTokenScope.All,
-            Description = "Initial setup token",
-            CreatedAt = now
-        };
+            var familyName = NormalizeRequiredName(request.FamilyName, "Home");
+            var ownerName = NormalizeRequiredName(request.OwnerDisplayName, "Owner");
+            var deviceName = NormalizeRequiredName(request.DeviceName, "First device");
+            var now = DateTimeOffset.UtcNow;
+            var recoveryCode = tokenGenerator.GenerateRecoveryCode();
+            var family = new FamilySpaceEntity
+            {
+                Id = Guid.NewGuid(),
+                Name = familyName,
+                OwnerDisplayName = ownerName,
+                RecoveryCodeHash = BCrypt.Net.BCrypt.HashPassword(recoveryCode),
+                CreatedAt = now
+            };
+            var device = new DeviceEntity
+            {
+                Id = Guid.NewGuid(),
+                FamilyId = family.Id,
+                DisplayName = deviceName,
+                Kind = "browser",
+                CreatedAt = now
+            };
+            var owner = new FamilyMemberEntity
+            {
+                Id = Guid.NewGuid(),
+                FamilyId = family.Id,
+                DisplayName = family.OwnerDisplayName,
+                Role = FamilyRoles.Owner,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.OwnerPassword!),
+                CreatedAt = now
+            };
+            var plaintext = tokenGenerator.GenerateSecret();
+            var token = new WebDavTokenEntity
+            {
+                Id = Guid.NewGuid(),
+                FamilyId = family.Id,
+                DeviceId = device.Id,
+                Username = tokenGenerator.GenerateUsername(),
+                TokenHash = BCrypt.Net.BCrypt.HashPassword(plaintext),
+                Scope = WebDavTokenScope.All,
+                Description = "Initial setup token",
+                CreatedAt = now
+            };
 
-        _ = db.FamilySpaces.Add(family);
-        _ = db.Devices.Add(device);
-        _ = db.FamilyMembers.Add(owner);
-        _ = db.WebDavTokens.Add(token);
-        var tokenId = jwtTokens.GenerateTokenId();
-        var session = new MemberSessionEntity
-        {
-            Id = Guid.NewGuid(),
-            FamilyId = family.Id,
-            MemberId = owner.Id,
-            TokenHash = JwtTokenService.HashTokenId(tokenId),
-            CreatedAt = now,
-            ExpiresAt = now.Add(jwtTokens.UserAccessTokenLifetime)
-        };
-        _ = db.MemberSessions.Add(session);
-        _ = await db.SaveChangesAsync(cancellationToken);
-        storage.EnsureFamilyRoots(family.Id);
-        pairings.Consume(request.PairingCode);
+            _ = db.FamilySpaces.Add(family);
+            _ = db.Devices.Add(device);
+            _ = db.FamilyMembers.Add(owner);
+            _ = db.WebDavTokens.Add(token);
+            var tokenId = jwtTokens.GenerateTokenId();
+            var session = new MemberSessionEntity
+            {
+                Id = Guid.NewGuid(),
+                FamilyId = family.Id,
+                MemberId = owner.Id,
+                TokenHash = JwtTokenService.HashTokenId(tokenId),
+                CreatedAt = now,
+                ExpiresAt = now.Add(jwtTokens.UserAccessTokenLifetime)
+            };
+            _ = db.MemberSessions.Add(session);
+            storage.EnsureFamilyRoots(family.Id);
+            _ = db.StorageHealthSnapshots.Add(storageHealth.Check(family.Id));
+            _ = await db.SaveChangesAsync(cancellationToken);
+            pairings.ConsumeBootstrapCode(request.PairingCode);
 
-        var recoveryCode = tokenGenerator.GenerateRecoveryCode();
-        var keyHint = $"family-{family.Id:N}-v1";
+            var keyHint = $"family-{family.Id:N}-v1";
 
-        return Ok(new
-        {
+            return Ok(new
+            {
             family = new { family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt },
             device = new { device.Id, device.DisplayName, device.Kind },
             owner = new { owner.Id, owner.DisplayName, owner.Role },
@@ -187,28 +233,66 @@ public sealed class SetupController(
             webDav = new { token.Username, token = plaintext, token.Scope },
             encryption = new
             {
-                mode = "client-side-e2ee",
+                mode = "vault-client-encryption-only",
+                filesAndPhotos = "server-readable; protected by appliance storage encryption at rest",
                 localStorage = "default",
                 atRest = "appliance-data-luks2",
-                keyHint,
-                recoveryCode
+                keyHint
             }
-        });
+            });
+        }
+        finally
+        {
+            _ = InitializationGate.Release();
+        }
     }
 
-    private string BuildPublicOrigin()
+    private async Task<bool> CurrentUserIsFamilyAdminAsync()
+        => (await authorization.AuthorizeAsync(User, null, AuthorizationPolicies.FamilyAdmin)).Succeeded;
+
+    private IActionResult PairingDenied()
+        => User.Identity?.IsAuthenticated == true ? Forbid() : Unauthorized();
+
+    private static bool TryValidateOwnerPassword(string? password, out string error)
     {
-        var scheme = Request.Headers.TryGetValue("X-Forwarded-Proto", out var forwardedProto)
-            ? forwardedProto.ToString().Split(',')[0].Trim()
-            : Request.Scheme;
-        var host = Request.Headers.TryGetValue("X-Forwarded-Host", out var forwardedHost)
-            ? forwardedHost.ToString().Split(',')[0].Trim()
-            : Request.Host.Value;
-        return $"{scheme}://{host}";
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 12)
+        {
+            error = "ownerPassword must be at least 12 characters.";
+            return false;
+        }
+        if (password.Length > 128)
+        {
+            error = "ownerPassword must not exceed 128 characters.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string NormalizeRequiredName(string? value, string fallback)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+        return normalized;
+    }
+
+    private static bool TryFindOversizedName(CreateFamilyRequest request, out string fieldName)
+    {
+        (string Name, string? Value)[] names =
+        [
+            ("familyName", request.FamilyName),
+            ("ownerDisplayName", request.OwnerDisplayName),
+            ("deviceName", request.DeviceName)
+        ];
+        var oversized = names.FirstOrDefault(item => item.Value?.Trim().Length > 96);
+        fieldName = oversized.Name ?? string.Empty;
+        return fieldName.Length > 0;
     }
 
     private async Task<bool> IsInitializedAsync(CancellationToken cancellationToken)
     {
+        if (pairings.IsBootstrapComplete()) return true;
+        if (!await storageOobe.IsReadyAsync(cancellationToken)) return false;
         var db = services.GetRequiredService<HomeHarborDbContext>();
         return await db.FamilySpaces.AsNoTracking().AnyAsync(cancellationToken);
     }

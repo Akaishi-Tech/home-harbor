@@ -13,9 +13,11 @@ internal static partial class AgentProgram
         });
 
         root.Subcommands.Add(CreateFirstbootCommand(runner));
+        root.Subcommands.Add(CreateConsumeSetupBootstrapCommand(runner));
         root.Subcommands.Add(CreatePostgresInitCommand(runner));
         root.Subcommands.Add(CreatePostgresBootstrapCommand(runner));
         root.Subcommands.Add(CreateEnsureCaddyConfigCommand(runner));
+        root.Subcommands.Add(CreateDisplayTlsTrustCommand());
         root.Subcommands.Add(CreateRenderCaddyfileCommand(runner));
         root.Subcommands.Add(CreateStorageHealthCommand(runner));
         root.Subcommands.Add(CreateEnsureSmbConfigCommand(runner));

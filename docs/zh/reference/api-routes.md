@@ -68,6 +68,8 @@
 | Method | Path | 说明 |
 | --- | --- | --- |
 | `POST` | `/api/identity/login` | 匿名：登录 |
+| `POST` | `/api/identity/recover-owner` | 匿名：使用 recovery code 恢复初始 primary owner，或用物理控制台 setup code 为无凭据旧版 owner 完成一次性登记 |
+| `POST` | `/api/identity/recovery-code/rotate` | 仅 owner：验证当前密码并轮换或补建 recovery code |
 | `GET` | `/api/identity/session` | 当前 session |
 | `POST` | `/api/identity/logout` | 登出 |
 

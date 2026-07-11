@@ -9,6 +9,7 @@ import {
   HardDrive,
 } from "lucide-react";
 import { SectionHeader } from "@/components/glass/section-header";
+import { QueryErrorState } from "@/components/glass/query-error-state";
 import {
   GlassCard,
   GlassCardContent,
@@ -21,6 +22,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useMediaIndex, useOta, useOverview, usePolicy } from "@/hooks/queries";
 import { errorMessage, formatBytes, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
+import { isFamilyAdmin } from "@/lib/auth";
 
 function StatusRow({
   label,
@@ -39,7 +42,8 @@ function StatusRow({
 
 export function SystemPage() {
   const overview = useOverview();
-  const ota = useOta();
+  const canManage = isFamilyAdmin(useAuth());
+  const ota = useOta(canManage);
   const policy = usePolicy();
   const mediaIndex = useMediaIndex();
   const { t } = useTranslation();
@@ -53,6 +57,28 @@ export function SystemPage() {
       onSuccess: () => toast.success(t("toast.mediaIndexUpdated")),
       onError: (error) => toast.error(errorMessage(error)),
     });
+  }
+
+  if (overview.isError || ota.isError || policy.isError) {
+    return (
+      <div className="space-y-6">
+        <SectionHeader
+          eyebrow={t("pages.system.eyebrow")}
+          title={t("pages.system.title")}
+          description={t("pages.system.description")}
+        />
+        <GlassCard>
+          <QueryErrorState
+            error={overview.error ?? ota.error ?? policy.error}
+            onRetry={() => {
+              void overview.refetch();
+              void ota.refetch();
+              void policy.refetch();
+            }}
+          />
+        </GlassCard>
+      </div>
+    );
   }
 
   return (
@@ -73,19 +99,28 @@ export function SystemPage() {
           </GlassCardHeader>
           <GlassCardContent className="space-y-1">
             <StatusRow label={t("fields.version")}>
-              {ota.isPending ? (
+              {!canManage ? (
+                t("common.unavailable")
+              ) : ota.isPending ? (
                 <Skeleton className="h-4 w-20" />
               ) : (
                 (ota.data?.version ?? t("common.unknown"))
               )}
             </StatusRow>
             <StatusRow label={t("fields.status")}>
-              {ota.isPending ? (
+              {!canManage ? (
+                t("common.unavailable")
+              ) : ota.isPending ? (
                 <Skeleton className="h-4 w-16" />
               ) : (
                 (ota.data?.updateState ?? t("common.unknown"))
               )}
             </StatusRow>
+            {canManage ? (
+              <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+                {t("pages.system.updaterUnavailable")}
+              </p>
+            ) : null}
           </GlassCardContent>
         </GlassCard>
 
@@ -178,18 +213,23 @@ export function SystemPage() {
                 )}
               </StatusRow>
             </div>
-            <Button
-              className="w-full"
-              onClick={onIndex}
-              disabled={mediaIndex.isPending}
-            >
-              <RefreshCw
-                className={cn("size-4", mediaIndex.isPending && "animate-spin")}
-              />
-              {mediaIndex.isPending
-                ? t("pages.system.indexPending")
-                : t("common.indexMediaLibrary")}
-            </Button>
+            {canManage ? (
+              <Button
+                className="w-full"
+                onClick={onIndex}
+                disabled={mediaIndex.isPending}
+              >
+                <RefreshCw
+                  className={cn(
+                    "size-4",
+                    mediaIndex.isPending && "animate-spin",
+                  )}
+                />
+                {mediaIndex.isPending
+                  ? t("pages.system.indexPending")
+                  : t("common.indexMediaLibrary")}
+              </Button>
+            ) : null}
           </GlassCardContent>
         </GlassCard>
       </div>

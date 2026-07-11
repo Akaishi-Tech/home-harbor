@@ -1,5 +1,9 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -17,6 +21,8 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
     private readonly string _connect;
     private readonly bool _keepVm;
     private readonly bool _deleteDiskOnDispose;
+    private readonly Uri _apiBaseUri = new("https://homeharbor.local");
+    private X509Certificate2? _rootCa;
 
     private LibvirtHomeHarborVm(
         ProcessRunner processes,
@@ -48,8 +54,10 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
     public string Mode { get; }
     public string ReportPath { get; }
     public string IpAddress { get; private set; } = string.Empty;
-    public Uri ApiBaseUri => ProxyBaseUri;
-    public Uri ProxyBaseUri => new($"http://{IpAddress}");
+    public string SetupBootstrapCode { get; private set; } = string.Empty;
+    public string RootCaFingerprint { get; private set; } = string.Empty;
+    public Uri ApiBaseUri => _apiBaseUri;
+    public Uri ProxyBaseUri => ApiBaseUri;
 
     public static async Task<string> InstallFromIsoAsync(
         ProcessRunner processes,
@@ -113,6 +121,9 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
             await vm.SendSerialLineAsync(options.DataPassphrase, cancellationToken);
             await vm.WaitForSerialAsync("login:", TimeSpan.FromMinutes(4), cancellationToken);
             await vm.WaitForNetworkAsync(cancellationToken);
+            await vm.WaitForQemuAgentAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            vm.SetupBootstrapCode = await vm.WaitForSetupBootstrapCodeAsync(cancellationToken);
+            await vm.WaitForCaddyCertificateAsync(cancellationToken);
             var health = await vm.WaitForJsonAsync("/api/system/health", TimeSpan.FromMinutes(3), cancellationToken);
             await vm.WaitForProxyAsync(cancellationToken);
             await vm.WriteReportAsync(health, cancellationToken);
@@ -155,6 +166,8 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _rootCa?.Dispose();
+        _rootCa = null;
         if (_keepVm)
         {
             Console.WriteLine($"Leaving VM and overlay for inspection: {Domain} {Overlay}");
@@ -396,6 +409,11 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
 
     private async Task RunGuestShellAsync(string script, TimeSpan timeout, CancellationToken cancellationToken)
     {
+        _ = await CaptureGuestShellAsync(script, timeout, cancellationToken);
+    }
+
+    private async Task<string> CaptureGuestShellAsync(string script, TimeSpan timeout, CancellationToken cancellationToken)
+    {
         var start = await RunQemuAgentCommandAsync(
             new JsonObject
             {
@@ -432,7 +450,7 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
                 var exitCode = lastReturn["exitcode"]?.GetValue<int>() ?? 0;
                 if (exitCode == 0)
                 {
-                    return;
+                    return DecodeGuestExecData(lastReturn["out-data"]);
                 }
 
                 throw new AssertFailedException(
@@ -534,9 +552,134 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
         return null;
     }
 
+    public HttpClient CreateTrustedHttpClient()
+    {
+        if (_rootCa is null || string.IsNullOrWhiteSpace(IpAddress))
+        {
+            throw new InvalidOperationException("VM HTTPS trust has not been established");
+        }
+
+        var trustedRoot = _rootCa;
+        var targetAddress = IPAddress.Parse(IpAddress);
+        var handler = new SocketsHttpHandler
+        {
+            UseProxy = false,
+            ConnectCallback = async (context, cancellationToken) =>
+            {
+                var socket = new Socket(targetAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                try
+                {
+                    await socket.ConnectAsync(
+                        new IPEndPoint(targetAddress, context.DnsEndPoint.Port),
+                        cancellationToken);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            }
+        };
+        handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
+        {
+            if (certificate is null ||
+                (errors & (SslPolicyErrors.RemoteCertificateNotAvailable | SslPolicyErrors.RemoteCertificateNameMismatch)) != 0)
+            {
+                return false;
+            }
+
+            using var leaf = X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+            using var chain = new X509Chain();
+            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+            return chain.Build(leaf);
+        };
+
+        return new HttpClient(handler)
+        {
+            BaseAddress = ApiBaseUri,
+            Timeout = TimeSpan.FromSeconds(20)
+        };
+    }
+
+    private async Task<string> WaitForSetupBootstrapCodeAsync(CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddMinutes(2);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                var code = (await CaptureGuestShellAsync(
+                    "cat /var/lib/homeharbor/setup/bootstrap-code",
+                    TimeSpan.FromSeconds(10),
+                    cancellationToken)).Trim();
+                if (Regex.IsMatch(code, "^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$", RegexOptions.CultureInvariant))
+                {
+                    return code;
+                }
+            }
+            catch (AssertFailedException)
+            {
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+
+        throw new AssertFailedException("Timed out waiting for the physical setup bootstrap code inside the disposable VM");
+    }
+
+    private async Task WaitForCaddyCertificateAsync(CancellationToken cancellationToken)
+    {
+        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        {
+            BaseAddress = new Uri($"http://{IpAddress}"),
+            Timeout = TimeSpan.FromSeconds(5)
+        };
+        var deadline = DateTimeOffset.UtcNow.AddMinutes(2);
+        Exception? last = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                using var response = await client.GetAsync(CaddyTrustConfiguration.CertificateDownloadPath, cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                    if (bytes.Length is > 0 and <= 1024 * 1024)
+                    {
+                        var certificate = X509Certificate2.CreateFromPem(Encoding.UTF8.GetString(bytes));
+                        var constraints = certificate.Extensions.OfType<X509BasicConstraintsExtension>().FirstOrDefault();
+                        if (constraints?.CertificateAuthority == true)
+                        {
+                            _rootCa?.Dispose();
+                            _rootCa = certificate;
+                            RootCaFingerprint = string.Join(':', SHA256.HashData(certificate.RawData)
+                                .Select(value => value.ToString("X2", CultureInfo.InvariantCulture)));
+                            return;
+                        }
+
+                        certificate.Dispose();
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or CryptographicException)
+            {
+                last = ex;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        }
+
+        throw new AssertFailedException($"Timed out waiting for HomeHarbor public CA certificate: {last}");
+    }
+
     private async Task<JsonObject> WaitForJsonAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        using var client = new HttpClient { BaseAddress = ApiBaseUri, Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateTrustedHttpClient();
+        client.Timeout = TimeSpan.FromSeconds(5);
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
         Exception? last = null;
         while (DateTimeOffset.UtcNow < deadline)
@@ -564,7 +707,8 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
 
     private async Task WaitForProxyAsync(CancellationToken cancellationToken)
     {
-        using var client = new HttpClient { BaseAddress = ProxyBaseUri, Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateTrustedHttpClient();
+        client.Timeout = TimeSpan.FromSeconds(5);
         var deadline = DateTimeOffset.UtcNow.AddMinutes(2);
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -617,6 +761,9 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
                 ["apiHealth"] = health is null ? "not-applicable" : "passed",
                 ["dhcpLease"] = "passed",
                 ["proxy"] = string.Equals(Mode, "normal", StringComparison.Ordinal) ? "passed" : "not-applicable",
+                ["tlsCaTrust"] = string.Equals(Mode, "normal", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(RootCaFingerprint)
+                    ? "passed"
+                    : "not-applicable",
                 ["serialLogin"] = "passed",
                 ["fastbootTcp"] = string.Equals(Mode, "recovery", StringComparison.Ordinal) ? "passed" : "not-applicable"
             },
@@ -630,6 +777,7 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
             ["imageSizeBytes"] = new FileInfo(Image).Length,
             ["ipAddress"] = IpAddress,
             ["mode"] = Mode,
+            ["rootCaSha256"] = string.IsNullOrWhiteSpace(RootCaFingerprint) ? null : RootCaFingerprint,
             ["result"] = "passed",
             ["version"] = Version
         };

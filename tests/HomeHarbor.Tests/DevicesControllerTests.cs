@@ -9,16 +9,14 @@ namespace HomeHarbor.Tests;
 public sealed class DevicesControllerTests
 {
     [TestMethod]
-    public void Register_Requires_Family_Admin()
+    public void Register_Uses_Explicit_Anonymous_Pairing_Flow()
     {
         var method = typeof(DevicesController)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Single(method => method.Name == nameof(DevicesController.Register));
 
-        var authorize = method
-            .GetCustomAttributes<AuthorizeAttribute>()
-            .SingleOrDefault(attribute => attribute.Policy == AuthorizationPolicies.FamilyAdmin);
+        var allowAnonymous = method.GetCustomAttribute<AllowAnonymousAttribute>();
 
-        Assert.IsNotNull(authorize);
+        Assert.IsNotNull(allowAnonymous);
     }
 }

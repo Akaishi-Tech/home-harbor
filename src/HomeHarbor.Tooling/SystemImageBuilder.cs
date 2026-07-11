@@ -68,6 +68,13 @@ public sealed class SystemImageBuilder(
         "/usr/lib/systemd/system/homeharbor-boot-success.service",
         "/usr/lib/systemd/system/homeharbor-smbd.service",
         "/usr/lib/systemd/system/homeharbor-container-apply.path",
+        "/usr/lib/systemd/system/homeharbor-container-apply.service",
+        "/usr/lib/systemd/system/homeharbor-caddy-render.path",
+        "/usr/lib/systemd/system/homeharbor-caddy-render.service",
+        "/usr/lib/systemd/system/homeharbor-smb-apply.path",
+        "/usr/lib/systemd/system/homeharbor-smb-apply.service",
+        "/usr/lib/systemd/system/homeharbor-setup-bootstrap-consume.path",
+        "/usr/lib/systemd/system/homeharbor-setup-bootstrap-consume.service",
         "/usr/lib/systemd/system/homeharbor-system-app-apply.service",
         "/usr/lib/systemd/system/homeharbor-system-app-apply.path",
         "/usr/lib/systemd/system/caddy.service.d/homeharbor-config.conf",
@@ -107,6 +114,8 @@ public sealed class SystemImageBuilder(
         "/usr/lib/firmware",
         "/usr/lib/systemd/systemd",
         "/usr/lib/systemd/system/homeharbor-fastbootd.service",
+        "/usr/lib/systemd/system/homeharbor-recovery-action.path",
+        "/usr/lib/systemd/system/homeharbor-recovery-action.service",
         "/var"
     ];
 
@@ -125,6 +134,7 @@ public sealed class SystemImageBuilder(
     public async Task BuildAsync(CancellationToken cancellationToken = default)
     {
         var channel = ReleaseChannel.Require(Environment.GetEnvironmentVariable("HOMEHARBOR_CHANNEL") ?? "dev", "HOMEHARBOR_CHANNEL");
+        var releaseSequence = ReleaseSequence.RequireEnvironment();
         ValidateVersion();
         await _rootless.RequireReadyAsync(cancellationToken);
         ValidateReleaseInputs(channel);
@@ -150,8 +160,10 @@ public sealed class SystemImageBuilder(
             var (ControlPackages, RecoveryPackages) = await BuildPackagesAsync(channel, packageOutput, cancellationToken);
             await BuildRootfsAsync(rootfs, ControlPackages, cancellationToken);
             await BuildRecoveryRootfsBaseAsync(recoveryRootfs, RecoveryPackages, cancellationToken);
+            await ReleaseSequence.StampRootfsOsReleaseAsync(rootfs, releaseSequence, cancellationToken);
+            await ReleaseSequence.StampRootfsOsReleaseAsync(recoveryRootfs, releaseSequence, cancellationToken);
 
-            await BuildImagesAsync(rootfs, recoveryRootfs, shimSource, mokManagerSource, cancellationToken);
+            await BuildImagesAsync(rootfs, recoveryRootfs, shimSource, mokManagerSource, releaseSequence, cancellationToken);
             await FileWrites.AtomicWriteTextAsync(plan.Artifacts.Plan.Path, JsonSerializer.Serialize(plan, JsonOptions) + "\n", 0644, cancellationToken);
         }
         finally
@@ -167,6 +179,7 @@ public sealed class SystemImageBuilder(
         string recoveryRootfs,
         string? shimSource,
         string? mokManagerSource,
+        long releaseSequence,
         CancellationToken cancellationToken)
     {
         await RunMappedChrootAsync(rootfs, "mkinitcpio", ["-P"], cancellationToken);
@@ -240,7 +253,7 @@ public sealed class SystemImageBuilder(
         InstallArtifact(recoveryImage, plan.Artifacts.Recovery);
 
         await WriteLogicalImagesAsync(rootImage, recoveryImage, modulesImage, firmwareImage, cancellationToken);
-        await BuildAvbImagesAsync(kernelRelease, vmlinuz, initramfs, rootfs, cancellationToken);
+        await BuildAvbImagesAsync(kernelRelease, vmlinuz, initramfs, rootfs, releaseSequence, cancellationToken);
         await BuildSuperImageAsync(cancellationToken);
         await BuildBootloaderArtifactsAsync(shimSource, mokManagerSource, cancellationToken);
     }
@@ -267,6 +280,7 @@ public sealed class SystemImageBuilder(
         string vmlinuz,
         string initramfs,
         string rootfs,
+        long releaseSequence,
         CancellationToken cancellationToken)
     {
         var vbmetaFragments = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -299,12 +313,22 @@ public sealed class SystemImageBuilder(
         Truncate(LogicalPath("recovery_a"), PartitionSize("recovery_a"));
         Truncate(LogicalPath("recovery_b"), PartitionSize("recovery_b"));
 
+        var rootVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["root_a"], "root", null, cancellationToken);
+        var rootVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["root_b"], "root", null, cancellationToken);
         var modulesVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["modules_a"], "modules", null, cancellationToken);
         var modulesVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["modules_b"], "modules", null, cancellationToken);
         var firmwareVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["firmware_a"], "firmware", null, cancellationToken);
         var firmwareVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["firmware_b"], "firmware", null, cancellationToken);
         var recoveryVerityA = await AvbDescriptorVerityArgAsync(vbmetaFragments["recovery_a"], "recovery", null, cancellationToken);
         var recoveryVerityB = await AvbDescriptorVerityArgAsync(vbmetaFragments["recovery_b"], "recovery", null, cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("root_a"), rootVerityA, "root A", cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("root_b"), rootVerityB, "root B", cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("modules_a"), modulesVerityA, "modules A", cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("modules_b"), modulesVerityB, "modules B", cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("firmware_a"), firmwareVerityA, "firmware A", cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("firmware_b"), firmwareVerityB, "firmware B", cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("recovery_a"), recoveryVerityA, "recovery A", cancellationToken);
+        await VerifyCompleteVerityImageAsync(LogicalPath("recovery_b"), recoveryVerityB, "recovery B", cancellationToken);
         var kernelVerityArgs = KernelVerityCmdlineArgs(modulesVerityA, modulesVerityB, firmwareVerityA, firmwareVerityB, recoveryVerityA, recoveryVerityB);
 
         var vbmetaA = Path.Combine(_work, "vbmeta_a.img");
@@ -333,7 +357,7 @@ public sealed class SystemImageBuilder(
             initramfs,
             Path.Combine(rootfs, "etc", "os-release"),
             kernelRelease,
-            SecureBootAssets.GenericBootCmdline(kernelRelease, version, vbmetaDigestA, vbmetaDigestB, kernelVerityArgs),
+            SecureBootAssets.GenericBootCmdline(kernelRelease, version, releaseSequence, vbmetaDigestA, vbmetaDigestB, kernelVerityArgs),
             cancellationToken);
         InstallArtifact(boot, plan.Artifacts.Boot);
     }
@@ -428,6 +452,10 @@ public sealed class SystemImageBuilder(
         }
 
         await EnablePlanUnitsAsync(plan.Rootfs, rootfs, cancellationToken);
+        // HomeHarbor's custom A/B selector owns boot-attempt accounting. The
+        // systemd-boot helper always fails when no LoaderBootCountPath EFI
+        // variable exists and would otherwise leave every healthy boot degraded.
+        MaskSystemdUnit(rootfs, "systemd-bless-boot.service");
         await File.WriteAllTextAsync(Path.Combine(rootfs, "etc", "hostname"), plan.Rootfs.Hostname + "\n", cancellationToken);
         if (plan.Rootfs.CreateEmptyCrypttab)
         {
@@ -560,6 +588,12 @@ public sealed class SystemImageBuilder(
         {
             throw new FileNotFoundException("HOMEHARBOR_SECURE_BOOT_KEY does not point to a readable file", secureBootKey);
         }
+        if (!string.IsNullOrWhiteSpace(secureBootKey))
+        {
+            _ = BuildKeyDefaults.RequireSupportedAvbSigningAlgorithm(
+                secureBootKey,
+                Environment.GetEnvironmentVariable("HOMEHARBOR_AVB_ALGORITHM"));
+        }
     }
 
     private async Task ValidateSecureBootAsync(CancellationToken cancellationToken)
@@ -674,7 +708,7 @@ public sealed class SystemImageBuilder(
 
     private async Task RequireToolsAsync(CancellationToken cancellationToken)
     {
-        foreach (var tool in new[] { "avbtool", "makepkg", "pacman", "pnpm", "mkfs.erofs", "dump.erofs", "lpmake", "lpdump", "modinfo", "cc" })
+        foreach (var tool in new[] { "avbtool", "makepkg", "pacman", "pnpm", "mkfs.erofs", "dump.erofs", "lpmake", "lpdump", "modinfo", "veritysetup", "cc" })
         {
             await NeedAsync(tool, cancellationToken);
         }
@@ -1027,6 +1061,38 @@ public sealed class SystemImageBuilder(
         }
 
         return string.Join(' ', args);
+    }
+
+    private async Task VerifyCompleteVerityImageAsync(
+        string image,
+        string verityArgument,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        var parts = verityArgument.Split(':');
+        if (parts.Length != 7 ||
+            parts.Take(5).Any(string.IsNullOrWhiteSpace) ||
+            parts.Skip(5).Any(value => value.Length == 0 || !value.All(Uri.IsHexDigit)))
+        {
+            throw new InvalidOperationException(label + " verity geometry is invalid");
+        }
+
+        await RunAsync(
+            "veritysetup",
+            [
+                "verify",
+                "--no-superblock",
+                "--hash=" + parts[0],
+                "--data-block-size=" + parts[1],
+                "--hash-block-size=" + parts[2],
+                "--data-blocks=" + parts[3],
+                "--hash-offset=" + parts[4],
+                "--salt=" + parts[5],
+                image,
+                image,
+                parts[6]
+            ],
+            cancellationToken);
     }
 
     private async Task InstallBootSelectorAsync(string esp, string selector, CancellationToken cancellationToken)
@@ -1536,6 +1602,30 @@ public sealed class SystemImageBuilder(
         {
             Directory.Delete(path, recursive: true);
         }
+    }
+
+    internal static void MaskSystemdUnit(string rootfs, string unit)
+    {
+        if (string.IsNullOrWhiteSpace(unit) ||
+            unit.Contains('/') ||
+            unit.Contains('\\') ||
+            unit is "." or "..")
+        {
+            throw new InvalidOperationException("invalid systemd unit name to mask: " + unit);
+        }
+
+        var path = Path.Combine(rootfs, "etc", "systemd", "system", unit);
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var existing = new FileInfo(path);
+        if (existing.Exists || existing.LinkTarget is not null)
+        {
+            File.Delete(path);
+        }
+        else if (Directory.Exists(path))
+        {
+            throw new InvalidOperationException("systemd unit mask path is unexpectedly a directory: " + path);
+        }
+        _ = File.CreateSymbolicLink(path, "/dev/null");
     }
 
     private async Task DeleteWorkDirectoryAsync(string path, CancellationToken cancellationToken)

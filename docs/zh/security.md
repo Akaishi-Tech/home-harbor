@@ -8,6 +8,18 @@ HomeHarbor 的安全边界包括认证、路径安全、发布签名、Secure Bo
 
 默认 authorization fallback policy 要求用户 JWT。只有明确标注匿名的 setup、login、health 和 SPA fallback 可以绕过。
 
+## 首次 TLS 信任
+
+HomeHarbor 为每台设备使用独立的 Caddy internal CA。在浏览器中输入 setup code、
+recovery code 或密码之前，先从 `http://homeharbor.local/homeharbor-ca.crt`
+下载公开 CA 证书。只有当证书的 SHA-256 指纹与设备物理控制台显示的值逐字一致时，
+才能安装。物理控制台才是经过认证的通道；HTTP 下载只负责传输公开证书字节，不能
+单独提供可信性。
+
+`homeharbor-tls-trust.service` 会在 Caddy 创建 CA 后显示指纹；证书或物理控制台尚未
+就绪时会重试。Caddy 状态目录会让 CA 跨重启保持不变。如果该状态被替换或指纹意外
+变化，应停止操作并重新建立物理信任，不能直接绕过浏览器的证书警告。
+
 ## 自动化 token
 
 appliance 内部服务使用 automation token。API 迁移命令会通过 `JwtTokenService.WriteAutomationTokenAsync()` 写到 `HomeHarbor:Automation:TokenPath`：

@@ -25,10 +25,10 @@ import {
   GlassCardTitle,
 } from "@/components/glass/glass-card";
 import { EmptyState } from "@/components/glass/empty-state";
+import { QueryErrorState } from "@/components/glass/query-error-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -58,9 +58,12 @@ import {
 import { errorMessage } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { CatalogItem } from "@/types";
+import { useAuth } from "@/hooks/use-auth";
+import { isFamilyAdmin } from "@/lib/auth";
 
 export function AppsPage() {
   const { t } = useTranslation();
+  const canManage = isFamilyAdmin(useAuth());
 
   return (
     <div className="space-y-6">
@@ -73,22 +76,26 @@ export function AppsPage() {
       <Tabs defaultValue="market">
         <TabsList>
           <TabsTrigger value="market">{t("pages.apps.tabs.market")}</TabsTrigger>
-          <TabsTrigger value="runtime">
-            {t("pages.apps.tabs.runtime")}
-          </TabsTrigger>
+          {canManage ? (
+            <TabsTrigger value="runtime">
+              {t("pages.apps.tabs.runtime")}
+            </TabsTrigger>
+          ) : null}
         </TabsList>
         <TabsContent value="market">
-          <MarketTab />
+          <MarketTab canManage={canManage} />
         </TabsContent>
-        <TabsContent value="runtime">
-          <RuntimeTab />
-        </TabsContent>
+        {canManage ? (
+          <TabsContent value="runtime">
+            <RuntimeTab canManage={canManage} />
+          </TabsContent>
+        ) : null}
       </Tabs>
     </div>
   );
 }
 
-function MarketTab() {
+function MarketTab({ canManage }: { canManage: boolean }) {
   const catalog = useCatalog();
   const installApp = useInstallApp();
   const uninstallApp = useUninstallApp();
@@ -100,10 +107,15 @@ function MarketTab() {
   const selected = catalogItems.find((item) => item.appKey === selectedAppKey);
 
   useEffect(() => {
-    if (firstAppKey && !selectedAppKey) {
+    if (
+      firstAppKey &&
+      !catalogItems.some((item) => item.appKey === selectedAppKey)
+    ) {
       setSelectedAppKey(firstAppKey);
+    } else if (!firstAppKey && selectedAppKey) {
+      setSelectedAppKey("");
     }
-  }, [firstAppKey, selectedAppKey]);
+  }, [catalogItems, firstAppKey, selectedAppKey]);
 
   function onInstall(item: CatalogItem) {
     installApp.mutate({ appKey: item.appKey }, {
@@ -142,6 +154,11 @@ function MarketTab() {
                 <Skeleton key={index} className="h-16 rounded-xl" />
               ))}
             </div>
+          ) : catalog.isError ? (
+            <QueryErrorState
+              error={catalog.error}
+              onRetry={() => void catalog.refetch()}
+            />
           ) : catalogItems.length > 0 ? (
             <ul className="space-y-2">
               {catalogItems.map((item) => (
@@ -260,7 +277,12 @@ function MarketTab() {
                   {selected.lastError}
                 </p>
               ) : null}
-              <div className="flex flex-wrap gap-2">
+              {!selected.available ? (
+                <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+                  {selected.unavailableReason || t("common.unavailable")}
+                </p>
+              ) : null}
+              {canManage ? <div className="flex flex-wrap gap-2">
                 {selected.installed ? (
                   <Button
                     variant="outline"
@@ -274,7 +296,7 @@ function MarketTab() {
                   </Button>
                 ) : (
                   <Button
-                    disabled={installApp.isPending}
+                    disabled={installApp.isPending || !selected.available}
                     onClick={() => onInstall(selected)}
                   >
                     {selected.kind === "system" ? (
@@ -289,7 +311,11 @@ function MarketTab() {
                         : t("pages.apps.installStart")}
                   </Button>
                 )}
-              </div>
+              </div> : (
+                <p className="text-sm text-muted-foreground">
+                  {t("common.adminOnly")}
+                </p>
+              )}
             </div>
           ) : (
             <EmptyState
@@ -350,13 +376,18 @@ const portString = (t: TFunction, min: number, max: number, label: string) =>
 function createContainerSchema(t: TFunction) {
   return z.object({
     name: z.string().trim().min(1, t("validation.containerNameRequired")),
-    image: z.string().trim().min(1, t("validation.containerImageRequired")),
+    image: z
+      .string()
+      .trim()
+      .min(1, t("validation.containerImageRequired"))
+      .regex(/@sha256:[0-9a-f]{64}$/, t("validation.containerImageDigest"))
+      .refine((value) => {
+        const repository = value.slice(0, value.lastIndexOf("@sha256:"));
+        return repository.lastIndexOf(":") <= repository.lastIndexOf("/");
+      }, t("validation.containerImageDigest")),
     hostPort: portString(t, 1024, 65535, t("fields.hostPort")),
     containerPort: portString(t, 1, 65535, t("fields.containerPort")),
     protocol: z.enum(["tcp", "udp"]),
-    containerPath: z.string().optional(),
-    hostPath: z.string().optional(),
-    volumeReadOnly: z.boolean(),
   });
 }
 
@@ -366,24 +397,18 @@ type ContainerValues = {
   hostPort: string;
   containerPort: string;
   protocol: "tcp" | "udp";
-  containerPath?: string;
-  hostPath?: string;
-  volumeReadOnly: boolean;
 };
 
 const containerDefaults: ContainerValues = {
   name: "Media tool",
-  image: "docker.io/library/nginx:latest",
+  image: "",
   hostPort: "8088",
   containerPort: "80",
   protocol: "tcp",
-  containerPath: "/data",
-  hostPath: "",
-  volumeReadOnly: false,
 };
 
-function RuntimeTab() {
-  const containers = useContainers();
+function RuntimeTab({ canManage }: { canManage: boolean }) {
+  const containers = useContainers(canManage);
   const createContainer = useCreateContainer();
   const containerAction = useContainerAction();
   const { t } = useTranslation();
@@ -402,19 +427,8 @@ function RuntimeTab() {
         protocol: values.protocol,
       },
     ];
-    const trimmedHost = (values.hostPath ?? "").trim();
-    const volumes = trimmedHost
-      ? [
-          {
-            hostPath: trimmedHost,
-            containerPath: values.containerPath?.trim() || "/data",
-            readOnly: values.volumeReadOnly,
-          },
-        ]
-      : undefined;
-
     createContainer.mutate(
-      { name: values.name, image: values.image, ports, volumes },
+      { name: values.name, image: values.image, ports },
       {
         onSuccess: () => {
           toast.success(t("toast.containerCreated"));
@@ -436,8 +450,14 @@ function RuntimeTab() {
   }
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,380px)_1fr]">
-      <GlassCard>
+    <div
+      className={
+        canManage
+          ? "grid gap-3 lg:grid-cols-[minmax(0,380px)_1fr]"
+          : "grid gap-3"
+      }
+    >
+      {canManage ? <GlassCard>
         <GlassCardHeader>
           <GlassCardTitle>{t("pages.apps.runtime.customTitle")}</GlassCardTitle>
           <GlassCardDescription>
@@ -468,7 +488,7 @@ function RuntimeTab() {
                     <FormLabel>{t("fields.image")}</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="docker.io/library/nginx:latest"
+                        placeholder="registry.example/app@sha256:…"
                         {...field}
                       />
                     </FormControl>
@@ -525,52 +545,6 @@ function RuntimeTab() {
                   </FormItem>
                 )}
               />
-              <FormField
-                control={form.control}
-                name="hostPath"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("fields.hostPath")}</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder={t("pages.apps.runtime.hostPathPlaceholder")}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="containerPath"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("fields.containerPath")}</FormLabel>
-                    <FormControl>
-                      <Input placeholder="/data" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="volumeReadOnly"
-                render={({ field }) => (
-                  <FormItem className="flex flex-row items-center gap-2 space-y-0">
-                    <FormControl>
-                      <Checkbox
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                    <FormLabel className="mt-0">
-                      {t("fields.readOnlyMount")}
-                    </FormLabel>
-                  </FormItem>
-                )}
-              />
               <Button
                 type="submit"
                 className="w-full"
@@ -584,7 +558,7 @@ function RuntimeTab() {
             </form>
           </Form>
         </GlassCardContent>
-      </GlassCard>
+      </GlassCard> : null}
 
       <GlassCard>
         <GlassCardHeader>
@@ -599,6 +573,11 @@ function RuntimeTab() {
                 <Skeleton key={index} className="h-16 rounded-xl" />
               ))}
             </div>
+          ) : containers.isError ? (
+            <QueryErrorState
+              error={containers.error}
+              onRetry={() => void containers.refetch()}
+            />
           ) : containers.data && containers.data.length > 0 ? (
             <ul className="space-y-2">
               {containers.data.map((container) => (
@@ -619,9 +598,9 @@ function RuntimeTab() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Badge variant="secondary">{container.runtimeState}</Badge>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Badge variant="secondary">{container.runtimeState}</Badge>
+                    {canManage ? <div className="flex items-center gap-1.5">
                       <Button
                         variant="outline"
                         size="sm"
@@ -649,7 +628,7 @@ function RuntimeTab() {
                         <RotateCw className="size-4" />
                         {t("pages.apps.runtime.restart")}
                       </Button>
-                    </div>
+                    </div> : null}
                   </div>
                 </li>
               ))}

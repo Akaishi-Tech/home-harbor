@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -7,6 +8,7 @@ import { toast } from "sonner";
 import { Check, ChevronRight, HardDrive, ServerCog } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Brand } from "@/components/app-shell/brand";
+import { TlsTrustNotice } from "@/components/tls-trust-notice";
 import {
   GlassCard,
   GlassCardContent,
@@ -15,6 +17,7 @@ import {
   GlassCardTitle,
 } from "@/components/glass/glass-card";
 import { Gauge } from "@/components/glass/gauge";
+import { QueryErrorState } from "@/components/glass/query-error-state";
 import {
   ResultSecretDialog,
   type SecretField,
@@ -45,7 +48,6 @@ import {
   useStoragePlan,
   useStorageRecommendation,
   useStorageStatus,
-  usePairing,
 } from "@/hooks/queries";
 import {
   diskBadges,
@@ -63,6 +65,7 @@ import {
 import { webDavSecrets, stringSecret } from "@/lib/secrets";
 import { cn } from "@/lib/utils";
 import { i18n } from "@/i18n";
+import { queryKeys } from "@/lib/query";
 import type {
   StorageFileSystem,
   StorageFileSystemCapability,
@@ -84,6 +87,21 @@ const STEP_LABELS: Array<{ key: Step; labelKey: string }> = [
   { key: "services", labelKey: "setup.steps.services" },
 ];
 
+const SETUP_CODE_PATTERN =
+  /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$/;
+
+function normalizeSetupCode(value: string): string {
+  const characters = value
+    .toUpperCase()
+    .replace(/[^A-HJ-NP-Z2-9]/g, "")
+    .slice(0, 16);
+  return characters.match(/.{1,4}/g)?.join("-") ?? "";
+}
+
+function isValidSetupCode(value: string): boolean {
+  return SETUP_CODE_PATTERN.test(value);
+}
+
 function defaultStorageProfile(): StorageUseProfile {
   return {
     familyMembers: 4,
@@ -99,10 +117,9 @@ function defaultStorageProfile(): StorageUseProfile {
 
 export function SetupWizard() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
-  const pairing = usePairing(false);
-  const inventory = useStorageInventory();
-  const recommendationMutation = useStorageRecommendation();
   const planMutation = useStoragePlan();
   const applyMutation = useStorageApply();
   const completeSetup = useCompleteSetup();
@@ -123,20 +140,60 @@ export function SetupWizard() {
     useState<StorageRecommendation | null>(null);
   const [plan, setPlan] = useState<StoragePlan | null>(null);
   const [secrets, setSecrets] = useState<SecretField[] | null>(null);
+  const [pairingCode, setPairingCode] = useState(() =>
+    normalizeSetupCode(searchParams.get("pair") ?? ""),
+  );
 
-  const storageStatus = useStorageStatus({ poll: step === "apply" });
+  const validSetupCode = isValidSetupCode(pairingCode);
+  const inventory = useStorageInventory(pairingCode, validSetupCode);
+  const recommendationMutation = useStorageRecommendation(pairingCode);
+  const storageStatus = useStorageStatus(pairingCode, {
+    poll: step === "apply",
+    enabled: validSetupCode,
+  });
   const status = storageStatus.data;
+  const previousValidSetupCode = useRef("");
+
+  useEffect(() => {
+    const previous = previousValidSetupCode.current;
+    if (!validSetupCode) {
+      previousValidSetupCode.current = "";
+      if (previous) {
+        void queryClient.resetQueries({ queryKey: queryKeys.storageInventory, exact: true });
+        void queryClient.resetQueries({ queryKey: queryKeys.storageStatus, exact: true });
+      }
+      return;
+    }
+
+    previousValidSetupCode.current = pairingCode;
+    if (previous && previous !== pairingCode) {
+      // The setup code is intentionally excluded from query keys. Resetting
+      // cancels any old-code request and refetches with the latest header.
+      void queryClient.resetQueries({ queryKey: queryKeys.storageInventory, exact: true });
+      void queryClient.resetQueries({ queryKey: queryKeys.storageStatus, exact: true });
+    }
+  }, [pairingCode, queryClient, validSetupCode]);
 
   const initRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!searchParams.has("pair")) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("pair");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   useEffect(() => {
     if (initRef.current) return;
     if (inventory.data && storageStatus.data) {
       initRef.current = true;
-      const recommended = inventory.data.targets
-        .filter((target) => target.eligible)
-        .map((target) => ({ path: target.path, kind: target.kind }));
-      setSelectedTargets(recommended);
-      if (storageStatus.data.state === "Succeeded") setStep("family");
+      if (storageStatus.data.state === "Succeeded") {
+        setStep("family");
+      } else if (
+        storageStatus.data.state === "PendingReboot" ||
+        storageStatus.data.state === "Running"
+      ) {
+        setStep("apply");
+      }
     }
   }, [inventory.data, storageStatus.data]);
 
@@ -151,6 +208,11 @@ export function SetupWizard() {
   }, [fileSystem, inventory.data?.fileSystems, raidMode]);
 
   async function handleStoragePlan() {
+    if (!isValidSetupCode(pairingCode)) {
+      toast.error(t("setup.pairing.invalid"));
+      return;
+    }
+
     const next = defaultStorageProfile();
     try {
       const nextRecommendation = await recommendationMutation.mutateAsync(next);
@@ -175,25 +237,40 @@ export function SetupWizard() {
             ? metadataProfile
             : undefined,
         allowRemovable: false,
+        pairingCode,
       });
       setPlan(nextPlan);
       setStep("plan");
     } catch (error) {
       toast.error(errorMessage(error));
+    } finally {
+      // The mutation variables include the physical-presence code.
+      planMutation.reset();
     }
   }
 
-  async function handleApply(recoveryPassphrase: string) {
+  async function handleApply(
+    recoveryPassphrase: string,
+    destructiveConfirmation: string,
+  ) {
     if (!plan) return;
+    if (!isValidSetupCode(pairingCode)) {
+      toast.error(t("setup.pairing.invalid"));
+      return;
+    }
     try {
       await applyMutation.mutateAsync({
         planId: plan.planId,
-        confirmation: plan.confirmPhrase,
+        confirmation: destructiveConfirmation,
         recoveryPassphrase,
+        pairingCode,
       });
       setStep("apply");
     } catch (error) {
       toast.error(errorMessage(error));
+    } finally {
+      // Do not retain the disk passphrase or setup code in mutation state.
+      applyMutation.reset();
     }
   }
 
@@ -203,10 +280,8 @@ export function SetupWizard() {
       return;
     }
 
-    const refreshedPairing = await pairing.refetch();
-    const pairingCode = refreshedPairing.data?.code ?? pairing.data?.code ?? "";
-    if (!pairingCode) {
-      toast.error(t("setup.family.pairingUnavailable"));
+    if (!isValidSetupCode(pairingCode)) {
+      toast.error(t("setup.pairing.invalid"));
       return;
     }
 
@@ -229,8 +304,13 @@ export function SetupWizard() {
             ),
             ...webDavSecrets(response),
           ]);
+          setPairingCode("");
+          completeSetup.reset();
         },
-        onError: (error) => toast.error(errorMessage(error)),
+        onError: (error) => {
+          toast.error(errorMessage(error));
+          completeSetup.reset();
+        },
       },
     );
   }
@@ -263,6 +343,19 @@ export function SetupWizard() {
           <Stepper activeIndex={activeIndex} />
         </GlassCardHeader>
         <GlassCardContent>
+          <div className="mb-4">
+            <TlsTrustNotice />
+          </div>
+          {inventory.isError || storageStatus.isError ? (
+            <QueryErrorState
+              error={inventory.error ?? storageStatus.error}
+              onRetry={() => {
+                void inventory.refetch();
+                void storageStatus.refetch();
+              }}
+            />
+          ) : (
+            <>
           {step === "inventory" ? (
             <InventoryStep
               targets={inventory.data?.targets ?? []}
@@ -270,6 +363,8 @@ export function SetupWizard() {
                 inventory.data?.devices ?? [],
               ).filter((device) => device.type === "disk")}
               selected={selectedTargets}
+              pairingCode={pairingCode}
+              onPairingCode={(value) => setPairingCode(normalizeSetupCode(value))}
               unlockMode={unlockMode}
               onUnlockMode={setUnlockMode}
               fileSystems={inventory.data?.fileSystems ?? []}
@@ -305,6 +400,8 @@ export function SetupWizard() {
             <PlanStep
               plan={plan}
               recommendation={recommendation}
+              pairingCode={pairingCode}
+              onPairingCode={(value) => setPairingCode(normalizeSetupCode(value))}
               pending={applyMutation.isPending}
               onApply={handleApply}
               onBack={() => setStep("inventory")}
@@ -325,6 +422,8 @@ export function SetupWizard() {
           {step === "family" ? (
             <FamilyStep
               pending={completeSetup.isPending}
+              pairingCode={pairingCode}
+              onPairingCode={(value) => setPairingCode(normalizeSetupCode(value))}
               onSubmit={handleFamily}
             />
           ) : null}
@@ -332,6 +431,8 @@ export function SetupWizard() {
           {step === "services" ? (
             <ServicesStep onFinish={() => navigate("/dashboard")} />
           ) : null}
+            </>
+          )}
         </GlassCardContent>
       </GlassCard>
 
@@ -440,6 +541,8 @@ function InventoryStep({
   targets,
   devices,
   selected,
+  pairingCode,
+  onPairingCode,
   unlockMode,
   onUnlockMode,
   fileSystems,
@@ -461,6 +564,8 @@ function InventoryStep({
   targets: StorageTarget[];
   devices: ReturnType<typeof flattenStorageDevices>;
   selected: Array<{ path: string; kind: string }>;
+  pairingCode: string;
+  onPairingCode: (value: string) => void;
   unlockMode: "passphrase" | "tpm2";
   onUnlockMode: (mode: "passphrase" | "tpm2") => void;
   fileSystems: StorageFileSystemCapability[];
@@ -503,13 +608,16 @@ function InventoryStep({
       ]
     : [];
   const canContinue =
+    isValidSetupCode(pairingCode) &&
     selected.length > 0 &&
-    capability?.available !== false &&
+    capability?.available === true &&
     !xfsTargetMismatch &&
     !raidTargetWarning;
 
   return (
     <div className="space-y-4">
+      <SetupCodeField value={pairingCode} onChange={onPairingCode} />
+
       <div className="space-y-2">
         {targets.map((target) => {
           const checked = selected.some((item) => item.path === target.path);
@@ -812,19 +920,32 @@ function raidTargetRequirementWarning(
 function PlanStep({
   plan,
   recommendation,
+  pairingCode,
+  onPairingCode,
   pending,
   onApply,
   onBack,
 }: {
   plan: StoragePlan;
   recommendation: StorageRecommendation | null;
+  pairingCode: string;
+  onPairingCode: (value: string) => void;
   pending: boolean;
-  onApply: (recoveryPassphrase: string) => void;
+  onApply: (recoveryPassphrase: string, confirmation: string) => void;
   onBack: () => void;
 }) {
   const [passphrase, setPassphrase] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const passphraseReady = passphrase.length > 0 && passphrase === confirmation;
+  const [passphraseConfirmation, setPassphraseConfirmation] = useState("");
+  const [destructiveConfirmation, setDestructiveConfirmation] = useState("");
+  const passphraseValid =
+    passphrase.length >= 12 &&
+    passphrase.length <= 1_024 &&
+    !/[\r\n\u0000]/.test(passphrase);
+  const passphraseReady =
+    passphraseValid &&
+    passphrase === passphraseConfirmation &&
+    destructiveConfirmation === plan.confirmPhrase &&
+    isValidSetupCode(pairingCode);
   const { t } = useTranslation();
 
   return (
@@ -881,6 +1002,7 @@ function PlanStep({
         items={plan.destructiveDevices}
       />
       <MiniList title={t("setup.plan.operations")} items={plan.operations} />
+      <SetupCodeField value={pairingCode} onChange={onPairingCode} />
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="space-y-1">
           <span className="text-sm font-medium">
@@ -890,6 +1012,7 @@ function PlanStep({
             type="password"
             value={passphrase}
             autoComplete="new-password"
+            maxLength={1_024}
             onChange={(event) => setPassphrase(event.target.value)}
           />
         </label>
@@ -899,11 +1022,32 @@ function PlanStep({
           </span>
           <Input
             type="password"
-            value={confirmation}
+            value={passphraseConfirmation}
             autoComplete="new-password"
-            onChange={(event) => setConfirmation(event.target.value)}
+            maxLength={1_024}
+            onChange={(event) => setPassphraseConfirmation(event.target.value)}
           />
         </label>
+      </div>
+      {passphrase.length > 0 && !passphraseValid ? (
+        <p className="text-sm text-destructive">
+          {t("setup.plan.passphraseInvalid")}
+        </p>
+      ) : null}
+      <div className="space-y-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3">
+        <p className="text-sm text-destructive">
+          {t("setup.plan.confirmationInstruction")}
+        </p>
+        <code className="block break-all rounded-lg bg-background/60 px-3 py-2 text-sm">
+          {plan.confirmPhrase}
+        </code>
+        <Input
+          value={destructiveConfirmation}
+          onChange={(event) => setDestructiveConfirmation(event.target.value)}
+          autoComplete="off"
+          aria-label={t("setup.plan.confirmationPhrase")}
+          spellCheck={false}
+        />
       </div>
       {(plan.warnings?.length ?? 0) || recommendation?.warnings.length ? (
         <WarningList
@@ -914,7 +1058,7 @@ function PlanStep({
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"
-          onClick={() => onApply(passphrase)}
+          onClick={() => onApply(passphrase, destructiveConfirmation)}
           disabled={pending || !passphraseReady}
         >
           {pending ? t("setup.plan.queued") : t("setup.plan.apply")}
@@ -974,22 +1118,38 @@ type FamilyValues = {
 
 function FamilyStep({
   pending,
+  pairingCode,
+  onPairingCode,
   onSubmit,
 }: {
   pending: boolean;
+  pairingCode: string;
+  onPairingCode: (value: string) => void;
   onSubmit: (values: FamilyValues) => void;
 }) {
   const { t } = useTranslation();
   const familySchema = useMemo(
     () =>
       z.object({
-        familyName: z.string().trim().min(1, t("validation.familyNameRequired")),
+        familyName: z
+          .string()
+          .trim()
+          .min(1, t("validation.familyNameRequired"))
+          .max(96, t("validation.nameTooLong")),
         ownerDisplayName: z
           .string()
           .trim()
-          .min(1, t("validation.ownerNameRequired")),
-        ownerPassword: z.string().min(1, t("validation.localPasswordRequired")),
-        deviceName: z.string().trim().min(1, t("validation.deviceNameRequired")),
+          .min(1, t("validation.ownerNameRequired"))
+          .max(96, t("validation.nameTooLong")),
+        ownerPassword: z
+          .string()
+          .min(12, t("validation.passwordLength"))
+          .max(128, t("validation.passwordLength")),
+        deviceName: z
+          .string()
+          .trim()
+          .min(1, t("validation.deviceNameRequired"))
+          .max(96, t("validation.nameTooLong")),
       }),
     [t],
   );
@@ -1006,6 +1166,7 @@ function FamilyStep({
   return (
     <Form {...form}>
       <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)}>
+        <SetupCodeField value={pairingCode} onChange={onPairingCode} />
         <FormField
           control={form.control}
           name="familyName"
@@ -1013,7 +1174,7 @@ function FamilyStep({
             <FormItem>
               <FormLabel>{t("fields.familyName")}</FormLabel>
               <FormControl>
-                <Input {...field} />
+                <Input maxLength={96} {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -1026,7 +1187,7 @@ function FamilyStep({
             <FormItem>
               <FormLabel>{t("fields.ownerName")}</FormLabel>
               <FormControl>
-                <Input {...field} />
+                <Input maxLength={96} {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -1039,7 +1200,12 @@ function FamilyStep({
             <FormItem>
               <FormLabel>{t("fields.localPassword")}</FormLabel>
               <FormControl>
-                <Input type="password" autoComplete="new-password" {...field} />
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  maxLength={128}
+                  {...field}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -1052,18 +1218,64 @@ function FamilyStep({
             <FormItem>
               <FormLabel>{t("fields.thisDevice")}</FormLabel>
               <FormControl>
-                <Input {...field} />
+                <Input maxLength={96} {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
           )}
         />
-        <Button type="submit" className="w-full" disabled={pending}>
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={pending || !isValidSetupCode(pairingCode)}
+        >
           <HardDrive className="size-4" />
           {pending ? t("setup.family.creating") : t("setup.family.create")}
         </Button>
       </form>
     </Form>
+  );
+}
+
+function SetupCodeField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { t } = useTranslation();
+  const invalid = value.length > 0 && !isValidSetupCode(value);
+
+  return (
+    <div className="space-y-2 rounded-xl border border-border/60 bg-background/30 p-3">
+      <label htmlFor="setup-presence-code" className="text-sm font-medium">
+        {t("setup.pairing.label")}
+      </label>
+      <Input
+        id="setup-presence-code"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        autoCapitalize="characters"
+        autoComplete="off"
+        inputMode="text"
+        maxLength={19}
+        placeholder="XXXX-XXXX-XXXX-XXXX"
+        spellCheck={false}
+        aria-invalid={invalid}
+        className="font-mono uppercase tracking-wider"
+      />
+      <p
+        className={cn(
+          "text-xs",
+          invalid ? "text-destructive" : "text-muted-foreground",
+        )}
+      >
+        {invalid
+          ? t("setup.pairing.invalid")
+          : t("setup.pairing.description")}
+      </p>
+    </div>
   );
 }
 

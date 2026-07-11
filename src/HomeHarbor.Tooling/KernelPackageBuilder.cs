@@ -175,7 +175,7 @@ public sealed class KernelPackageBuilder(
         }
 
         await RunMappedChrootAsync(recoveryRootfs, "useradd", ["--system", "--user-group", "--home-dir", "/var/lib/homeharbor/recovery", "--create-home", "--shell", shell, "recovery"], cancellationToken, allowFailure: true);
-        await RunMappedChrootAsync(recoveryRootfs, "systemctl", ["enable", "systemd-networkd", "systemd-networkd-wait-online", "systemd-resolved", "homeharbor-fastbootd", "serial-getty@ttyS0", "getty@tty1"], cancellationToken);
+        await RunMappedChrootAsync(recoveryRootfs, "systemctl", ["enable", .. systemPlan.Recovery.SystemdUnits], cancellationToken);
         _ = RecoveryKernelTreePruner.Prune(
             modulesRoot,
             firmwareRoot,

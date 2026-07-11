@@ -2,45 +2,54 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 using HomeHarbor.Api.Data;
+using HomeHarbor.Tooling;
 using Microsoft.Extensions.Options;
 
 namespace HomeHarbor.Api.Services;
 
 public sealed class ReverseProxyConfigService(IOptions<HomeHarborApiOptions> apiOptions) : IReverseProxyConfigService
 {
+    public const string ControlPlaneHostname = CaddyTrustConfiguration.ControlPlaneHostname;
+    private const int CaddyAdminPort = 2019;
+
     public string BuildCaddyfile(IEnumerable<ReverseProxyRouteEntity> routes)
     {
         var apiUpstream = NormalizeUpstreamUrlOrThrow(apiOptions.Value.CaddyUpstream);
         var builder = new StringBuilder();
         _ = builder.AppendLine("{");
+        _ = builder.AppendLine("    admin unix//run/caddy/admin.sock");
         _ = builder.AppendLine("    auto_https disable_redirects");
         _ = builder.AppendLine("}");
         _ = builder.AppendLine();
 
-        _ = builder.AppendLine(":80 {");
+        _ = builder.AppendLine(CaddyTrustConfiguration.HttpSiteBlock());
+
+        _ = builder.AppendLine(CultureInfo.InvariantCulture, $"{ControlPlaneHostname} {{");
+        _ = builder.AppendLine("    tls internal");
         AppendReverseProxy(builder, apiUpstream);
         _ = builder.AppendLine("}");
         _ = builder.AppendLine();
 
         var orderedRoutes = routes
             .Select(NormalizeStoredRoute)
+            .Where(route => !string.Equals(
+                route.Hostname,
+                ControlPlaneHostname,
+                StringComparison.OrdinalIgnoreCase))
             .OrderBy(r => r.Hostname, StringComparer.OrdinalIgnoreCase)
             .ToList();
         foreach (var route in orderedRoutes)
         {
+            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"http://{route.Hostname} {{");
+            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"    redir https://{route.Hostname}{{uri}} permanent");
+            _ = builder.AppendLine("}");
+            _ = builder.AppendLine();
+
             _ = builder.AppendLine(CultureInfo.InvariantCulture, $"{route.Hostname} {{");
             if (!route.TlsEnabled) _ = builder.AppendLine("    tls internal");
             AppendReverseProxy(builder, route.UpstreamUrl);
             _ = builder.AppendLine("}");
             _ = builder.AppendLine();
-        }
-
-        if (orderedRoutes.Count == 0)
-        {
-            _ = builder.AppendLine("homeharbor.local {");
-            _ = builder.AppendLine("    tls internal");
-            AppendReverseProxy(builder, apiUpstream);
-            _ = builder.AppendLine("}");
         }
 
         return builder.ToString();
@@ -78,19 +87,79 @@ public sealed class ReverseProxyConfigService(IOptions<HomeHarborApiOptions> api
         }
     }
 
+    public static bool TryNormalizeUserUpstreamUrl(string? upstreamUrl, out string normalized, out string error)
+    {
+        try
+        {
+            normalized = NormalizeUserUpstreamUrlOrThrow(upstreamUrl);
+            error = string.Empty;
+            return true;
+        }
+        catch (InvalidOperationException ex)
+        {
+            normalized = string.Empty;
+            error = ex.Message;
+            return false;
+        }
+    }
+
     private static NormalizedRoute NormalizeStoredRoute(ReverseProxyRouteEntity route)
     {
         try
         {
             return new NormalizedRoute(
                 NormalizeHostnameOrThrow(route.Hostname),
-                NormalizeUpstreamUrlOrThrow(route.UpstreamUrl),
+                NormalizeUserUpstreamUrlOrThrow(route.UpstreamUrl),
                 route.TlsEnabled);
         }
         catch (InvalidOperationException ex)
         {
             throw new InvalidOperationException($"Reverse proxy route {route.Id} is invalid: {ex.Message}", ex);
         }
+    }
+
+    private static string NormalizeUserUpstreamUrlOrThrow(string? upstreamUrl)
+    {
+        var normalized = NormalizeUpstreamUrlOrThrow(upstreamUrl);
+        if (normalized.StartsWith("unix//", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("User routes cannot target local Unix sockets.");
+        }
+
+        if (normalized.Contains("://", StringComparison.Ordinal) &&
+            Uri.TryCreate(normalized, UriKind.Absolute, out var uri) &&
+            (uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment)))
+        {
+            throw new InvalidOperationException("User route upstreams must not include a path, query, or fragment.");
+        }
+
+        Uri localUri;
+        try
+        {
+            localUri = new Uri(
+                normalized.Contains("://", StringComparison.Ordinal)
+                    ? normalized
+                    : "http://" + normalized,
+                UriKind.Absolute);
+        }
+        catch (UriFormatException ex)
+        {
+            throw new InvalidOperationException("User route upstreams must use an explicit loopback host and port.", ex);
+        }
+
+        if (!IPAddress.TryParse(localUri.Host, out var address) || !IPAddress.IsLoopback(address))
+        {
+            throw new InvalidOperationException(
+                "User route upstreams may target only a numeric loopback address; LAN, DNS, and public hosts are not allowed.");
+        }
+
+        if (localUri.IsDefaultPort || localUri.Port is < 1024 or CaddyAdminPort or > 65535)
+        {
+            throw new InvalidOperationException(
+                "User route upstreams require an explicit loopback port from 1024 to 65535, excluding the Caddy admin port.");
+        }
+
+        return normalized;
     }
 
     private static string NormalizeHostnameOrThrow(string? hostname)
@@ -314,14 +383,10 @@ public sealed class ReverseProxyConfigService(IOptions<HomeHarborApiOptions> api
 
     private static void AppendReverseProxy(StringBuilder builder, string upstream)
     {
-        if (!upstream.StartsWith("unix//", StringComparison.Ordinal))
-        {
-            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"    reverse_proxy {upstream}");
-            return;
-        }
-
         _ = builder.AppendLine(CultureInfo.InvariantCulture, $"    reverse_proxy {upstream} {{");
         _ = builder.AppendLine("        header_up Host {host}");
+        _ = builder.AppendLine("        header_up X-Forwarded-For {remote_host}");
+        _ = builder.AppendLine("        header_up X-Forwarded-Proto {scheme}");
         _ = builder.AppendLine("    }");
     }
 

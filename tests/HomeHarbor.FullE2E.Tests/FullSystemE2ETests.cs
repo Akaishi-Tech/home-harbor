@@ -35,7 +35,9 @@ public sealed class FullSystemE2ETests
                              cancellationToken))
             {
                 Assert.IsTrue(File.Exists(normal.ReportPath));
-                using var scenario = new HomeHarborApiScenario(normal.ApiBaseUri, normal.ProxyBaseUri);
+                using var scenario = new HomeHarborApiScenario(
+                    normal.CreateTrustedHttpClient,
+                    normal.SetupBootstrapCode);
                 await scenario.RunAsync(cancellationToken);
             }
 

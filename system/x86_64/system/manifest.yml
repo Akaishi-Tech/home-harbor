@@ -136,6 +136,7 @@ rootfs:
       shell: /usr/bin/nologin
       groups:
         - valkey
+        - homeharbor-api
     - name: homeharbor-containers
       system: true
       homeDir: /var/lib/homeharbor-containers
@@ -145,6 +146,8 @@ rootfs:
     - name: valkey
       system: true
     - name: homeharbor-smb
+      system: true
+    - name: homeharbor-api
       system: true
   generatedUsers:
     - prefix: homeharbor-smb
@@ -174,12 +177,17 @@ rootfs:
     - valkey
     - homeharbor-api
     - homeharbor-caddy-render
+    - homeharbor-caddy-render.path
+    - homeharbor-tls-trust
     - homeharbor-storage-health.timer
     - homeharbor-smbd
     - homeharbor-nmbd
+    - homeharbor-smb-apply
     - homeharbor-smb-apply.path
+    - homeharbor-container-apply
     - homeharbor-container-apply.path
     - homeharbor-system-app-apply.path
+    - homeharbor-setup-bootstrap-consume.path
     - homeharbor-boot-attempt
     - homeharbor-boot-success
     - serial-getty@ttyS0
@@ -217,6 +225,7 @@ recovery:
     - systemd-networkd-wait-online
     - systemd-resolved
     - homeharbor-fastbootd
+    - homeharbor-recovery-action.path
     - serial-getty@ttyS0
     - getty@tty1
 partitions:

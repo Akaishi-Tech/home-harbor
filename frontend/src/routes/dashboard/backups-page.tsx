@@ -14,6 +14,7 @@ import {
   GlassCardTitle,
 } from "@/components/glass/glass-card";
 import { EmptyState } from "@/components/glass/empty-state";
+import { QueryErrorState } from "@/components/glass/query-error-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +28,8 @@ import {
 } from "@/components/ui/form";
 import { useBackupTargets, useCreateBackup } from "@/hooks/queries";
 import { errorMessage } from "@/lib/format";
+import { useAuth } from "@/hooks/use-auth";
+import { isFamilyAdmin } from "@/lib/auth";
 
 type BackupValues = {
   repositoryUri: string;
@@ -39,6 +42,7 @@ const defaults: BackupValues = {
 export function BackupsPage() {
   const targets = useBackupTargets();
   const createBackup = useCreateBackup();
+  const canManage = isFamilyAdmin(useAuth());
   const { t } = useTranslation();
   const schema = useMemo(
     () =>
@@ -74,8 +78,14 @@ export function BackupsPage() {
         description={t("pages.backups.description")}
       />
 
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,380px)_1fr]">
-        <GlassCard>
+      <div
+        className={
+          canManage
+            ? "grid gap-3 lg:grid-cols-[minmax(0,380px)_1fr]"
+            : "grid gap-3"
+        }
+      >
+        {canManage ? <GlassCard>
           <GlassCardHeader>
             <GlassCardTitle>{t("pages.backups.createTitle")}</GlassCardTitle>
             <GlassCardDescription>
@@ -114,10 +124,13 @@ export function BackupsPage() {
                     ? t("pages.backups.createPending")
                     : t("pages.backups.create")}
                 </Button>
+                <p className="rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
+                  {t("pages.backups.executionUnavailable")}
+                </p>
               </form>
             </Form>
           </GlassCardContent>
-        </GlassCard>
+        </GlassCard> : null}
 
         <GlassCard>
           <GlassCardHeader>
@@ -130,6 +143,11 @@ export function BackupsPage() {
                   <Skeleton key={index} className="h-14 rounded-xl" />
                 ))}
               </div>
+            ) : targets.isError ? (
+              <QueryErrorState
+                error={targets.error}
+                onRetry={() => void targets.refetch()}
+              />
             ) : targets.data && targets.data.length > 0 ? (
               <ul className="space-y-2">
                 {targets.data.map((target) => (

@@ -72,6 +72,7 @@ public sealed class AppsController(
     }
 
     [HttpGet("installs")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Installs([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -92,12 +93,17 @@ public sealed class AppsController(
     }
 
     [HttpPost("installs")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Install([FromBody] InstallAppRequest request, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
         if (resolved is null) return BadRequest(new { error = "Create a family space first." });
         var template = await catalog.FindAsync(request.AppKey, cancellationToken);
         if (template is null || !template.IsVisibleTo(CurrentRole())) return NotFound(new { error = "Unknown app." });
+        if (template.Kind == "system")
+        {
+            return !CurrentUserIsAdmin() ? Forbid() : SystemAppOperationUnavailable();
+        }
         if (!template.Available)
         {
             var error = string.IsNullOrWhiteSpace(template.UnavailableReason)
@@ -106,18 +112,18 @@ public sealed class AppsController(
             return Conflict(new { error });
         }
 
-        return template.Kind == "system"
-            ? !CurrentUserIsAdmin() ? Forbid() : await InstallSystemAppAsync(resolved.Value, template, cancellationToken)
-            : await InstallContainerAppAsync(resolved.Value, template, cancellationToken);
+        return await InstallContainerAppAsync(resolved.Value, template, cancellationToken);
     }
 
     [HttpDelete("installs/{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         var app = await db.ManagedApps.FindAsync([id], cancellationToken);
         if (app is null) return NotFound(new { error = "App install not found." });
         await families.RequireAccessAsync(app.FamilyId, cancellationToken);
         if (app.Kind == "system" && !CurrentUserIsAdmin()) return Forbid();
+        if (app.Kind == "system") return SystemAppOperationUnavailable();
 
         app.DesiredState = "deleted";
         app.RuntimeState = "pending-delete";
@@ -152,51 +158,24 @@ public sealed class AppsController(
     }
 
     [HttpPost("installs/{id:guid}/state")]
-    public async Task<IActionResult> SetState(Guid id, [FromBody] SetAppStateRequest request, CancellationToken cancellationToken)
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
+    public IActionResult SetState(Guid id, [FromBody] SetAppStateRequest request, CancellationToken cancellationToken)
     {
-        var app = await db.ManagedApps.FindAsync([id], cancellationToken);
-        if (app is null) return NotFound();
-        await families.RequireAccessAsync(app.FamilyId, cancellationToken);
-        if (app.Kind == "system" && !CurrentUserIsAdmin()) return Forbid();
-        app.State = string.IsNullOrWhiteSpace(request.State) ? "planned" : request.State.Trim().ToLowerInvariant();
-        app.RuntimeState = app.State;
-        app.UpdatedAt = DateTimeOffset.UtcNow;
-        _ = await db.SaveChangesAsync(cancellationToken);
-        return Ok(new { app.Id, app.AppKey, app.State, app.UpdatedAt });
+        _ = id;
+        _ = request;
+        _ = cancellationToken;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
+        {
+            error = "App state changes are unavailable because this endpoint is not connected to the container or system-app runtime. No state was changed."
+        });
     }
 
     [Authorize(Policy = AuthorizationPolicies.Automation)]
     [HttpGet("reconcile/desired")]
-    public async Task<IActionResult> Desired(CancellationToken cancellationToken)
+    public IActionResult Desired(CancellationToken cancellationToken)
     {
-        var apps = await db.ManagedApps
-            .AsNoTracking()
-            .Where(a => a.Kind == "system" && (a.DesiredState == "installed" || a.DesiredState == "deleted"))
-            .OrderBy(a => a.CreatedAt)
-            .ToListAsync(cancellationToken);
-
-        return Ok(apps.Select(app =>
-        {
-            var manifest = ReadManifest(app);
-            return new
-            {
-                app.Id,
-                app.FamilyId,
-                app.AppKey,
-                app.DisplayName,
-                app.Kind,
-                app.DesiredState,
-                app.RuntimeState,
-                app.InstalledVersion,
-                app.ActiveVersion,
-                app.RequiresReboot,
-                app.LastAppliedAt,
-                manifestUrl = ManifestUrl(manifest),
-                version = JsonString(HhafManifest(manifest), "version"),
-                commands = ManifestCommands(app.AppKey, manifest),
-                hotCheck = ManifestHotCheck(app.AppKey, manifest)
-            };
-        }));
+        _ = cancellationToken;
+        return Ok(Array.Empty<object>());
     }
 
     [Authorize(Policy = AuthorizationPolicies.Automation)]
@@ -225,6 +204,9 @@ public sealed class AppsController(
 
     private async Task<IActionResult> InstallContainerAppAsync(Guid familyId, ManagedAppTemplate template, CancellationToken cancellationToken)
     {
+        await ContainerMutationGate.Instance.WaitAsync(cancellationToken);
+        try
+        {
         var now = DateTimeOffset.UtcNow;
         var app = await db.ManagedApps.FirstOrDefaultAsync(
             a => a.FamilyId == familyId && a.AppKey == template.AppKey,
@@ -268,9 +250,20 @@ public sealed class AppsController(
                 null,
                 null);
             var definition = specs.Normalize(familyId, containerId, request);
-            if (await db.ManagedContainers.AsNoTracking().AnyAsync(c => c.FamilyId == familyId && c.Name == definition.Name && c.DeletedAt == null, cancellationToken))
+            var activeContainers = await db.ManagedContainers.AsNoTracking()
+                .Where(candidate => candidate.DeletedAt == null)
+                .ToListAsync(cancellationToken);
+            if (activeContainers.Any(candidate => candidate.FamilyId == familyId && candidate.Name == definition.Name))
             {
                 return Conflict(new { error = "A container with this app name already exists." });
+            }
+            try
+            {
+                specs.EnsurePortsAvailable(definition, activeContainers);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Conflict(new { error = ex.Message });
             }
 
             container = new ManagedContainerEntity
@@ -319,45 +312,21 @@ public sealed class AppsController(
         _ = await db.SaveChangesAsync(cancellationToken);
         signals.RequestContainerApply();
         return Ok(AppResponse(app));
-    }
-
-    private async Task<IActionResult> InstallSystemAppAsync(Guid familyId, ManagedAppTemplate template, CancellationToken cancellationToken)
-    {
-        var now = DateTimeOffset.UtcNow;
-        var app = await db.ManagedApps.FirstOrDefaultAsync(
-            a => a.FamilyId == familyId && a.AppKey == template.AppKey,
-            cancellationToken);
-        if (app is null)
-        {
-            app = new ManagedAppEntity
-            {
-                Id = Guid.NewGuid(),
-                FamilyId = familyId,
-                AppKey = template.AppKey,
-                CreatedAt = now
-            };
-            _ = db.ManagedApps.Add(app);
         }
-
-        app.Kind = template.Kind;
-        app.DisplayName = template.DisplayName;
-        app.Image = string.Empty;
-        app.DesiredState = "installed";
-        app.RuntimeState = "pending-download";
-        app.State = app.RuntimeState;
-        app.InstalledVersion = string.Empty;
-        app.RequiresReboot = true;
-        app.LastError = string.Empty;
-        app.ManifestJson = JsonSerializer.Serialize(new
+        finally
         {
-            hhaf = JsonDocument.Parse(template.ManifestJson).RootElement.Clone()
-        }, JsonOptions);
-        app.UpdatedAt = now;
-
-        _ = await db.SaveChangesAsync(cancellationToken);
-        signals.RequestSystemAppApply();
-        return Ok(AppResponse(app));
+            _ = ContainerMutationGate.Instance.Release();
+        }
     }
+
+    internal static IActionResult SystemAppOperationUnavailable()
+        => new ObjectResult(new
+        {
+            error = "System app operations are unavailable until persistent activation and boot-time wrapper reconstruction are implemented. No operation was queued."
+        })
+        {
+            StatusCode = StatusCodes.Status501NotImplemented
+        };
 
     private static object AppResponse(ManagedAppEntity app)
         => new
@@ -391,66 +360,6 @@ public sealed class AppsController(
 
     private string? CurrentRole()
         => User.FindFirstValue(ClaimTypes.Role) ?? User.FindFirstValue("role");
-
-    private static JsonElement ReadManifest(ManagedAppEntity app)
-        => JsonDocument.Parse(string.IsNullOrWhiteSpace(app.ManifestJson) ? "{}" : app.ManifestJson).RootElement.Clone();
-
-    private static string? JsonString(JsonElement element, string name)
-        => element.TryGetProperty(name, out var property) && property.ValueKind != JsonValueKind.Null
-            ? property.ValueKind == JsonValueKind.String ? property.GetString() : property.ToString()
-            : null;
-
-    private static JsonElement HhafManifest(JsonElement manifest)
-        => manifest.TryGetProperty("hhaf", out var hhaf) && hhaf.ValueKind == JsonValueKind.Object
-            ? hhaf
-            : manifest;
-
-    private static JsonElement? HhafInstall(JsonElement manifest)
-    {
-        var hhaf = HhafManifest(manifest);
-        return hhaf.TryGetProperty("install", out var install) && install.ValueKind == JsonValueKind.Object
-            ? install
-            : null;
-    }
-
-    private static string? ManifestUrl(JsonElement manifest)
-    {
-        return HhafInstall(manifest) is { } install && JsonString(install, "manifestUrl") is { } manifestUrl
-            ? manifestUrl
-            : JsonString(manifest, "manifestUrl");
-    }
-
-    private static IReadOnlyList<string> ManifestCommands(string appKey, JsonElement manifest)
-    {
-        _ = appKey;
-        return HhafInstall(manifest) is { } install &&
-            install.TryGetProperty("commands", out var commands) &&
-            commands.ValueKind == JsonValueKind.Array
-            ? commands.EnumerateArray()
-                .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.ToString())
-                .Where(value => !string.IsNullOrWhiteSpace(value))
-                .ToArray()
-            : (IReadOnlyList<string>)[];
-    }
-
-    private static object? ManifestHotCheck(string appKey, JsonElement manifest)
-    {
-        _ = appKey;
-        if (HhafInstall(manifest) is { } install &&
-            install.TryGetProperty("hotCheck", out var hotCheck) &&
-            hotCheck.ValueKind == JsonValueKind.Object)
-        {
-            var command = JsonString(hotCheck, "command");
-            var args = hotCheck.TryGetProperty("args", out var argsElement) && argsElement.ValueKind == JsonValueKind.Array
-                ? argsElement.EnumerateArray()
-                    .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.ToString())
-                    .ToArray()
-                : [];
-            return string.IsNullOrWhiteSpace(command) ? null : new { command, args };
-        }
-
-        return null;
-    }
 
     public sealed record InstallAppRequest(Guid? FamilyId, string AppKey);
     public sealed record SetAppStateRequest(string? State);

@@ -14,9 +14,11 @@ public sealed class DevicesController(
     HomeHarborDbContext db,
     IFamilyResolver families,
     ITokenGenerator tokenGenerator,
-    ISetupPairingService pairings) : ControllerBase
+    ISetupPairingService pairings,
+    AuthenticationFailureThrottle throttle) : ControllerBase
 {
     [HttpGet]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> List([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -32,22 +34,45 @@ public sealed class DevicesController(
     }
 
     [HttpPost]
-    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
+    [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterDeviceRequest request, CancellationToken cancellationToken)
     {
-        if (!pairings.IsValid(request.PairingCode))
-            return BadRequest(new { error = "Pairing code is expired or invalid. Scan the setup QR code again." });
+        var displayName = string.IsNullOrWhiteSpace(request.DisplayName) ? "HomeHarbor device" : request.DisplayName.Trim();
+        var kind = string.IsNullOrWhiteSpace(request.Kind) ? "mobile" : request.Kind.Trim().ToLowerInvariant();
+        if (displayName.Length > 96 || kind.Length > 32 || kind is not ("browser" or "mobile" or "desktop"))
+            return BadRequest(new { error = "Device name or kind is invalid." });
+        if (request.Scope is { } requestedScope && !Enum.IsDefined(requestedScope))
+            return BadRequest(new { error = "WebDAV scope is invalid." });
 
-        var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
-        if (resolved is null) return BadRequest(new { error = "Create a family space first." });
+        var clientIdentity = AuthenticationClientIdentity.Resolve(HttpContext);
+        var accountIdentity = request.PairingCode?.Trim() ?? string.Empty;
+        var clientAllowed = throttle.TryAcquire("device-pair-client", clientIdentity, out var clientRetryAfter);
+        var accountAllowed = throttle.TryAcquire("device-pair", accountIdentity, out var accountRetryAfter);
+        if (!clientAllowed || !accountAllowed)
+        {
+            var retryAfter = clientRetryAfter > accountRetryAfter ? clientRetryAfter : accountRetryAfter;
+            Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "Too many failed pairing attempts. Try again later." });
+        }
+        if (!pairings.TryConsumeDeviceCode(request.PairingCode, out var ticket) || ticket is null)
+        {
+            throttle.RecordFailure("device-pair-client", clientIdentity);
+            throttle.RecordFailure("device-pair", accountIdentity);
+            return BadRequest(new { error = "Pairing code is expired or invalid. Scan the setup QR code again." });
+        }
+        throttle.RecordSuccess("device-pair", accountIdentity);
+
+        var familyId = ticket.FamilyId;
+        if (!await db.FamilySpaces.AsNoTracking().AnyAsync(family => family.Id == familyId, cancellationToken))
+            return BadRequest(new { error = "Pairing family no longer exists." });
 
         var now = DateTimeOffset.UtcNow;
         var device = new DeviceEntity
         {
             Id = Guid.NewGuid(),
-            FamilyId = resolved.Value,
-            DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? "HomeHarbor device" : request.DisplayName.Trim(),
-            Kind = string.IsNullOrWhiteSpace(request.Kind) ? "mobile" : request.Kind.Trim().ToLowerInvariant(),
+            FamilyId = familyId,
+            DisplayName = displayName,
+            Kind = kind,
             CreatedAt = now,
             LastSeenAt = now
         };
@@ -61,7 +86,7 @@ public sealed class DevicesController(
             var token = new WebDavTokenEntity
             {
                 Id = Guid.NewGuid(),
-                FamilyId = resolved.Value,
+                FamilyId = familyId,
                 DeviceId = device.Id,
                 Username = tokenGenerator.GenerateUsername("dav"),
                 TokenHash = BCrypt.Net.BCrypt.HashPassword(plaintext),
@@ -74,7 +99,6 @@ public sealed class DevicesController(
         }
 
         _ = await db.SaveChangesAsync(cancellationToken);
-        pairings.Consume(request.PairingCode);
 
         return Ok(new
         {
@@ -89,6 +113,7 @@ public sealed class DevicesController(
     }
 
     [HttpPost("{id:guid}/heartbeat")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Heartbeat(Guid id, CancellationToken cancellationToken)
     {
         var device = await db.Devices.FindAsync([id], cancellationToken);

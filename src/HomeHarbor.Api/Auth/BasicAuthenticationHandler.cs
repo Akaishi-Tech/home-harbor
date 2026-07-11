@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Globalization;
 using HomeHarbor.Api.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
@@ -12,7 +13,8 @@ namespace HomeHarbor.Api.Auth;
 public sealed class BasicAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
-    UrlEncoder encoder) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    UrlEncoder encoder,
+    AuthenticationFailureThrottle throttle) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "Basic";
     public const string FamilyIdClaim = AuthClaims.FamilyId;
@@ -20,6 +22,7 @@ public sealed class BasicAuthenticationHandler(
     public const string WebDavScopeClaim = AuthClaims.WebDavScope;
 
     private const string Realm = "HomeHarbor WebDAV";
+    private const string ThrottledItem = "HomeHarbor.BasicAuthentication.Throttled";
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -28,7 +31,8 @@ public sealed class BasicAuthenticationHandler(
 
         if (!AuthenticationHeaderValue.TryParse(headerValues.ToString(), out var header) ||
             !string.Equals(header.Scheme, SchemeName, StringComparison.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(header.Parameter))
+            string.IsNullOrWhiteSpace(header.Parameter) ||
+            header.Parameter.Length > 2048)
         {
             return AuthenticateResult.NoResult();
         }
@@ -48,25 +52,40 @@ public sealed class BasicAuthenticationHandler(
 
         var username = decoded[..separator];
         var password = decoded[(separator + 1)..];
+        if (username.Length is 0 or > 64 || password.Length is 0 or > 256)
+            return AuthenticateResult.Fail("Invalid credentials.");
+        var clientIdentity = AuthenticationClientIdentity.Resolve(Context);
+        var throttleIdentity = username;
+        var clientAllowed = throttle.TryAcquire("webdav-client", clientIdentity, out var clientRetryAfter);
+        var accountAllowed = throttle.TryAcquire("webdav", throttleIdentity, out var accountRetryAfter);
+        if (!clientAllowed || !accountAllowed)
+        {
+            var retryAfter = clientRetryAfter > accountRetryAfter ? clientRetryAfter : accountRetryAfter;
+            Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+            Context.Items[ThrottledItem] = true;
+            return AuthenticateResult.Fail("Too many failed authentication attempts. Try again later.");
+        }
 
         var db = Context.RequestServices.GetRequiredService<HomeHarborDbContext>();
         var token = await db.WebDavTokens.FirstOrDefaultAsync(t => t.Username == username, Context.RequestAborted);
-        if (token is null) return AuthenticateResult.Fail("Invalid credentials.");
-
-        bool verified;
-        try
+        if (token is null || !LocalPasswordVerifier.Verify(password, token.TokenHash))
         {
-            verified = BCrypt.Net.BCrypt.Verify(password, token.TokenHash);
+            throttle.RecordFailure("webdav-client", clientIdentity);
+            throttle.RecordFailure("webdav", throttleIdentity);
+            return AuthenticateResult.Fail("Invalid credentials.");
         }
-        catch (BCrypt.Net.SaltParseException)
+        if (!Enum.IsDefined(token.Scope))
         {
-            return AuthenticateResult.Fail("Stored token hash is invalid.");
+            return AuthenticateResult.Fail("Credential scope is invalid. Revoke and reissue this credential.");
         }
+        throttle.RecordSuccess("webdav", throttleIdentity);
 
-        if (!verified) return AuthenticateResult.Fail("Invalid credentials.");
-
-        token.LastUsedAt = DateTimeOffset.UtcNow;
-        _ = await db.SaveChangesAsync(Context.RequestAborted);
+        var now = DateTimeOffset.UtcNow;
+        if (token.LastUsedAt is null || now - token.LastUsedAt >= TimeSpan.FromMinutes(5))
+        {
+            token.LastUsedAt = now;
+            _ = await db.SaveChangesAsync(Context.RequestAborted);
+        }
 
         var claims = new List<Claim>
         {
@@ -83,6 +102,12 @@ public sealed class BasicAuthenticationHandler(
 
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
+        if (Context.Items.ContainsKey(ThrottledItem))
+        {
+            Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            return Task.CompletedTask;
+        }
+
         Response.StatusCode = StatusCodes.Status401Unauthorized;
         Response.Headers.WWWAuthenticate = $"Basic realm=\"{Realm}\", charset=\"UTF-8\"";
         return Task.CompletedTask;

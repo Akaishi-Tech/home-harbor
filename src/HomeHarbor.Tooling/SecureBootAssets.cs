@@ -25,6 +25,7 @@ public static class SecureBootAssets
     public static string GenericBootCmdline(
         string kernelRelease,
         string version,
+        long releaseSequence,
         string? vbmetaADigest = null,
         string? vbmetaBDigest = null,
         string? extraArgs = null)
@@ -33,9 +34,11 @@ public static class SecureBootAssets
             ? string.Empty
             : $" homeharbor.vbmeta_a_digest={vbmetaADigest} homeharbor.vbmeta_b_digest={vbmetaBDigest}";
         var appendedArgs = string.IsNullOrWhiteSpace(extraArgs) ? string.Empty : " " + extraArgs.Trim();
+        _ = ReleaseSequence.RequirePositive(releaseSequence, "release sequence");
         return ConsoleArgs + " ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs " +
             $"homeharbor.boot_mode={BootMode()} homeharbor.boot_generic=1 homeharbor.super=/dev/disk/by-partlabel/super " +
-            $"homeharbor.kernel_release={kernelRelease}{vbmetaArgs}{appendedArgs} homeharbor.version={version}";
+            $"homeharbor.kernel_release={kernelRelease}{vbmetaArgs}{appendedArgs} " +
+            $"{ReleaseSequence.KernelArgument}={releaseSequence} homeharbor.version={version}";
     }
 
     public static string SlotCmdline(HomeHarborBootEnvironment env)

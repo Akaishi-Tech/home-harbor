@@ -3,6 +3,7 @@ OUTPUT ?= $(ROOT)/artifacts/HomeHarborBoot.efi
 BUILD_DIR ?= $(ROOT)/.work/efi-loader
 
 CLANG ?= clang
+HOST_CC ?= cc
 
 SOURCES := \
 	HomeHarborBoot.c \
@@ -40,9 +41,17 @@ LDFLAGS := \
 	-Wl,/subsystem:efi_application \
 	-Wl,/nodefaultlib
 
-.PHONY: all clean
+.PHONY: all clean test FORCE
 
 all: $(OUTPUT)
+
+test: $(BUILD_DIR)/test_boot_current
+	$(BUILD_DIR)/test_boot_current
+
+$(BUILD_DIR)/test_boot_current: test_boot_current.c variables.c variables.h globals.c globals.h efi.h
+	@mkdir -p "$(BUILD_DIR)"
+	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -fshort-wchar -ffunction-sections -fdata-sections -Wl,--gc-sections -I"$(CURDIR)" \
+		test_boot_current.c variables.c globals.c -o "$@"
 
 $(OUTPUT): $(OBJECTS)
 	@mkdir -p "$(dir $@)"
@@ -57,9 +66,16 @@ $(BUILD_DIR)/avb.obj: avb.c $(HEADERS) $(AVB_PUBLIC_KEY_HEADER)
 	@mkdir -p "$(BUILD_DIR)"
 	$(CLANG) $(CFLAGS) -include "$(AVB_PUBLIC_KEY_HEADER)" -c "$<" -o "$@"
 
-$(AVB_PUBLIC_KEY_HEADER): $(ROOT)/src/HomeHarbor.ImageBuilder/Program.cs $(ROOT)/src/HomeHarbor.Tooling/BuildToolCommands.cs
+$(AVB_PUBLIC_KEY_HEADER): FORCE $(ROOT)/src/HomeHarbor.ImageBuilder/Program.cs $(ROOT)/src/HomeHarbor.Tooling/BuildToolCommands.cs
 	@mkdir -p "$(dir $@)"
-	dotnet run --project "$(ROOT)/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- generate-efi-avb-public-key "$@" "$(ROOT)"
+	@set -eu; \
+		tmp="$@.tmp.$$$$"; \
+		trap 'rm -f "$$tmp"' EXIT; \
+		dotnet run --project "$(ROOT)/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- generate-efi-avb-public-key "$$tmp" "$(ROOT)"; \
+		if ! cmp -s "$$tmp" "$@"; then mv -f "$$tmp" "$@"; else rm -f "$$tmp"; fi; \
+		trap - EXIT
+
+FORCE:
 
 clean:
 	rm -rf "$(BUILD_DIR)"

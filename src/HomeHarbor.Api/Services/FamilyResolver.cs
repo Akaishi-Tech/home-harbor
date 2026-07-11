@@ -35,12 +35,11 @@ public sealed class FamilyResolver(HomeHarborDbContext db, IHttpContextAccessor 
     private Guid? CurrentUserFamilyId()
     {
         var user = httpContextAccessor.HttpContext?.User;
-        return user?.Identity?.IsAuthenticated != true
-            ? null
-            : !string.Equals(user.FindFirstValue(AuthClaims.TokenKind), AuthTokenKinds.User, StringComparison.Ordinal)
-            ? null
-            : Guid.TryParse(user.FindFirstValue(AuthClaims.FamilyId), out var familyId)
+        if (user?.Identity?.IsAuthenticated != true) return null;
+        if (!string.Equals(user.FindFirstValue(AuthClaims.TokenKind), AuthTokenKinds.User, StringComparison.Ordinal))
+            return null;
+        return Guid.TryParse(user.FindFirstValue(AuthClaims.FamilyId), out var familyId)
             ? familyId
-            : null;
+            : throw new UnauthorizedAccessException("The current session is missing its family identity.");
     }
 }

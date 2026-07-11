@@ -3,9 +3,18 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Brand } from "@/components/app-shell/brand";
 import { navItems } from "@/components/app-shell/nav";
+import { useAuth } from "@/hooks/use-auth";
+import { isFamilyAdmin, isFamilyMember } from "@/lib/auth";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useTranslation();
+  const auth = useAuth();
+  const visibleItems = navItems.filter(
+    (item) =>
+      !item.access ||
+      (item.access === "admin" && isFamilyAdmin(auth)) ||
+      (item.access === "member" && isFamilyMember(auth)),
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -14,7 +23,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-1 py-2">
-        {navItems.map((item) => (
+        {visibleItems.map((item) => (
           <NavLink
             key={item.id}
             to={item.to}

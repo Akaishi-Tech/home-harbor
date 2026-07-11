@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for a consumed HomeHarbor setup bootstrap code
+
+[Path]
+PathExists=/run/homeharbor/setup-bootstrap-consume
+Unit=homeharbor-setup-bootstrap-consume.service
+
+[Install]
+WantedBy=multi-user.target

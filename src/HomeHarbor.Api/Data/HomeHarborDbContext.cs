@@ -32,6 +32,7 @@ public sealed class HomeHarborDbContext(DbContextOptions<HomeHarborDbContext> op
             _ = entity.HasIndex(e => e.CreatedAt);
             _ = entity.Property(e => e.Name).HasMaxLength(96);
             _ = entity.Property(e => e.OwnerDisplayName).HasMaxLength(96);
+            _ = entity.Property(e => e.RecoveryCodeHash).HasMaxLength(256);
         });
 
         _ = modelBuilder.Entity<DeviceEntity>(entity =>
@@ -46,7 +47,7 @@ public sealed class HomeHarborDbContext(DbContextOptions<HomeHarborDbContext> op
         _ = modelBuilder.Entity<FamilyMemberEntity>(entity =>
         {
             _ = entity.HasKey(e => e.Id);
-            _ = entity.HasIndex(e => new { e.FamilyId, e.DisplayName });
+            _ = entity.HasIndex(e => new { e.FamilyId, e.DisplayName }).IsUnique();
             _ = entity.HasIndex(e => new { e.FamilyId, e.CreatedAt });
             _ = entity.Property(e => e.DisplayName).HasMaxLength(96);
             _ = entity.Property(e => e.Role).HasMaxLength(32);
@@ -94,7 +95,6 @@ public sealed class HomeHarborDbContext(DbContextOptions<HomeHarborDbContext> op
             _ = entity.HasIndex(e => new { e.FamilyId, e.CreatedAt });
             _ = entity.Property(e => e.Name).HasMaxLength(96);
             _ = entity.Property(e => e.PublicKey).HasMaxLength(128);
-            _ = entity.Property(e => e.PrivateKey).HasMaxLength(128);
             _ = entity.Property(e => e.Address).HasMaxLength(64);
         });
 
@@ -149,7 +149,9 @@ public sealed class HomeHarborDbContext(DbContextOptions<HomeHarborDbContext> op
         _ = modelBuilder.Entity<ManagedContainerEntity>(entity =>
         {
             _ = entity.HasKey(e => e.Id);
-            _ = entity.HasIndex(e => new { e.FamilyId, e.Name }).IsUnique();
+            _ = entity.HasIndex(e => new { e.FamilyId, e.Name })
+                .IsUnique()
+                .HasFilter("\"DeletedAt\" IS NULL");
             _ = entity.HasIndex(e => new { e.FamilyId, e.DeletedAt });
             _ = entity.HasIndex(e => new { e.FamilyId, e.CreatedAt });
             _ = entity.HasIndex(e => new { e.FamilyId, e.UpdatedAt });
@@ -177,8 +179,8 @@ public sealed class HomeHarborDbContext(DbContextOptions<HomeHarborDbContext> op
         _ = modelBuilder.Entity<SmbCredentialEntity>(entity =>
         {
             _ = entity.HasKey(e => e.Id);
-            _ = entity.HasIndex(e => e.Username).IsUnique();
-            _ = entity.HasIndex(e => e.UnixUser).IsUnique();
+            _ = entity.HasIndex(e => e.Username).IsUnique().HasFilter("\"RevokedAt\" IS NULL");
+            _ = entity.HasIndex(e => e.UnixUser).IsUnique().HasFilter("\"RevokedAt\" IS NULL");
             _ = entity.HasIndex(e => new { e.FamilyId, e.RevokedAt });
             _ = entity.HasIndex(e => new { e.ShareId, e.RevokedAt });
             _ = entity.Property(e => e.DisplayName).HasMaxLength(96);

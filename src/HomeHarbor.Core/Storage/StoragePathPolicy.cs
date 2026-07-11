@@ -51,14 +51,58 @@ public static class StoragePathPolicy
     public static string ResolvePhysicalPath(string dataRoot, Guid familyId, StorageArea area, string normalizedPath)
     {
         var relative = ToSafeRelativePath(normalizedPath);
-        var areaRoot = Path.GetFullPath(Path.Combine(dataRoot, "families", familyId.ToString("N"), AreaDirectoryName(area)));
+        var fullDataRoot = Path.GetFullPath(dataRoot);
+        var areaRoot = Path.GetFullPath(Path.Combine(fullDataRoot, "families", familyId.ToString("N"), AreaDirectoryName(area)));
         var candidate = Path.GetFullPath(Path.Combine(areaRoot, relative));
 
-        return !candidate.Equals(areaRoot, StringComparison.Ordinal) &&
-            !candidate.StartsWith(areaRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            ? throw new InvalidOperationException("Path escapes the storage root.")
-            : candidate;
+        if (!candidate.Equals(areaRoot, PathComparison) &&
+            !candidate.StartsWith(areaRoot + Path.DirectorySeparatorChar, PathComparison))
+        {
+            throw new InvalidOperationException("Path escapes the storage root.");
+        }
+
+        RejectReparsePoints(fullDataRoot, candidate);
+        return candidate;
     }
+
+    public static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static void RejectReparsePoints(string root, string candidate)
+    {
+        RejectReparsePoint(root);
+        var relative = Path.GetRelativePath(root, candidate);
+        var current = root;
+        foreach (var segment in relative.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            RejectReparsePoint(current);
+        }
+    }
+
+    private static void RejectReparsePoint(string path)
+    {
+        if (IsReparsePoint(path))
+            throw new InvalidOperationException("Symbolic links and reparse points are not allowed in storage paths.");
+    }
+
+    private static StringComparison PathComparison
+        => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static void ValidatePercentEncoding(string rawPath)
     {

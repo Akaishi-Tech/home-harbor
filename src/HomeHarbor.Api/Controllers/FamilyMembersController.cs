@@ -33,9 +33,7 @@ public sealed class FamilyMembersController(HomeHarborDbContext db, IFamilyResol
         {
             new { role = FamilyRoles.Owner, files = "write", photos = "write", backups = "write", vault = "write", admin = true },
             new { role = FamilyRoles.Admin, files = "write", photos = "write", backups = "write", vault = "write", admin = true },
-            new { role = FamilyRoles.Member, files = "write", photos = "write", backups = "read", vault = "own", admin = false },
-            new { role = FamilyRoles.Child, files = "own", photos = "own", backups = "none", vault = "none", admin = false },
-            new { role = FamilyRoles.Guest, files = "read", photos = "read", backups = "none", vault = "none", admin = false }
+            new { role = FamilyRoles.Member, files = "none", photos = "none", backups = "read", vault = "none", admin = false }
         });
 
     [HttpPost]
@@ -47,18 +45,41 @@ public sealed class FamilyMembersController(HomeHarborDbContext db, IFamilyResol
 
         var role = string.IsNullOrWhiteSpace(request.Role) ? FamilyRoles.Member : request.Role.Trim().ToLowerInvariant();
         if (!AllowedRoles.Contains(role)) return BadRequest(new { error = "Unsupported role." });
+        if (role == FamilyRoles.Owner && !User.IsInRole(FamilyRoles.Owner))
+            return Forbid();
+        if (string.IsNullOrWhiteSpace(request.DisplayName))
+            return BadRequest(new { error = "displayName is required." });
+        var displayName = request.DisplayName.Trim();
+        if (displayName.Length > 96)
+            return BadRequest(new { error = "displayName must not exceed 96 characters." });
+        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 12 || request.Password.Length > 128)
+            return BadRequest(new { error = "password must contain 12 to 128 characters." });
+        if (await db.FamilyMembers.AsNoTracking().AnyAsync(
+            member => member.FamilyId == resolved.Value && member.DisplayName == displayName,
+            cancellationToken))
+        {
+            return Conflict(new { error = "A family member with this display name already exists." });
+        }
+
         var member = new FamilyMemberEntity
         {
             Id = Guid.NewGuid(),
             FamilyId = resolved.Value,
-            DisplayName = string.IsNullOrWhiteSpace(request.DisplayName) ? "Family member" : request.DisplayName.Trim(),
+            DisplayName = displayName,
             Role = role,
-            PasswordHash = string.IsNullOrWhiteSpace(request.Password) ? null : BCrypt.Net.BCrypt.HashPassword(request.Password),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
             CreatedAt = DateTimeOffset.UtcNow
         };
 
         _ = db.FamilyMembers.Add(member);
-        _ = await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            _ = await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new { error = "A family member with this display name already exists." });
+        }
         return Ok(new { member.Id, member.FamilyId, member.DisplayName, member.Role, member.CreatedAt });
     }
 
@@ -69,6 +90,25 @@ public sealed class FamilyMembersController(HomeHarborDbContext db, IFamilyResol
         var member = await db.FamilyMembers.FindAsync([id], cancellationToken);
         if (member is null) return NotFound();
         await families.RequireAccessAsync(member.FamilyId, cancellationToken);
+        var family = await db.FamilySpaces.AsNoTracking().FirstOrDefaultAsync(
+            candidate => candidate.Id == member.FamilyId,
+            cancellationToken);
+        if (family is not null && OwnerRecoveryPolicy.IsPrimaryOwner(family, member))
+        {
+            if (!User.IsInRole(FamilyRoles.Owner)) return Forbid();
+            return Conflict(new { error = "The primary family owner cannot be deleted." });
+        }
+        if (member.Role == FamilyRoles.Owner)
+        {
+            if (!User.IsInRole(FamilyRoles.Owner)) return Forbid();
+            var ownerCount = await db.FamilyMembers.AsNoTracking().CountAsync(
+                candidate => candidate.FamilyId == member.FamilyId && candidate.Role == FamilyRoles.Owner,
+                cancellationToken);
+            if (ownerCount <= 1) return Conflict(new { error = "The last family owner cannot be deleted." });
+        }
+
+        var sessions = await db.MemberSessions.Where(session => session.MemberId == member.Id).ToListAsync(cancellationToken);
+        db.MemberSessions.RemoveRange(sessions);
         _ = db.FamilyMembers.Remove(member);
         _ = await db.SaveChangesAsync(cancellationToken);
         return NoContent();
@@ -78,9 +118,7 @@ public sealed class FamilyMembersController(HomeHarborDbContext db, IFamilyResol
     {
         FamilyRoles.Owner,
         FamilyRoles.Admin,
-        FamilyRoles.Member,
-        FamilyRoles.Child,
-        FamilyRoles.Guest
+        FamilyRoles.Member
     };
 
     public sealed record CreateMemberRequest(Guid? FamilyId, string? DisplayName, string? Role, string? Password);

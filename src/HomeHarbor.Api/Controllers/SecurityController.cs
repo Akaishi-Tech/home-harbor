@@ -27,16 +27,16 @@ public sealed class SecurityController(
             },
             endToEndEncryption = new
             {
-                requiredByDefault = true,
+                requiredByDefault = false,
                 vault = "client-encrypted-payloads-only",
-                filesAndPhotos = "client-side-envelope-before-webdav-upload",
-                serverPlaintextPolicy = "metadata-only-for-vault-and-sync-state"
+                filesAndPhotos = "server-readable-webdav-and-smb-content",
+                serverPlaintextPolicy = "vault-payloads-are-client-encrypted; file-and-photo-content-is-protected-at-rest-only"
             },
             backups = new
             {
-                oneClickExternal = true,
+                oneClickExternal = false,
                 tool = "restic",
-                encryptedRepository = true
+                encryptedRepository = "planned-not-executed-by-the-current-control-plane"
             },
             identity = new
             {

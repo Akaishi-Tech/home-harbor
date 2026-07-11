@@ -4,7 +4,12 @@
 #include "efi.h"
 
 int read_efi_boot_next(char *slot, char *root_slot, char *mode, char *recovery_slot);
-EFI_STATUS write_efi_boot_current(char *slot, char *root_slot, char *mode, char *recovery_slot);
+EFI_STATUS write_efi_boot_current(
+    char *slot,
+    char *root_slot,
+    char *mode,
+    char *recovery_slot,
+    const char *vbmeta_digest);
 int read_uint8_variable(CHAR16 *name, EFI_GUID *guid, UINT8 *value);
 int read_uint64_variable(CHAR16 *name, EFI_GUID *guid, UINT64 *value, UINT32 *attributes);
 int secure_boot_enabled(void);

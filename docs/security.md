@@ -8,6 +8,21 @@ Users get bearer tokens from `POST /api/identity/login`. JWT validation checks s
 
 The default authorization fallback policy requires a user JWT. Setup, login, health, and SPA fallback are explicit anonymous exceptions.
 
+## First-Use TLS Trust
+
+HomeHarbor uses a per-appliance Caddy internal CA. Before entering a setup code,
+recovery code, or password in a browser, download the public CA certificate from
+`http://homeharbor.local/homeharbor-ca.crt`. Install it only after comparing its
+SHA-256 fingerprint exactly with the value printed on the physical appliance
+console. The console is the authenticated channel; the HTTP download is only a
+transport for public certificate bytes and is not trusted by itself.
+
+`homeharbor-tls-trust.service` prints the fingerprint after Caddy creates the CA
+and retries if the certificate or a physical console is not ready. The Caddy
+state directory persists the CA across reboots. If that state is replaced or
+the fingerprint changes unexpectedly, stop and re-establish physical trust
+instead of bypassing a browser certificate warning.
+
 ## Automation Token
 
 Appliance-internal services use an automation token. The API migration command writes it through `JwtTokenService.WriteAutomationTokenAsync()` to `HomeHarbor:Automation:TokenPath`:

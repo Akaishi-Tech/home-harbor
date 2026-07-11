@@ -4,7 +4,8 @@ import type { AuthState } from "@/types";
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 type ApiOptions = {
-  auth?: AuthState | null;
+  /** Set to false for intentionally anonymous endpoints such as login/OOBE. */
+  auth?: AuthState | null | false;
   method?: string;
   body?: unknown;
   headers?: HeadersInit;
@@ -49,7 +50,10 @@ export async function api<T>(
   const headers = new Headers(options.headers);
   headers.set("accept", "application/json");
 
-  const token = options.auth?.accessToken ?? tokenProvider?.() ?? null;
+  const token =
+    options.auth === false
+      ? null
+      : (options.auth?.accessToken ?? tokenProvider?.() ?? null);
   if (token) {
     headers.set("authorization", `Bearer ${token}`);
   }
@@ -58,6 +62,10 @@ export async function api<T>(
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
     headers,
     signal: options.signal,
+    cache: "no-store",
+    credentials: "omit",
+    redirect: "error",
+    referrerPolicy: "no-referrer",
   };
 
   if (options.body !== undefined) {
@@ -65,17 +73,36 @@ export async function api<T>(
     init.body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(endpoint(path), init);
-  const text = await response.text();
+  let response: Response;
+  try {
+    response = await fetch(endpoint(path), init);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError(i18n.t("api.unreachable"), 0);
+  }
+
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    throw new ApiError(i18n.t("api.incompleteResponse"), response.status);
+  }
   const body = text ? parseJson(text) : null;
 
   if (response.status === 401) {
-    unauthorizedHandler?.();
-    throw new ApiError(i18n.t("api.expired"), 401);
+    if (token) {
+      unauthorizedHandler?.();
+      throw new ApiError(i18n.t("api.expired"), 401);
+    }
+    throw new ApiError(readError(body, response.statusText), 401);
   }
 
   if (!response.ok) {
-    throw new ApiError(readError(body, response.statusText), response.status);
+    const message =
+      response.status >= 500
+        ? i18n.t("api.serverError")
+        : readError(body, response.statusText);
+    throw new ApiError(message, response.status);
   }
 
   return body as T;
@@ -84,7 +111,7 @@ export async function api<T>(
 export function post<T>(
   path: string,
   body: unknown,
-  auth?: AuthState | null,
+  auth?: AuthState | null | false,
 ): Promise<T> {
   return api<T>(path, { method: "POST", body, auth });
 }
@@ -99,7 +126,7 @@ function parseJson(text: string): unknown {
 
 function readError(body: unknown, fallback: string): string {
   if (typeof body === "string") {
-    return body.trim() || fallback;
+    return normalizeErrorMessage(body) || fallback;
   }
 
   if (!isRecord(body)) return fallback;
@@ -118,7 +145,7 @@ function readError(body: unknown, fallback: string): string {
 
 function readErrorValue(value: unknown): string | null {
   if (typeof value === "string") {
-    return value.trim() || null;
+    return normalizeErrorMessage(value);
   }
 
   if (typeof value === "number" || typeof value === "boolean") {
@@ -139,6 +166,16 @@ function readErrorValue(value: unknown): string | null {
   }
 
   return null;
+}
+
+function normalizeErrorMessage(value: string): string | null {
+  const normalized = value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+    .trim();
+  if (!normalized) return null;
+  return normalized.length > 1_000
+    ? `${normalized.slice(0, 1_000)}…`
+    : normalized;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

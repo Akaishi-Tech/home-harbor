@@ -238,7 +238,10 @@ internal static class Installer
         var args = BuildInstallDiskArgs(disk, assets, expected);
         try
         {
-            return await InstallDiskCommand.RunAsync([.. args], output);
+            return await InstallDiskCommand.RunAsync(
+                [.. args],
+                output,
+                allowVerifiedArchisoRoot: string.Equals(options.Mode, "full", StringComparison.Ordinal));
         }
         catch (Exception ex)
         {
@@ -258,7 +261,10 @@ internal static class Installer
         var output = new StringBuilder();
         try
         {
-            var exitCode = await InstallDiskCommand.RunAsync([.. args], chunk => output.Append(chunk));
+            var exitCode = await InstallDiskCommand.RunAsync(
+                [.. args],
+                chunk => output.Append(chunk),
+                allowVerifiedArchisoRoot: string.Equals(options.Mode, "full", StringComparison.Ordinal));
             return InstallerDryRunResult.FromProcess(exitCode, output.ToString());
         }
         catch (Exception ex)
@@ -268,7 +274,7 @@ internal static class Installer
         }
     }
 
-    private static List<string> BuildInstallDiskArgs(
+    internal static List<string> BuildInstallDiskArgs(
         DiskInfo disk,
         InstallerAssets assets,
         string expected,
@@ -279,8 +285,20 @@ internal static class Installer
             "--target", disk.Path,
             "--system-ota", assets.SystemOta,
             "--public-key", assets.PublicKey,
-            "--confirm", expected
+            "--confirm", expected,
+            "--expected-size-bytes", disk.SizeBytes.ToString(CultureInfo.InvariantCulture),
+            "--expected-resolved-path", disk.ResolvedPath ?? disk.Path
         };
+        if (!string.IsNullOrWhiteSpace(disk.Serial))
+        {
+            args.Add("--expected-serial");
+            args.Add(disk.Serial);
+        }
+        if (!string.IsNullOrWhiteSpace(disk.Wwn))
+        {
+            args.Add("--expected-wwn");
+            args.Add(disk.Wwn);
+        }
         if (!dryRun)
         {
             args.Add("--yes");
@@ -365,14 +383,16 @@ internal sealed record WifiNetworkChoice(WifiNetworkChoiceKind Kind, WifiAccessP
 internal sealed record DiskInfo(string Path, long SizeBytes, string Model)
 {
     public string? Serial { get; init; }
+    public string? Wwn { get; init; }
     public string? Transport { get; init; }
+    public string? ResolvedPath { get; init; }
     public IReadOnlyList<string> Mountpoints { get; init; } = [];
 
     public bool HasMounts => Mountpoints.Count > 0;
 
     public static async Task<IReadOnlyList<DiskInfo>> ListAsync()
     {
-        var (ExitCode, Output) = await ProcessRunner.CaptureAsync("lsblk", ["-J", "-b", "-o", "PATH,SIZE,MODEL,TYPE,SERIAL,TRAN,MOUNTPOINTS"]);
+        var (ExitCode, Output) = await ProcessRunner.CaptureAsync("lsblk", ["-J", "-b", "-o", "PATH,SIZE,MODEL,TYPE,SERIAL,WWN,TRAN,MOUNTPOINTS"]);
         return ExitCode != 0 ? throw new InvalidOperationException(Output) : ParseListJson(Output);
     }
 
@@ -393,7 +413,9 @@ internal sealed record DiskInfo(string Path, long SizeBytes, string Model)
             disks.Add(new DiskInfo(path, size, string.IsNullOrWhiteSpace(model) ? "disk" : model)
             {
                 Serial = Normalize(GetString(device, "serial")),
+                Wwn = Normalize(GetString(device, "wwn")),
                 Transport = Normalize(GetString(device, "tran")),
+                ResolvedPath = path,
                 Mountpoints = GetMountpoints(device)
             });
         }
@@ -466,8 +488,15 @@ internal sealed record InstallerAssets(
     string? KernelOta = null)
 {
     private const string DefaultKernelChannel = "generic";
+    internal const long MaxChannelMetadataBytes = 1024 * 1024;
+    internal const long MaxOtaBundleBytes = 4L * 1024 * 1024 * 1024;
+    private static readonly TimeSpan ChannelDownloadTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan OtaDownloadTimeout = TimeSpan.FromHours(2);
 
-    public static InstallerAssets FromPayloadDirectory(string payloadDirectory, string publicKey)
+    public static InstallerAssets FromPayloadDirectory(
+        string payloadDirectory,
+        string publicKey,
+        bool allowAdjacentDevelopmentKey = false)
     {
         if (!Directory.Exists(payloadDirectory))
         {
@@ -475,9 +504,7 @@ internal sealed record InstallerAssets(
         }
 
         var systemOta = SingleFile(payloadDirectory, "homeharbor-system-ota-*.tar.gz");
-        var key = File.Exists(Path.Combine(payloadDirectory, "release.pub.pem"))
-            ? Path.Combine(payloadDirectory, "release.pub.pem")
-            : publicKey;
+        var key = ResolveReleasePublicKey(payloadDirectory, publicKey, allowAdjacentDevelopmentKey);
         var version = VersionFromOta(systemOta);
         var manifestFile = SystemOtaManifestSidecar(payloadDirectory);
         var manifestChannel = manifestFile is not null
@@ -511,7 +538,10 @@ internal sealed record InstallerAssets(
         }
     }
 
-    public static InstallerAssets FromSystemOtaFile(string systemOta, string publicKey)
+    public static InstallerAssets FromSystemOtaFile(
+        string systemOta,
+        string publicKey,
+        bool allowAdjacentDevelopmentKey = false)
     {
         if (string.IsNullOrWhiteSpace(systemOta))
         {
@@ -530,9 +560,7 @@ internal sealed record InstallerAssets(
         }
 
         var directory = Path.GetDirectoryName(fullPath) ?? Directory.GetCurrentDirectory();
-        var key = File.Exists(Path.Combine(directory, "release.pub.pem"))
-            ? Path.Combine(directory, "release.pub.pem")
-            : publicKey;
+        var key = ResolveReleasePublicKey(directory, publicKey, allowAdjacentDevelopmentKey);
         var version = VersionFromOta(fullPath);
         var manifestFile = SystemOtaManifestSidecar(directory);
         var manifestChannel = manifestFile is not null
@@ -544,6 +572,28 @@ internal sealed record InstallerAssets(
             : ChannelFromMetadata(channel, version, manifestChannel);
         var kernelOta = ResolveKernelOta(directory, channel);
         return new InstallerAssets(version, assetChannel, fullPath, key, channel, manifestFile, kernelOta);
+    }
+
+    private static string ResolveReleasePublicKey(
+        string payloadDirectory,
+        string trustedPublicKey,
+        bool allowAdjacentDevelopmentKey)
+    {
+        if (string.IsNullOrWhiteSpace(trustedPublicKey))
+        {
+            throw new ArgumentException("Trusted release public key path must not be empty.", nameof(trustedPublicKey));
+        }
+
+        var trusted = Path.GetFullPath(trustedPublicKey);
+        var adjacent = Path.Combine(Path.GetFullPath(payloadDirectory), "release.pub.pem");
+        if (!allowAdjacentDevelopmentKey || !File.Exists(adjacent))
+        {
+            return trusted;
+        }
+
+        Console.Error.WriteLine(
+            "WARNING: using an adjacent development release key; never enable this for removable or downloaded payloads: " + adjacent);
+        return adjacent;
     }
 
     public static IReadOnlyList<string> FindExternalSystemOtas(IEnumerable<string> roots)
@@ -626,43 +676,96 @@ internal sealed record InstallerAssets(
         string channel,
         string channelUrl,
         string publicKey,
-        Action<string>? reportStatus = null)
+        Action<string>? reportStatus = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var handler = new HttpClientHandler
+        {
+            AllowAutoRedirect = false
+        };
+        using var http = new HttpClient(handler)
+        {
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan
+        };
+        return await DownloadLatestAsync(channel, channelUrl, publicKey, http, reportStatus, cancellationToken);
+    }
+
+    internal static async Task<InstallerAssets> DownloadLatestAsync(
+        string channel,
+        string channelUrl,
+        string publicKey,
+        HttpClient http,
+        Action<string>? reportStatus = null,
+        CancellationToken cancellationToken = default)
     {
         channel = ReleaseChannel.Require(channel, "installer channel");
         var work = Path.Combine(Path.GetTempPath(), "homeharbor-installer-" + Guid.NewGuid().ToString("N"));
         _ = Directory.CreateDirectory(work);
-
-        var channelFile = Path.Combine(work, "channel-" + channel + ".json");
-        reportStatus?.Invoke("Downloading " + channel + " channel metadata.");
-        await DownloadFileAsync(channelUrl, channelFile);
-
-        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(channelFile));
-        var root = doc.RootElement;
-        var metadataChannel = ReleaseChannel.Require(GetString(root, "channel"), "channel metadata channel");
-        if (!string.Equals(metadataChannel, channel, StringComparison.Ordinal))
+        try
         {
-            throw new InvalidOperationException($"Channel metadata is for {metadataChannel}, expected {channel}.");
+            var channelFile = Path.Combine(work, "channel-" + channel + ".json");
+            reportStatus?.Invoke("Downloading " + channel + " channel metadata.");
+            await DownloadFileAsync(
+                http,
+                channelUrl,
+                channelFile,
+                MaxChannelMetadataBytes,
+                ChannelDownloadTimeout,
+                cancellationToken);
+
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(channelFile, cancellationToken));
+            var root = doc.RootElement;
+            var metadataChannel = ReleaseChannel.Require(GetString(root, "channel"), "channel metadata channel");
+            if (!string.Equals(metadataChannel, channel, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Channel metadata is for {metadataChannel}, expected {channel}.");
+            }
+
+            var version = GetRequiredString(root, "currentVersion", "current version");
+            if (!SecurityGuards.IsSafeVersion(version))
+            {
+                throw new InvalidOperationException("Channel metadata currentVersion contains unsafe characters.");
+            }
+
+            var system = root.GetProperty("systemOta").GetProperty("bundle");
+            var systemUrl = GetRequiredString(system, "url", "system OTA bundle URL");
+            var systemPath = Path.Combine(
+                work,
+                SafeBundleFileName(systemUrl, "homeharbor-system-ota-", ".tar.gz", "system OTA bundle URL"));
+            var systemSha = RequiredSha256(system, "system OTA bundle");
+
+            reportStatus?.Invoke("Downloading system OTA payload.");
+            await DownloadFileAsync(http, systemUrl, systemPath, MaxOtaBundleBytes, OtaDownloadTimeout, cancellationToken);
+            reportStatus?.Invoke("Verifying system OTA SHA-256.");
+            await VerifySha256Async(systemPath, systemSha, cancellationToken);
+
+            var kernel = root.GetProperty("kernelChannels").GetProperty(DefaultKernelChannel).GetProperty("bundle");
+            var kernelUrl = GetRequiredString(kernel, "url", DefaultKernelChannel + " kernel bundle URL");
+            var kernelPath = Path.Combine(
+                work,
+                SafeBundleFileName(
+                    kernelUrl,
+                    "homeharbor-kernel-" + DefaultKernelChannel + "-ota-",
+                    ".tar.gz",
+                    DefaultKernelChannel + " kernel bundle URL"));
+            var kernelSha = RequiredSha256(kernel, DefaultKernelChannel + " kernel bundle");
+            if (string.Equals(systemPath, kernelPath, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Channel metadata resolves system and kernel bundles to the same local file.");
+            }
+
+            reportStatus?.Invoke("Downloading " + DefaultKernelChannel + " kernel OTA payload.");
+            await DownloadFileAsync(http, kernelUrl, kernelPath, MaxOtaBundleBytes, OtaDownloadTimeout, cancellationToken);
+            reportStatus?.Invoke("Verifying " + DefaultKernelChannel + " kernel OTA SHA-256.");
+            await VerifySha256Async(kernelPath, kernelSha, cancellationToken);
+
+            return new InstallerAssets(version, channel, systemPath, publicKey, channelFile, KernelOta: kernelPath);
         }
-
-        var version = root.GetProperty("currentVersion").GetString() ?? "unknown";
-        var system = root.GetProperty("systemOta").GetProperty("bundle");
-        var systemUrl = GetRequiredString(system, "url", "system OTA bundle URL");
-        var systemPath = Path.Combine(work, Path.GetFileName(new Uri(systemUrl).LocalPath));
-
-        reportStatus?.Invoke("Downloading system OTA payload.");
-        await DownloadFileAsync(systemUrl, systemPath);
-        reportStatus?.Invoke("Verifying system OTA SHA-256.");
-        await VerifySha256Async(systemPath, GetString(system, "sha256"));
-
-        var kernel = root.GetProperty("kernelChannels").GetProperty(DefaultKernelChannel).GetProperty("bundle");
-        var kernelUrl = GetRequiredString(kernel, "url", DefaultKernelChannel + " kernel bundle URL");
-        var kernelPath = Path.Combine(work, Path.GetFileName(new Uri(kernelUrl).LocalPath));
-        reportStatus?.Invoke("Downloading " + DefaultKernelChannel + " kernel OTA payload.");
-        await DownloadFileAsync(kernelUrl, kernelPath);
-        reportStatus?.Invoke("Verifying " + DefaultKernelChannel + " kernel OTA SHA-256.");
-        await VerifySha256Async(kernelPath, GetString(kernel, "sha256"));
-
-        return new InstallerAssets(version, channel, systemPath, publicKey, channelFile, KernelOta: kernelPath);
+        catch
+        {
+            TryDeleteDirectory(work);
+            throw;
+        }
     }
 
     private static string? ResolveKernelOta(string directory, string? channelFile)
@@ -834,17 +937,105 @@ internal sealed record InstallerAssets(
                name.EndsWith(suffix, StringComparison.Ordinal);
     }
 
-    private static async Task DownloadFileAsync(string url, string path)
+    internal static async Task DownloadFileAsync(
+        HttpClient http,
+        string url,
+        string path,
+        long maxBytes,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
     {
-        using var http = new HttpClient();
-        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-        _ = response.EnsureSuccessStatusCode();
-        await using var input = await response.Content.ReadAsStreamAsync();
-        await using var output = File.Create(path);
-        await input.CopyToAsync(output);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+
+        var current = RequireHttpsUri(url, "download URL");
+        var destination = Path.GetFullPath(path);
+        if (File.Exists(destination) || Directory.Exists(destination))
+        {
+            throw new IOException("download destination already exists: " + destination);
+        }
+
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? ".");
+        var temp = destination + ".part." + Guid.NewGuid().ToString("N");
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout);
+        try
+        {
+            for (var redirect = 0; redirect <= 5; redirect++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, current);
+                using var response = await http.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    timeoutSource.Token);
+                if (response.RequestMessage?.RequestUri is { } effectiveUri)
+                {
+                    _ = RequireHttpsUri(effectiveUri, "effective download URL");
+                }
+
+                if (IsRedirect(response.StatusCode))
+                {
+                    if (redirect == 5)
+                    {
+                        throw new HttpRequestException("download exceeded the maximum of five redirects");
+                    }
+
+                    var location = response.Headers.Location
+                        ?? throw new HttpRequestException("download redirect did not include a Location header");
+                    current = RequireHttpsUri(
+                        location.IsAbsoluteUri ? location : new Uri(current, location),
+                        "download redirect URL");
+                    continue;
+                }
+
+                _ = response.EnsureSuccessStatusCode();
+                if (response.Content.Headers.ContentLength is { } contentLength && contentLength > maxBytes)
+                {
+                    throw new InvalidOperationException($"download Content-Length {contentLength} exceeds limit {maxBytes}");
+                }
+
+                await using var input = await response.Content.ReadAsStreamAsync(timeoutSource.Token);
+                await using var output = new FileStream(temp, new FileStreamOptions
+                {
+                    Access = FileAccess.Write,
+                    Mode = FileMode.CreateNew,
+                    Share = FileShare.None,
+                    Options = FileOptions.WriteThrough
+                });
+                var buffer = new byte[1024 * 1024];
+                long copied = 0;
+                int read;
+                while ((read = await input.ReadAsync(buffer.AsMemory(), timeoutSource.Token)) > 0)
+                {
+                    if (copied > maxBytes - read)
+                    {
+                        throw new InvalidOperationException($"download exceeded limit {maxBytes}");
+                    }
+
+                    await output.WriteAsync(buffer.AsMemory(0, read), timeoutSource.Token);
+                    copied += read;
+                }
+
+                await output.FlushAsync(timeoutSource.Token);
+                output.Flush(flushToDisk: true);
+                File.Move(temp, destination, overwrite: false);
+                return;
+            }
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("download timed out after " + timeout, ex);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+        }
     }
 
-    private static async Task VerifySha256Async(string path, string? expected)
+    private static async Task VerifySha256Async(string path, string? expected, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(expected))
         {
@@ -852,7 +1043,7 @@ internal sealed record InstallerAssets(
         }
 
         await using var input = File.OpenRead(path);
-        var actual = Convert.ToHexString(await SHA256.HashDataAsync(input)).ToLowerInvariant();
+        var actual = Convert.ToHexString(await SHA256.HashDataAsync(input, cancellationToken)).ToLowerInvariant();
         if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"SHA-256 mismatch for {path}: expected {expected}, got {actual}");
@@ -871,6 +1062,70 @@ internal sealed record InstallerAssets(
         if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"SHA-256 mismatch for {path}: expected {expected}, got {actual}");
+        }
+    }
+
+    private static string SafeBundleFileName(
+        string url,
+        string requiredPrefix,
+        string requiredSuffix,
+        string label)
+    {
+        var uri = RequireHttpsUri(url, label);
+        var fileName = Path.GetFileName(uri.LocalPath);
+        if (string.IsNullOrWhiteSpace(fileName) || fileName.Any(char.IsControl) ||
+            !fileName.StartsWith(requiredPrefix, StringComparison.Ordinal) ||
+            !fileName.EndsWith(requiredSuffix, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(label + " has an unsafe or unexpected file name");
+        }
+
+        var version = fileName[requiredPrefix.Length..^requiredSuffix.Length];
+        if (!SecurityGuards.IsSafeVersion(version))
+        {
+            throw new InvalidOperationException(label + " version contains unsafe characters");
+        }
+
+        return fileName;
+    }
+
+    private static string RequiredSha256(JsonElement bundle, string label)
+    {
+        var value = GetRequiredString(bundle, "sha256", label + " SHA-256");
+        return value.Length == 64 && value.All(Uri.IsHexDigit)
+            ? value.ToLowerInvariant()
+            : throw new InvalidOperationException(label + " SHA-256 must be 64 hexadecimal characters");
+    }
+
+    private static Uri RequireHttpsUri(string value, string label)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            ? RequireHttpsUri(uri, label)
+            : throw new InvalidOperationException(label + " must be an absolute HTTPS URL");
+
+    private static Uri RequireHttpsUri(Uri uri, string label)
+        => string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+           !string.IsNullOrWhiteSpace(uri.Host) && string.IsNullOrEmpty(uri.UserInfo)
+            ? uri
+            : throw new InvalidOperationException(label + " must use HTTPS without embedded credentials");
+
+    private static bool IsRedirect(HttpStatusCode statusCode)
+        => statusCode is HttpStatusCode.MovedPermanently or
+            HttpStatusCode.Redirect or
+            HttpStatusCode.RedirectMethod or
+            HttpStatusCode.TemporaryRedirect or
+            HttpStatusCode.PermanentRedirect;
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 }

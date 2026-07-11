@@ -36,14 +36,20 @@ public sealed class ReleaseArtifactBuilder(
 
     public async Task<ReleaseArtifactBuildResult> BuildAsync(CancellationToken cancellationToken = default)
     {
+        if (!SecurityGuards.IsSafeVersion(version))
+        {
+            throw new InvalidOperationException("release version must contain only letters, numbers, dot, underscore, and dash: " + version);
+        }
+
         var channel = ReleaseChannel.Require(
             Env.String("HOMEHARBOR_RELEASE_CHANNEL", Env.String("HOMEHARBOR_ISO_CHANNEL", Env.String("HOMEHARBOR_CHANNEL", ReleaseChannel.Dev))),
             "release channel");
         const string kernelChannel = "generic";
         var createdAt = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        var releaseSequence = ReleaseSequence.RequireEnvironment();
 
         await RequireToolsAsync(["openssl", "repo-add", "mkarchiso"], cancellationToken);
-        DeleteIfExists(_work);
+        await DeleteManagedReleaseWorkDirectoryAsync(_root, _work, _runner, cancellationToken);
         _ = Directory.CreateDirectory(_work);
         DeleteIfExists(_releaseDirectory);
         _ = Directory.CreateDirectory(_releaseDirectory);
@@ -52,8 +58,8 @@ public sealed class ReleaseArtifactBuilder(
         var keys = await ResolveReleaseKeysAsync(channel, cancellationToken);
         await CopyPackagesAsync(cancellationToken);
 
-        var systemOta = await BuildSystemOtaAsync(channel, createdAt, keys, cancellationToken);
-        var kernelOta = await BuildKernelOtaAsync(channel, kernelChannel, createdAt, keys, cancellationToken);
+        var systemOta = await BuildSystemOtaAsync(channel, createdAt, releaseSequence, keys, cancellationToken);
+        var kernelOta = await BuildKernelOtaAsync(channel, kernelChannel, createdAt, releaseSequence, keys, cancellationToken);
         var payloadChannelFile = await WriteChannelMetadataAsync(
             Path.Combine(_releaseDirectory, "channel-" + channel + ".json"),
             channel,
@@ -61,6 +67,7 @@ public sealed class ReleaseArtifactBuilder(
             kernelChannel,
             kernelOta,
             installerIso: null,
+            releaseSequence,
             cancellationToken);
 
         var iso = await BuildFullInstallerIsoAsync(channel, systemOta, kernelOta, payloadChannelFile, keys.PublicKey, cancellationToken);
@@ -71,6 +78,7 @@ public sealed class ReleaseArtifactBuilder(
             kernelChannel,
             kernelOta,
             iso,
+            releaseSequence,
             cancellationToken);
         var latestChannelFile = await WriteChannelMetadataAsync(
             Path.Combine(_releaseRoot, "channel.json"),
@@ -79,6 +87,7 @@ public sealed class ReleaseArtifactBuilder(
             kernelChannel,
             kernelOta,
             iso,
+            releaseSequence,
             cancellationToken);
 
         Console.WriteLine("Built release artifacts in " + _releaseDirectory);
@@ -89,6 +98,7 @@ public sealed class ReleaseArtifactBuilder(
     private async Task<string> BuildSystemOtaAsync(
         string channel,
         string createdAt,
+        long releaseSequence,
         ReleaseKeys keys,
         CancellationToken cancellationToken)
     {
@@ -96,8 +106,10 @@ public sealed class ReleaseArtifactBuilder(
         var root = Path.Combine(_work, "system-ota", top);
         _ = Directory.CreateDirectory(root);
 
-        await CopyReleaseFileAsync(plan.Artifacts.Rootfs.Path, Path.Combine(root, "rootfs.img"), cancellationToken);
-        await CopyShaAsync(plan.Artifacts.Rootfs.Path, Path.Combine(root, "rootfs.img.sha256"), cancellationToken);
+        var rootPartitionBytes = plan.LogicalPartitions.Single(partition => partition.Name == "root_a").SizeBytes;
+        var completeRoot = RequireCompleteLogicalPairArtifact(_imageWork, "root", rootPartitionBytes);
+        await CopyReleaseFileAsync(completeRoot, Path.Combine(root, "rootfs.img"), cancellationToken);
+        await CopyShaAsync(completeRoot, Path.Combine(root, "rootfs.img.sha256"), cancellationToken);
         await CopyReleaseFileAsync(plan.Artifacts.VbmetaA.Path, Path.Combine(root, "vbmeta_a.img"), cancellationToken);
         await CopyShaAsync(plan.Artifacts.VbmetaA.Path, Path.Combine(root, "vbmeta_a.img.sha256"), cancellationToken);
         await CopyReleaseFileAsync(plan.Artifacts.VbmetaB.Path, Path.Combine(root, "vbmeta_b.img"), cancellationToken);
@@ -108,11 +120,12 @@ public sealed class ReleaseArtifactBuilder(
             ["schemaVersion"] = "1",
             ["type"] = "full-system",
             ["packageKind"] = "system",
+            ["releaseSequence"] = releaseSequence,
             ["version"] = version,
             ["channel"] = channel,
             ["createdAt"] = createdAt,
             ["bootMode"] = SecureBootAssets.BootMode(),
-            ["rootfsHash"] = await Sha256HexAsync(plan.Artifacts.Rootfs.Path, cancellationToken),
+            ["rootfsHash"] = await Sha256HexAsync(completeRoot, cancellationToken),
             ["vbmetaAHash"] = await Sha256HexAsync(plan.Artifacts.VbmetaA.Path, cancellationToken),
             ["vbmetaBHash"] = await Sha256HexAsync(plan.Artifacts.VbmetaB.Path, cancellationToken),
             ["vbmetaADigest"] = await ReadDigestAsync(plan.Artifacts.VbmetaA, cancellationToken),
@@ -129,6 +142,7 @@ public sealed class ReleaseArtifactBuilder(
         string channel,
         string kernelChannel,
         string createdAt,
+        long releaseSequence,
         ReleaseKeys keys,
         CancellationToken cancellationToken)
     {
@@ -136,25 +150,36 @@ public sealed class ReleaseArtifactBuilder(
         var root = Path.Combine(_work, "kernel-ota", top);
         _ = Directory.CreateDirectory(root);
 
-        await CopyReleaseFileAsync(plan.Artifacts.Modules.Path, Path.Combine(root, "modules.img"), cancellationToken);
-        await CopyShaAsync(plan.Artifacts.Modules.Path, Path.Combine(root, "modules.img.sha256"), cancellationToken);
-        await CopyReleaseFileAsync(plan.Artifacts.Firmware.Path, Path.Combine(root, "firmware.img"), cancellationToken);
-        await CopyShaAsync(plan.Artifacts.Firmware.Path, Path.Combine(root, "firmware.img.sha256"), cancellationToken);
-        await CopyReleaseFileAsync(plan.Artifacts.Recovery.Path, Path.Combine(root, "recovery.img"), cancellationToken);
-        await CopyShaAsync(plan.Artifacts.Recovery.Path, Path.Combine(root, "recovery.img.sha256"), cancellationToken);
+        var modulesPartitionBytes = plan.LogicalPartitions.Single(partition => partition.Name == "modules_a").SizeBytes;
+        var completeModules = RequireCompleteLogicalPairArtifact(_imageWork, "modules", modulesPartitionBytes);
+        await CopyReleaseFileAsync(completeModules, Path.Combine(root, "modules.img"), cancellationToken);
+        await CopyShaAsync(completeModules, Path.Combine(root, "modules.img.sha256"), cancellationToken);
+        var firmwarePartitionBytes = plan.LogicalPartitions.Single(partition => partition.Name == "firmware_a").SizeBytes;
+        var completeFirmware = RequireCompleteLogicalPairArtifact(_imageWork, "firmware", firmwarePartitionBytes);
+        await CopyReleaseFileAsync(completeFirmware, Path.Combine(root, "firmware.img"), cancellationToken);
+        await CopyShaAsync(completeFirmware, Path.Combine(root, "firmware.img.sha256"), cancellationToken);
+        var recoveryPartitionBytes = plan.Partitions.Single(partition => partition.Name == "recovery_a").SizeBytes
+            ?? throw new InvalidOperationException("recovery partition size is not fixed");
+        var completeRecovery = RequireCompleteRecoveryPartitionArtifact(_imageWork, recoveryPartitionBytes);
+        await CopyReleaseFileAsync(completeRecovery, Path.Combine(root, "recovery.img"), cancellationToken);
+        await CopyShaAsync(completeRecovery, Path.Combine(root, "recovery.img.sha256"), cancellationToken);
         await CopyReleaseFileAsync(plan.Artifacts.Boot.Path, Path.Combine(root, "boot.efi"), cancellationToken);
         await CopyShaAsync(plan.Artifacts.Boot.Path, Path.Combine(root, "boot.efi.sha256"), cancellationToken);
 
-        await CopyOptionalReleaseFileWithShaAsync(
-            plan.Artifacts.Bootloader.Path,
-            Path.Combine(root, "HomeHarborBoot.efi"),
-            Path.Combine(root, "HomeHarborBoot.efi.sha256"),
-            cancellationToken);
-        await CopyOptionalReleaseFileWithShaAsync(
-            plan.Artifacts.Bootx64.Path,
-            Path.Combine(root, "BOOTX64.EFI"),
-            Path.Combine(root, "BOOTX64.EFI.sha256"),
-            cancellationToken);
+        await CopyReleaseFileAsync(plan.Artifacts.Bootloader.Path, Path.Combine(root, "HomeHarborBoot.efi"), cancellationToken);
+        await CopyShaAsync(plan.Artifacts.Bootloader.Path, Path.Combine(root, "HomeHarborBoot.efi.sha256"), cancellationToken);
+        await CopyReleaseFileAsync(plan.Artifacts.Bootx64.Path, Path.Combine(root, "BOOTX64.EFI"), cancellationToken);
+        await CopyShaAsync(plan.Artifacts.Bootx64.Path, Path.Combine(root, "BOOTX64.EFI.sha256"), cancellationToken);
+        var mokManager = Path.Combine(_imageWork, "mnt", "EFI", "BOOT", "mmx64.efi");
+        if (SecureBootAssets.IsEnabled())
+        {
+            RequireFile(mokManager, "secure boot MokManager artifact not found; run system-build with Secure Boot enabled");
+            await CopyOptionalReleaseFileWithShaAsync(
+                mokManager,
+                Path.Combine(root, "mmx64.efi"),
+                Path.Combine(root, "mmx64.efi.sha256"),
+                cancellationToken);
+        }
         await WriteVeritySidecarsAsync(root, cancellationToken);
 
         var manifest = new JsonObject
@@ -162,25 +187,24 @@ public sealed class ReleaseArtifactBuilder(
             ["schemaVersion"] = "1",
             ["type"] = "kernel-only",
             ["packageKind"] = "kernel",
+            ["releaseSequence"] = releaseSequence,
             ["version"] = version,
             ["channel"] = channel,
             ["kernelChannel"] = kernelChannel,
             ["createdAt"] = createdAt,
             ["bootMode"] = SecureBootAssets.BootMode(),
             ["kernelRelease"] = ResolveKernelRelease(),
-            ["modulesHash"] = await Sha256HexAsync(plan.Artifacts.Modules.Path, cancellationToken),
-            ["firmwareHash"] = await Sha256HexAsync(plan.Artifacts.Firmware.Path, cancellationToken),
-            ["recoveryHash"] = await Sha256HexAsync(plan.Artifacts.Recovery.Path, cancellationToken),
-            ["bootHash"] = await Sha256HexAsync(plan.Artifacts.Boot.Path, cancellationToken)
+            ["modulesHash"] = await Sha256HexAsync(completeModules, cancellationToken),
+            ["firmwareHash"] = await Sha256HexAsync(completeFirmware, cancellationToken),
+            ["recoveryHash"] = await Sha256HexAsync(completeRecovery, cancellationToken),
+            ["bootHash"] = await Sha256HexAsync(plan.Artifacts.Boot.Path, cancellationToken),
+            ["bootloaderHash"] = await Sha256HexAsync(plan.Artifacts.Bootloader.Path, cancellationToken),
+            ["fallbackBootHash"] = await Sha256HexAsync(plan.Artifacts.Bootx64.Path, cancellationToken)
         };
-        if (File.Exists(plan.Artifacts.Bootloader.Path))
-        {
-            manifest["bootloaderHash"] = await Sha256HexAsync(plan.Artifacts.Bootloader.Path, cancellationToken);
-        }
 
-        if (File.Exists(plan.Artifacts.Bootx64.Path))
+        if (File.Exists(mokManager))
         {
-            manifest["fallbackBootHash"] = await Sha256HexAsync(plan.Artifacts.Bootx64.Path, cancellationToken);
+            manifest["mokManagerHash"] = await Sha256HexAsync(mokManager, cancellationToken);
         }
 
         await WriteSignedManifestAsync(Path.Combine(root, "manifest.json"), manifest, keys, cancellationToken);
@@ -188,6 +212,30 @@ public sealed class ReleaseArtifactBuilder(
         var bundle = Path.Combine(_releaseDirectory, top + ".tar.gz");
         await CreateTarGzAsync(Path.GetDirectoryName(root)!, top, bundle, cancellationToken);
         return bundle;
+    }
+
+    internal static string RequireCompleteRecoveryPartitionArtifact(string imageWork, long expectedBytes)
+        => RequireCompleteLogicalPairArtifact(imageWork, "recovery", expectedBytes);
+
+    internal static string RequireCompleteLogicalPairArtifact(string imageWork, string baseName, long expectedBytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseName);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedBytes);
+
+        var logicalA = Path.Combine(imageWork, baseName + "_a.logical");
+        var logicalB = Path.Combine(imageWork, baseName + "_b.logical");
+        RequireFile(logicalA, $"complete {baseName} A partition artifact is missing; run system-build first");
+        RequireFile(logicalB, $"complete {baseName} B partition artifact is missing; run system-build first");
+        if (new FileInfo(logicalA).Length != expectedBytes || new FileInfo(logicalB).Length != expectedBytes)
+        {
+            throw new InvalidOperationException($"complete {baseName} partition artifact has an unexpected size");
+        }
+        if (!string.Equals(Sha256Hex(logicalA), Sha256Hex(logicalB), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"complete {baseName} A/B partition artifacts differ");
+        }
+
+        return logicalA;
     }
 
     private async Task<string> BuildFullInstallerIsoAsync(
@@ -208,16 +256,87 @@ public sealed class ReleaseArtifactBuilder(
         var isoOut = Path.Combine(_work, "iso-out");
         var isoWork = Path.Combine(_work, "mkarchiso");
         _ = Directory.CreateDirectory(isoOut);
-        await RunMkarchisoAsync(isoWork, isoOut, profile, cancellationToken);
+        try
+        {
+            await RunMkarchisoAsync(isoWork, isoOut, profile, cancellationToken);
 
-        var builtIso = Directory.GetFiles(isoOut, "*.iso", SearchOption.TopDirectoryOnly)
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault()
-            ?? throw new InvalidOperationException("mkarchiso did not produce an ISO in " + isoOut);
-        var finalIso = Path.Combine(_releaseDirectory, "homeharbor-full-live-installer-" + channel + "-" + version + ".iso");
-        File.Move(builtIso, finalIso, overwrite: true);
-        await WriteShaFileAsync(finalIso, finalIso + ".sha256", cancellationToken);
-        return finalIso;
+            var builtIso = Directory.GetFiles(isoOut, "*.iso", SearchOption.TopDirectoryOnly)
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault()
+                ?? throw new InvalidOperationException("mkarchiso did not produce an ISO in " + isoOut);
+            var finalIso = Path.Combine(_releaseDirectory, "homeharbor-full-live-installer-" + channel + "-" + version + ".iso");
+            File.Move(builtIso, finalIso, overwrite: true);
+            await WriteShaFileAsync(finalIso, finalIso + ".sha256", cancellationToken);
+            return finalIso;
+        }
+        finally
+        {
+            await DeleteManagedReleaseWorkDirectoryAsync(_root, isoWork, _runner, CancellationToken.None);
+        }
+    }
+
+    internal static async Task DeleteManagedReleaseWorkDirectoryAsync(
+        string root,
+        string path,
+        ICommandRunner runner,
+        CancellationToken cancellationToken)
+    {
+        var fullRoot = Path.GetFullPath(root);
+        var managedRoot = Path.Combine(fullRoot, ".work", "release");
+        var fullPath = Path.GetFullPath(path);
+        if (!SecurityGuards.IsInsideDirectory(fullPath, managedRoot) ||
+            string.Equals(fullPath, managedRoot, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("refusing to remove unsafe release build work directory: " + fullPath);
+        }
+
+        RequireNoSymlinkInManagedPath(fullRoot, fullPath);
+        if (!Directory.Exists(fullPath) && !File.Exists(fullPath))
+        {
+            return;
+        }
+
+        try
+        {
+            DeleteIfExists(fullPath);
+            return;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            // mkarchiso runs under sudo and may leave real-root-owned work after an
+            // interrupted or older build. The path is constrained above before
+            // crossing the privilege boundary.
+        }
+
+        var result = await runner.RunAsync(
+            "sudo",
+            ["-n", "rm", "-rf", "--", fullPath],
+            new CommandRunOptions(Timeout: TimeSpan.FromMinutes(5), StreamError: true),
+            cancellationToken);
+        _ = result.EnsureSuccess("could not remove privileged mkarchiso work directory");
+        if (Directory.Exists(fullPath) || File.Exists(fullPath))
+        {
+            throw new InvalidOperationException("privileged mkarchiso work directory still exists after cleanup: " + fullPath);
+        }
+    }
+
+    private static void RequireNoSymlinkInManagedPath(string root, string path)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        var current = root;
+        foreach (var component in relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, component);
+            FileSystemInfo? entry = Directory.Exists(current)
+                ? new DirectoryInfo(current)
+                : File.Exists(current)
+                    ? new FileInfo(current)
+                    : null;
+            if (entry?.LinkTarget is not null)
+            {
+                throw new InvalidOperationException("refusing privileged cleanup through a symbolic link: " + current);
+            }
+        }
     }
 
     private async Task PrepareIsoProfileAsync(
@@ -276,8 +395,19 @@ public sealed class ReleaseArtifactBuilder(
         await CopyReleaseFileAsync(kernelOta, Path.Combine(payloadDirectory, Path.GetFileName(kernelOta)), cancellationToken);
         await CopyReleaseFileAsync(channelFile, Path.Combine(payloadDirectory, Path.GetFileName(channelFile)), cancellationToken);
         await CopyReleaseFileAsync(publicKey, Path.Combine(payloadDirectory, "release.pub.pem"), cancellationToken);
+        await InstallLiveInstallerTrustAnchorAsync(profile, publicKey, cancellationToken);
 
         await WriteLiveInstallerStartupAsync(profile, cancellationToken);
+    }
+
+    internal static async Task InstallLiveInstallerTrustAnchorAsync(
+        string profile,
+        string publicKey,
+        CancellationToken cancellationToken)
+    {
+        RequireFile(publicKey, "release public key not found");
+        var destination = Path.Combine(profile, "airootfs", "etc", "homeharbor", "release.pub.pem");
+        await FileWrites.CopyFileAsync(publicKey, destination, 0644, cancellationToken);
     }
 
     private static async Task WriteLiveInstallerStartupAsync(string profile, CancellationToken cancellationToken)
@@ -326,6 +456,7 @@ public sealed class ReleaseArtifactBuilder(
         string kernelChannel,
         string kernelOta,
         string? installerIso,
+        long releaseSequence,
         CancellationToken cancellationToken)
     {
         var root = new JsonObject
@@ -333,6 +464,7 @@ public sealed class ReleaseArtifactBuilder(
             ["schemaVersion"] = "1",
             ["channel"] = channel,
             ["currentVersion"] = version,
+            ["releaseSequence"] = releaseSequence,
             ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             ["systemOta"] = new JsonObject
             {
@@ -559,7 +691,7 @@ public sealed class ReleaseArtifactBuilder(
         await using var file = File.Create(output);
         await using var gzip = new GZipStream(file, CompressionLevel.SmallestSize);
         await using var writer = new TarWriter(gzip);
-        foreach (var path in Directory.EnumerateFileSystemEntries(Path.Combine(sourceDirectory, topDirectory), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+        foreach (var path in OrderOtaBundleEntries(sourceDirectory, topDirectory))
         {
             var relative = Path.GetRelativePath(sourceDirectory, path).Replace(Path.DirectorySeparatorChar, '/');
             if (Directory.Exists(path))
@@ -577,6 +709,22 @@ public sealed class ReleaseArtifactBuilder(
         }
 
         _ = cancellationToken;
+    }
+
+    internal static IReadOnlyList<string> OrderOtaBundleEntries(string sourceDirectory, string topDirectory)
+    {
+        var root = Path.Combine(Path.GetFullPath(sourceDirectory), topDirectory);
+        var manifest = Path.Combine(root, "manifest.json");
+        if (!File.Exists(manifest))
+        {
+            throw new FileNotFoundException("OTA bundle manifest is missing", manifest);
+        }
+
+        return Directory
+            .EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+            .OrderBy(path => string.Equals(Path.GetFullPath(path), manifest, StringComparison.Ordinal) ? 0 : 1)
+            .ThenBy(path => path, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static void CopyDirectory(string source, string destination)

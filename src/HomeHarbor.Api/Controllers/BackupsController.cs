@@ -1,11 +1,14 @@
+using HomeHarbor.Api.Auth;
 using HomeHarbor.Api.Data;
 using HomeHarbor.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace HomeHarbor.Api.Controllers;
 
 [ApiController]
+[Authorize(Policy = AuthorizationPolicies.FamilyMember)]
 [Route("api/backups")]
 public sealed class BackupsController(HomeHarborDbContext db, IFamilyResolver families) : ControllerBase
 {
@@ -20,12 +23,14 @@ public sealed class BackupsController(HomeHarborDbContext db, IFamilyResolver fa
             .Where(t => t.FamilyId == resolved.Value)
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync(cancellationToken);
+        var mayManage = User.IsInRole(HomeHarbor.Core.Identity.FamilyRoles.Owner) ||
+            User.IsInRole(HomeHarbor.Core.Identity.FamilyRoles.Admin);
         return Ok(targets.Select(t => new
         {
             t.Id,
             t.FamilyId,
             t.Name,
-            t.RepositoryUri,
+            repositoryUri = mayManage ? t.RepositoryUri : null,
             t.EncryptionEnabled,
             t.CreatedAt,
             t.LastVerifiedAt
@@ -33,19 +38,23 @@ public sealed class BackupsController(HomeHarborDbContext db, IFamilyResolver fa
     }
 
     [HttpPost("targets")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> CreateTarget([FromBody] CreateBackupTargetRequest request, CancellationToken cancellationToken)
     {
         var familyId = await families.ResolveAsync(request.FamilyId, cancellationToken);
         if (familyId is null) return BadRequest(new { error = "Create a family space first." });
-        if (string.IsNullOrWhiteSpace(request.RepositoryUri)) return BadRequest(new { error = "RepositoryUri is required." });
+        if (!TryNormalizeRepositoryUri(request.RepositoryUri, out var repositoryUri, out var repositoryError))
+            return BadRequest(new { error = repositoryError });
+        if (request.Name?.Trim().Length > 96)
+            return BadRequest(new { error = "Name must not exceed 96 characters." });
 
         var target = new BackupTargetEntity
         {
             Id = Guid.NewGuid(),
             FamilyId = familyId.Value,
             Name = string.IsNullOrWhiteSpace(request.Name) ? "External backup" : request.Name.Trim(),
-            RepositoryUri = request.RepositoryUri.Trim(),
-            EncryptionEnabled = true,
+            RepositoryUri = repositoryUri,
+            EncryptionEnabled = false,
             CreatedAt = DateTimeOffset.UtcNow
         };
         _ = db.BackupTargets.Add(target);
@@ -59,32 +68,24 @@ public sealed class BackupsController(HomeHarborDbContext db, IFamilyResolver fa
             target.RepositoryUri,
             target.EncryptionEnabled,
             target.CreatedAt,
-            restoreDrill = $"restic -r {target.RepositoryUri} snapshots && restic -r {target.RepositoryUri} restore latest --target /tmp/homeharbor-restore"
+            capability = "configured-only; backup runner and repository encryption are unavailable"
         });
     }
 
     [HttpPost("targets/{id:guid}/verify")]
-    public async Task<IActionResult> VerifyTarget(Guid id, CancellationToken cancellationToken)
-    {
-        var target = await db.BackupTargets.FindAsync([id], cancellationToken);
-        if (target is null) return NotFound(new { error = "Backup target not found." });
-        await families.RequireAccessAsync(target.FamilyId, cancellationToken);
-
-        target.LastVerifiedAt = DateTimeOffset.UtcNow;
-        _ = await db.SaveChangesAsync(cancellationToken);
-        return Ok(new
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
+    public IActionResult VerifyTarget(Guid id)
+        => StatusCode(StatusCodes.Status501NotImplemented, new
         {
-            target.Id,
-            target.LastVerifiedAt,
-            command = $"restic -r {target.RepositoryUri} check",
-            result = "Verification planned. Appliance runner executes this command with RESTIC_PASSWORD from sealed local settings."
+            error = "Backup verification is unavailable because no privileged backup runner is installed."
         });
-    }
 
     [HttpGet("jobs")]
     public async Task<IActionResult> Jobs([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
+        var mayManage = User.IsInRole(HomeHarbor.Core.Identity.FamilyRoles.Owner) ||
+            User.IsInRole(HomeHarbor.Core.Identity.FamilyRoles.Admin);
         return resolved is null
             ? BadRequest(new { error = "Create a family space first." })
             : Ok(await db.BackupJobs
@@ -92,87 +93,94 @@ public sealed class BackupsController(HomeHarborDbContext db, IFamilyResolver fa
             .Where(j => j.FamilyId == resolved.Value)
             .OrderByDescending(j => j.StartedAt)
             .Take(50)
+            .Select(j => new
+            {
+                j.Id,
+                j.FamilyId,
+                j.BackupTargetId,
+                j.State,
+                command = mayManage ? j.Command : null,
+                result = mayManage ? j.Result : null,
+                j.StartedAt,
+                j.FinishedAt
+            })
             .ToListAsync(cancellationToken));
     }
 
     [HttpPost("run")]
-    public async Task<IActionResult> Run([FromBody] RunBackupRequest request, CancellationToken cancellationToken)
-    {
-        var target = await db.BackupTargets.AsNoTracking().FirstOrDefaultAsync(t => t.Id == request.BackupTargetId, cancellationToken);
-        if (target is null) return NotFound(new { error = "Backup target not found." });
-        await families.RequireAccessAsync(target.FamilyId, cancellationToken);
-        var job = CreatePlannedJob(target);
-
-        _ = db.BackupJobs.Add(job);
-        _ = await db.SaveChangesAsync(cancellationToken);
-        return Ok(job);
-    }
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
+    public IActionResult Run([FromBody] RunBackupRequest request)
+        => StatusCode(StatusCodes.Status501NotImplemented, new
+        {
+            error = "Backup execution is unavailable because no privileged backup runner is installed."
+        });
 
     [HttpPost("one-click")]
-    public async Task<IActionResult> OneClick([FromBody] OneClickBackupRequest request, CancellationToken cancellationToken)
-    {
-        var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
-        if (resolved is null) return BadRequest(new { error = "Create a family space first." });
-
-        BackupTargetEntity? target = null;
-        if (request.BackupTargetId is { } targetId)
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
+    public IActionResult OneClick([FromBody] OneClickBackupRequest request)
+        => StatusCode(StatusCodes.Status501NotImplemented, new
         {
-            target = await db.BackupTargets.AsNoTracking().FirstOrDefaultAsync(
-                t => t.Id == targetId && t.FamilyId == resolved.Value,
-                cancellationToken);
-            if (target is null) return NotFound(new { error = "Backup target not found." });
-        }
-
-        if (target is null)
-        {
-            var repository = string.IsNullOrWhiteSpace(request.RepositoryUri)
-                ? $"file:///mnt/homeharbor-backup/{resolved.Value:N}"
-                : request.RepositoryUri.Trim();
-            target = new BackupTargetEntity
-            {
-                Id = Guid.NewGuid(),
-                FamilyId = resolved.Value,
-                Name = string.IsNullOrWhiteSpace(request.Name) ? "One-click external backup" : request.Name.Trim(),
-                RepositoryUri = repository,
-                EncryptionEnabled = true,
-                CreatedAt = DateTimeOffset.UtcNow,
-                LastVerifiedAt = DateTimeOffset.UtcNow
-            };
-            _ = db.BackupTargets.Add(target);
-        }
-
-        var job = CreatePlannedJob(target);
-        _ = db.BackupJobs.Add(job);
-        _ = await db.SaveChangesAsync(cancellationToken);
-
-        return Ok(new
-        {
-            target = new
-            {
-                target.Id,
-                target.Name,
-                target.RepositoryUri,
-                target.EncryptionEnabled,
-                target.LastVerifiedAt
-            },
-            job,
-            restoreDrill = $"restic -r {target.RepositoryUri} restore latest --target /tmp/homeharbor-restore-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}"
+            error = "One-click backup is unavailable because no privileged backup runner is installed."
         });
-    }
-
-    private static BackupJobEntity CreatePlannedJob(BackupTargetEntity target)
-        => new()
-        {
-            Id = Guid.NewGuid(),
-            FamilyId = target.FamilyId,
-            BackupTargetId = target.Id,
-            State = "planned",
-            Command = $"restic -r {target.RepositoryUri} backup /homeharbor-data/families/{target.FamilyId:N}",
-            Result = "Backup job created. Appliance runner executes this command with RESTIC_PASSWORD from sealed local settings.",
-            StartedAt = DateTimeOffset.UtcNow
-        };
 
     public sealed record CreateBackupTargetRequest(Guid? FamilyId, string? Name, string RepositoryUri);
     public sealed record RunBackupRequest(Guid BackupTargetId);
     public sealed record OneClickBackupRequest(Guid? FamilyId, Guid? BackupTargetId, string? Name, string? RepositoryUri);
+
+    internal static bool TryNormalizeRepositoryUri(string? value, out string repositoryUri, out string error)
+    {
+        repositoryUri = value?.Trim() ?? string.Empty;
+        if (repositoryUri.Length == 0)
+        {
+            error = "RepositoryUri is required.";
+            return false;
+        }
+
+        if (repositoryUri.Length > 1024 ||
+            repositoryUri.Any(char.IsControl) ||
+            repositoryUri.Any(char.IsWhiteSpace) ||
+            !Uri.TryCreate(repositoryUri, UriKind.Absolute, out var parsedRepository) ||
+            parsedRepository.Scheme is not ("file" or "sftp" or "s3" or "rest" or "https"))
+        {
+            error = "RepositoryUri must be a valid file, sftp, s3, rest, or https URI without whitespace.";
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(parsedRepository.UserInfo) ||
+            !string.IsNullOrEmpty(parsedRepository.Query) ||
+            !string.IsNullOrEmpty(parsedRepository.Fragment))
+        {
+            error = "RepositoryUri must not embed credentials, query parameters, or fragments.";
+            return false;
+        }
+
+        if (parsedRepository.IsFile)
+        {
+            if (!string.IsNullOrEmpty(parsedRepository.Host))
+            {
+                error = "file repositories must not specify a host.";
+                return false;
+            }
+
+            try
+            {
+                var backupRoot = Path.GetFullPath("/mnt/homeharbor-backup");
+                var localPath = Path.GetFullPath(parsedRepository.LocalPath);
+                if (!string.Equals(localPath, backupRoot, StringComparison.Ordinal) &&
+                    !localPath.StartsWith(backupRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    error = "file repositories must stay at or under /mnt/homeharbor-backup/.";
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                error = "file repository path is invalid.";
+                return false;
+            }
+        }
+
+        error = string.Empty;
+        return true;
+    }
 }

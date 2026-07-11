@@ -35,12 +35,12 @@ dotnet run --project src/HomeHarbor.Api/HomeHarbor.Api.csproj -- database-migrat
 | `HomeHarbor:Cache:OverviewTtlSeconds` | `30` | Dashboard overview cache TTL |
 | `HomeHarbor:Jwt:Issuer` | `HomeHarbor` | JWT issuer |
 | `HomeHarbor:Jwt:Audience` | `HomeHarbor.Frontend` | JWT audience |
-| `HomeHarbor:Jwt:SigningKeyPath` | `/var/lib/homeharbor/jwt-signing.key` | Local JWT signing key |
+| `HomeHarbor:Jwt:SigningKeyPath` | `/var/lib/homeharbor/api/jwt-signing.key` | Local JWT signing key |
 | `HomeHarbor:Jwt:AccessTokenDays` | `30` | User token lifetime |
 | `HomeHarbor:Automation:TokenPath` | `/run/homeharbor/automation.jwt` | Automation token output |
 | `HomeHarbor:Automation:TokenDays` | `365` | Automation token lifetime |
 | `HomeHarbor:Runtime:RequestDirectory` | `/run/homeharbor` | Runtime request directory |
-| `HomeHarbor:Runtime:SmbCredentialDirectory` | `/run/homeharbor/smb-credentials` | SMB credential material |
+| `HomeHarbor:Runtime:SmbCredentialDirectory` | `/run/homeharbor-smb-credentials` | SMB credential material |
 | `HomeHarbor:Runtime:DataUnlockMetadataPath` | `/var/lib/homeharbor/security/data-unlock.json` | Storage unlock metadata |
 | `HomeHarbor:StorageOobe:StateDirectory` | `/var/lib/homeharbor/storage` | Storage OOBE state directory |
 | `HomeHarbor:StorageOobe:OneShotPassphrasePath` | `/run/homeharbor/storage-apply.passphrase` | One-shot storage apply passphrase |
@@ -62,6 +62,10 @@ User token validation has two layers:
 - Database member session lookup, where the JWT `jti` hash must match the stored session token hash and the session must not be expired.
 
 `POST /api/identity/logout` deletes the current session. `GET /api/identity/session` returns the current session.
+
+`POST /api/identity/recover-owner` anonymously resets the password of the initial primary owner after verifying the current one-time recovery code. For a legacy installation where both the primary-owner password hash and family recovery-code hash are missing, the endpoint accepts the one-time setup code displayed on the physical appliance console instead; that enrollment path is unavailable after either credential has been established. Recovery is always bound to the member whose unique display name matches `FamilySpace.OwnerDisplayName`; adding another owner does not change the recovery target. A successful recovery revokes that owner's sessions, invalidates the submitted code, and returns its replacement once.
+
+`POST /api/identity/recovery-code/rotate` is restricted to authenticated owners and requires `currentPassword`. It creates or replaces the family recovery code, including for families created before recovery-code hashes were stored. Only the hash is persisted and the new plaintext code is returned once, so it must be saved immediately. Rotation attempts are rate-limited. The initial primary owner cannot be deleted.
 
 ## Setup
 

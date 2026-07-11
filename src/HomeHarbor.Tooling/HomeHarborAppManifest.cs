@@ -57,6 +57,8 @@ public sealed record HomeHarborAppStoreEntry(
 
 public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner = null)
 {
+    public const int MaxManifestBytes = 1024 * 1024;
+    public const int MaxStoreEntries = 256;
     public const int CurrentSchemaVersion = 1;
     public const string AppKind = "homeharbor.app";
     public const string StoreKind = "homeharbor.app-store";
@@ -70,7 +72,8 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         string source = "remote",
         CancellationToken cancellationToken = default)
     {
-        using var doc = JsonDocument.Parse(json);
+        RefuseOversizedJson(json, "app manifest");
+        using var doc = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 32 });
         var payload = CanonicalAppPayload(doc.RootElement);
         await VerifySignatureAsync(doc.RootElement, payload, publicKeyPath, "app manifest", cancellationToken);
         return ParseTrustedAppManifest(doc.RootElement, source);
@@ -81,7 +84,8 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         string publicKeyPath,
         CancellationToken cancellationToken = default)
     {
-        using var doc = JsonDocument.Parse(json);
+        RefuseOversizedJson(json, "app store index");
+        using var doc = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 32 });
         var payload = CanonicalStoreIndexPayload(doc.RootElement);
         await VerifySignatureAsync(doc.RootElement, payload, publicKeyPath, "app store index", cancellationToken);
         return ParseTrustedStoreIndex(doc.RootElement);
@@ -110,7 +114,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
             Description: ValidateDisplayText(RequiredString(manifest, "description"), "description", 512),
             Category: ValidateCategory(RequiredString(manifest, "category")),
             RecommendedInSetup: BoolProperty(manifest, "recommendedInSetup"),
-            VisibleRoles: ReadStringArray(manifest, "visibleRoles").Select(ValidateRole).ToArray(),
+            VisibleRoles: ReadStringArray(manifest, "visibleRoles", 16, 32).Select(ValidateRole).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             Install: parsedInstall,
             Source: source);
     }
@@ -122,7 +126,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
             SchemaVersion: IntProperty(index, "schemaVersion"),
             Kind: RequiredString(index, "kind"),
             Channel: ReleaseChannel.Require(RequiredString(index, "channel"), "HHAF store index channel"),
-            GeneratedAt: RequiredString(index, "generatedAt"),
+            GeneratedAt: ValidateTimestamp(RequiredString(index, "generatedAt"), "generatedAt"),
             Apps: RequiredProperty(index, "apps").EnumerateArray().Select(ParseStoreEntry).ToArray());
     }
 
@@ -147,7 +151,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         _ = ValidateDisplayText(RequiredString(manifest, "description"), "description", 512);
         _ = ValidateCategory(RequiredString(manifest, "category"));
         _ = BoolProperty(manifest, "recommendedInSetup");
-        foreach (var role in ReadStringArray(manifest, "visibleRoles"))
+        foreach (var role in ReadStringArray(manifest, "visibleRoles", 16, 32))
         {
             _ = ValidateRole(role);
         }
@@ -169,7 +173,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
             WriteRequiredProperty(writer, manifest, "description");
             WriteRequiredProperty(writer, manifest, "category");
             WriteRequiredProperty(writer, manifest, "recommendedInSetup");
-            WriteStringArray(writer, "visibleRoles", ReadStringArray(manifest, "visibleRoles"));
+            WriteStringArray(writer, "visibleRoles", ReadStringArray(manifest, "visibleRoles", 16, 32));
             writer.WritePropertyName("install");
             WriteCanonicalInstall(writer, install);
             writer.WriteEndObject();
@@ -192,7 +196,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         }
 
         _ = ReleaseChannel.Require(RequiredString(index, "channel"), "HHAF store index channel");
-        _ = RequiredString(index, "generatedAt");
+        _ = ValidateTimestamp(RequiredString(index, "generatedAt"), "generatedAt");
         var apps = RequiredProperty(index, "apps");
         if (apps.ValueKind != JsonValueKind.Array)
         {
@@ -200,6 +204,15 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         }
 
         var parsedApps = apps.EnumerateArray().Select(ParseStoreEntry).ToArray();
+        if (parsedApps.Length > MaxStoreEntries)
+        {
+            throw new InvalidOperationException($"HHAF store index may contain at most {MaxStoreEntries} apps");
+        }
+
+        if (parsedApps.Select(app => app.AppKey).Distinct(StringComparer.Ordinal).Count() != parsedApps.Length)
+        {
+            throw new InvalidOperationException("HHAF store index contains duplicate app keys");
+        }
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false }))
         {
@@ -269,11 +282,13 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
             var payloadPath = Path.Combine(work, "payload.json");
             var signaturePath = Path.Combine(work, "signature.bin");
             await File.WriteAllTextAsync(payloadPath, canonicalPayload, cancellationToken);
-            await File.WriteAllBytesAsync(signaturePath, Convert.FromBase64String(signatureText), cancellationToken);
-            if (new FileInfo(signaturePath).Length == 0)
+            var signature = Convert.FromBase64String(signatureText);
+            if (signature.Length != 64)
             {
-                throw new InvalidOperationException($"{label} signature is missing or empty");
+                throw new InvalidOperationException($"{label} Ed25519 signature must be exactly 64 bytes");
             }
+
+            await File.WriteAllBytesAsync(signaturePath, signature, cancellationToken);
 
             var result = await _runner.RunAsync(
                 "openssl",
@@ -295,17 +310,17 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
 
     private static HomeHarborContainerAppInstall ParseContainerInstall(JsonElement install)
         => new(
-            Image: RequiredString(install, "image"),
+            Image: ValidateContainerImage(RequiredString(install, "image")),
             Ports: ReadPorts(install),
             Environment: ReadEnvironment(install),
             Volumes: ReadVolumes(install),
-            Command: ReadStringArray(install, "command"));
+            Command: ReadCommandArguments(install, "command", 64));
 
     private static HomeHarborSystemAppInstall ParseSystemInstall(JsonElement install)
         => new(
-            Mode: RequiredString(install, "mode"),
-            ManifestUrl: RequiredString(install, "manifestUrl"),
-            Commands: ReadStringArray(install, "commands"),
+            Mode: ValidateSystemInstallMode(RequiredString(install, "mode")),
+            ManifestUrl: ValidateAbsoluteDownloadUrl(RequiredString(install, "manifestUrl"), "manifestUrl"),
+            Commands: ReadStringArray(install, "commands", 32, 64).Select(ValidateCommandName).ToArray(),
             HotCheck: ReadHotCheck(install),
             AutoInstallWhenKernelModulesPresent: ReadAutoInstallModules(install));
 
@@ -313,7 +328,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         => new(
             AppKey: ValidateAppKey(RequiredString(entry, "appKey")),
             Version: ValidateVersion(RequiredString(entry, "version")),
-            ManifestUrl: ValidateAbsoluteHttpUrl(RequiredString(entry, "manifestUrl"), "manifestUrl"),
+            ManifestUrl: ValidateAbsoluteDownloadUrl(RequiredString(entry, "manifestUrl"), "manifestUrl"),
             ManifestSha256: ValidateSha256(RequiredString(entry, "manifestSha256"), "manifestSha256"));
 
     private static void ValidateInstall(JsonElement install)
@@ -322,21 +337,16 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         switch (installType)
         {
             case "container":
-                _ = RequiredString(install, "image");
+                _ = ValidateContainerImage(RequiredString(install, "image"));
                 _ = ReadPorts(install);
                 _ = ReadEnvironment(install);
                 _ = ReadVolumes(install);
-                _ = ReadStringArray(install, "command");
+                _ = ReadCommandArguments(install, "command", 64);
                 break;
             case "system":
-                var mode = RequiredString(install, "mode");
-                if (!string.Equals(mode, "usr-overlay", StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException("HHAF system install mode must be usr-overlay");
-                }
-
-                _ = ValidateAbsoluteHttpUrl(RequiredString(install, "manifestUrl"), "manifestUrl");
-                var commands = ReadStringArray(install, "commands").Select(ValidateCommandName).ToArray();
+                _ = ValidateSystemInstallMode(RequiredString(install, "mode"));
+                _ = ValidateAbsoluteDownloadUrl(RequiredString(install, "manifestUrl"), "manifestUrl");
+                var commands = ReadStringArray(install, "commands", 32, 64).Select(ValidateCommandName).ToArray();
                 if (commands.Length == 0)
                 {
                     throw new InvalidOperationException("HHAF system install commands cannot be empty");
@@ -362,16 +372,16 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         switch (type)
         {
             case "container":
-                writer.WriteString("image", RequiredString(install, "image"));
+                writer.WriteString("image", ValidateContainerImage(RequiredString(install, "image")));
                 WritePorts(writer, ReadPorts(install));
                 WriteEnvironment(writer, ReadEnvironment(install));
                 WriteVolumes(writer, ReadVolumes(install));
-                WriteStringArray(writer, "command", ReadStringArray(install, "command"));
+                WriteStringArray(writer, "command", ReadCommandArguments(install, "command", 64));
                 break;
             case "system":
-                writer.WriteString("mode", RequiredString(install, "mode"));
-                writer.WriteString("manifestUrl", RequiredString(install, "manifestUrl"));
-                WriteStringArray(writer, "commands", ReadStringArray(install, "commands"));
+                writer.WriteString("mode", ValidateSystemInstallMode(RequiredString(install, "mode")));
+                writer.WriteString("manifestUrl", ValidateAbsoluteDownloadUrl(RequiredString(install, "manifestUrl"), "manifestUrl"));
+                WriteStringArray(writer, "commands", ReadStringArray(install, "commands", 32, 64).Select(ValidateCommandName).ToArray());
                 if (ReadHotCheck(install) is { } hotCheck)
                 {
                     writer.WritePropertyName("hotCheck");
@@ -413,16 +423,35 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         var result = new List<HomeHarborAppPort>();
         foreach (var port in ports.EnumerateArray())
         {
+            if (result.Count >= 16)
+            {
+                throw new InvalidOperationException("HHAF container may publish at most 16 ports");
+            }
+
             var protocol = StringProperty(port, "protocol") ?? "tcp";
             if (protocol is not ("tcp" or "udp"))
             {
                 throw new InvalidOperationException("HHAF container port protocol must be tcp or udp");
             }
 
-            result.Add(new HomeHarborAppPort(
-                HostPort: IntProperty(port, "hostPort"),
-                ContainerPort: IntProperty(port, "containerPort"),
-                Protocol: protocol));
+            var hostPort = IntProperty(port, "hostPort");
+            var containerPort = IntProperty(port, "containerPort");
+            if (hostPort is < 1024 or > 65535)
+            {
+                throw new InvalidOperationException("HHAF rootless container host ports must be between 1024 and 65535");
+            }
+
+            if (containerPort is < 1 or > 65535)
+            {
+                throw new InvalidOperationException("HHAF container ports must be between 1 and 65535");
+            }
+
+            if (result.Any(existing => existing.HostPort == hostPort && existing.Protocol == protocol))
+            {
+                throw new InvalidOperationException($"HHAF container contains duplicate host port {hostPort}/{protocol}");
+            }
+
+            result.Add(new HomeHarborAppPort(hostPort, containerPort, protocol));
         }
 
         return result;
@@ -443,14 +472,28 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         var result = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var property in environment.EnumerateObject())
         {
-            if (!EnvironmentKeyRegex().IsMatch(property.Name))
+            if (result.Count >= 64)
+            {
+                throw new InvalidOperationException("HHAF container may define at most 64 environment variables");
+            }
+
+            if (property.Name.Length > 64 || !EnvironmentKeyRegex().IsMatch(property.Name))
             {
                 throw new InvalidOperationException($"HHAF environment variable is invalid: {property.Name}");
             }
 
-            result[property.Name] = property.Value.ValueKind == JsonValueKind.String
-                ? property.Value.GetString() ?? string.Empty
-                : property.Value.ToString();
+            if (property.Value.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException($"HHAF environment value must be a string: {property.Name}");
+            }
+
+            var value = property.Value.GetString() ?? string.Empty;
+            if (value.Length > 4096 || value.Any(char.IsControl))
+            {
+                throw new InvalidOperationException($"HHAF environment value is invalid: {property.Name}");
+            }
+
+            result[property.Name] = value;
         }
 
         return result;
@@ -458,15 +501,35 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
 
     private static IReadOnlyList<HomeHarborAppVolume> ReadVolumes(JsonElement install)
     {
-        return !install.TryGetProperty("volumes", out var volumes) || volumes.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
-            ? []
-            : volumes.ValueKind != JsonValueKind.Array
-            ? throw new InvalidOperationException("HHAF container volumes must be an array")
-            : [.. volumes.EnumerateArray()
-                .Select(volume => new HomeHarborAppVolume(
-                    HostPath: StringProperty(volume, "hostPath"),
-                    ContainerPath: RequiredString(volume, "containerPath"),
-                    ReadOnly: BoolProperty(volume, "readOnly")))];
+        if (!install.TryGetProperty("volumes", out var volumes) || volumes.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return [];
+        }
+
+        if (volumes.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("HHAF container volumes must be an array");
+        }
+
+        var result = new List<HomeHarborAppVolume>();
+        foreach (var volume in volumes.EnumerateArray())
+        {
+            if (result.Count >= 16)
+            {
+                throw new InvalidOperationException("HHAF container may mount at most 16 volumes");
+            }
+
+            var hostPath = StringProperty(volume, "hostPath");
+            if (hostPath is not null && (hostPath.Length > 4096 || hostPath.Any(char.IsControl) || hostPath.Contains(':', StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("HHAF volume hostPath is invalid");
+            }
+
+            var containerPath = ValidateContainerPath(RequiredString(volume, "containerPath"));
+            result.Add(new HomeHarborAppVolume(hostPath, containerPath, BoolProperty(volume, "readOnly")));
+        }
+
+        return result;
     }
 
     private static HomeHarborAppHotCheck? ReadHotCheck(JsonElement install)
@@ -477,7 +540,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
             ? throw new InvalidOperationException("HHAF system hotCheck must be an object")
             : new HomeHarborAppHotCheck(
             Command: ValidateCommandName(RequiredString(hotCheck, "command")),
-            Args: ReadStringArray(hotCheck, "args"));
+            Args: ReadCommandArguments(hotCheck, "args", 32));
     }
 
     private static IReadOnlyList<string> ReadAutoInstallModules(JsonElement install)
@@ -487,7 +550,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
             ? []
             : autoInstall.ValueKind != JsonValueKind.Object
             ? throw new InvalidOperationException("HHAF system autoInstall must be an object")
-            : [.. ReadStringArray(autoInstall, "whenKernelModulesPresent").Select(ValidateModuleName)];
+            : [.. ReadStringArray(autoInstall, "whenKernelModulesPresent", 32, 64).Select(ValidateModuleName)];
     }
 
     private static void WritePorts(Utf8JsonWriter writer, IReadOnlyList<HomeHarborAppPort> ports)
@@ -556,15 +619,51 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         writer.WriteEndArray();
     }
 
-    private static IReadOnlyList<string> ReadStringArray(JsonElement element, string name)
+    private static IReadOnlyList<string> ReadStringArray(
+        JsonElement element,
+        string name,
+        int maxItems,
+        int maxItemLength)
     {
-        return !element.TryGetProperty(name, out var property) || property.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
-            ? []
-            : property.ValueKind != JsonValueKind.Array
-            ? throw new InvalidOperationException($"HHAF field must be an array: {name}")
-            : [.. property.EnumerateArray()
-                .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.ToString())];
+        if (!element.TryGetProperty(name, out var property) || property.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return [];
+        }
+
+        if (property.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException($"HHAF field must be an array: {name}");
+        }
+
+        var result = new List<string>();
+        foreach (var value in property.EnumerateArray())
+        {
+            if (result.Count >= maxItems)
+            {
+                throw new InvalidOperationException($"HHAF field contains too many items: {name}");
+            }
+
+            if (value.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException($"HHAF field must contain only strings: {name}");
+            }
+
+            var text = value.GetString() ?? string.Empty;
+            if (text.Length > maxItemLength)
+            {
+                throw new InvalidOperationException($"HHAF field contains an oversized item: {name}");
+            }
+
+            result.Add(text);
+        }
+
+        return result;
     }
+
+    private static IReadOnlyList<string> ReadCommandArguments(JsonElement element, string name, int maxItems)
+        => ReadStringArray(element, name, maxItems, 512)
+            .Select((value, index) => ValidateCommandArgument(value, $"{name}[{index}]"))
+            .ToArray();
 
     private static JsonElement RequiredProperty(JsonElement element, string name)
     {
@@ -579,7 +678,9 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
 
     private static string? StringProperty(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
-            ? value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString()
+            ? value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : throw new InvalidOperationException("HHAF manifest field must be a string: " + name)
             : null;
 
     private static bool BoolProperty(JsonElement element, string name)
@@ -589,7 +690,6 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         {
             JsonValueKind.True => true,
             JsonValueKind.False => false,
-            JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
             _ => throw new InvalidOperationException("HHAF manifest field must be a boolean: " + name)
         };
     }
@@ -598,8 +698,6 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
     {
         var value = RequiredProperty(element, name);
         return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
-            ? number
-            : value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number)
             ? number
             : throw new InvalidOperationException("HHAF manifest field must be an integer: " + name);
     }
@@ -613,7 +711,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
     private static string ValidateVersion(string value)
     {
         var version = value.Trim();
-        return version.Length is < 1 or > 64 || version.Any(char.IsWhiteSpace)
+        return !VersionRegex().IsMatch(version)
             ? throw new InvalidOperationException("HHAF version is invalid: " + value)
             : version;
     }
@@ -621,7 +719,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
     private static string ValidateDisplayText(string value, string name, int maxLength)
     {
         var text = value.Trim();
-        return text.Length is < 1 || text.Length > maxLength || text.Contains('\n', StringComparison.Ordinal) || text.Contains('\r', StringComparison.Ordinal)
+        return text.Length is < 1 || text.Length > maxLength || text.Any(char.IsControl)
             ? throw new InvalidOperationException($"HHAF {name} is invalid")
             : text;
     }
@@ -630,6 +728,30 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
     {
         var category = value.Trim();
         return !CategoryRegex().IsMatch(category) ? throw new InvalidOperationException("HHAF category is invalid: " + value) : category;
+    }
+
+    private static string ValidateContainerImage(string value)
+    {
+        var image = value.Trim();
+        if (image.Length is < 1 or > 512 ||
+            image.StartsWith('-') ||
+            image.Any(char.IsWhiteSpace) ||
+            image.Any(char.IsControl) ||
+            !ContainerImageDigestRegex().IsMatch(image))
+        {
+            throw new InvalidOperationException(
+                "HHAF container image must be an untagged repository reference ending in @sha256:<64 lowercase hex characters>");
+        }
+
+        var digestSeparator = image.LastIndexOf("@sha256:", StringComparison.Ordinal);
+        var repository = image[..digestSeparator];
+        if (repository.LastIndexOf(':') > repository.LastIndexOf('/'))
+        {
+            throw new InvalidOperationException(
+                "HHAF container image cannot combine a tag with a digest; use repository@sha256:<digest>");
+        }
+
+        return image;
     }
 
     private static string ValidateRole(string value)
@@ -650,13 +772,65 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
         return !ModuleRegex().IsMatch(module) ? throw new InvalidOperationException("HHAF kernel module name is invalid: " + value) : module;
     }
 
-    private static string ValidateAbsoluteHttpUrl(string value, string name)
+    private static string ValidateAbsoluteDownloadUrl(string value, string name)
     {
         var text = value.Trim();
-        return !Uri.TryCreate(text, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeFile)
-            ? throw new InvalidOperationException($"HHAF {name} must be an absolute http, https, or file URL")
-            : text;
+        if (text.Length is < 1 or > 2048 || !Uri.TryCreate(text, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeFile) ||
+            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment) ||
+            (uri.Scheme == Uri.UriSchemeHttps && string.IsNullOrWhiteSpace(uri.IdnHost)) ||
+            (uri.Scheme == Uri.UriSchemeFile && !string.IsNullOrEmpty(uri.Host)))
+        {
+            throw new InvalidOperationException($"HHAF {name} must be an absolute HTTPS URL or a local file URL without credentials or fragments");
+        }
+
+        if (uri.Scheme == Uri.UriSchemeHttps)
+        {
+            _ = BoundedUriFetcher.ValidateUri(text, label: $"HHAF {name}");
+        }
+
+        return text;
+    }
+
+    private static string ValidateSystemInstallMode(string value)
+        => string.Equals(value, "usr-overlay", StringComparison.Ordinal)
+            ? value
+            : throw new InvalidOperationException("HHAF system install mode must be usr-overlay");
+
+    private static string ValidateContainerPath(string value)
+    {
+        var path = value.Trim();
+        if (path.Length is < 2 or > 4096 || !path.StartsWith('/') || path.Any(char.IsControl) ||
+            path.Any(char.IsWhiteSpace) || path.Contains(':', StringComparison.Ordinal) ||
+            path.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(segment => segment is "." or ".."))
+        {
+            throw new InvalidOperationException("HHAF volume containerPath is invalid: " + value);
+        }
+
+        return path.TrimEnd('/');
+    }
+
+    private static string ValidateCommandArgument(string value, string name)
+        => value.Length == 0 || value.Any(char.IsControl)
+            ? throw new InvalidOperationException($"HHAF command argument is invalid: {name}")
+            : value;
+
+    private static string ValidateTimestamp(string value, string name)
+        => value.Length <= 64 &&
+           DateTimeOffset.TryParse(
+               value,
+               System.Globalization.CultureInfo.InvariantCulture,
+               System.Globalization.DateTimeStyles.RoundtripKind,
+               out _)
+            ? value
+            : throw new InvalidOperationException($"HHAF {name} must be an ISO-8601 timestamp");
+
+    private static void RefuseOversizedJson(string json, string label)
+    {
+        if (Encoding.UTF8.GetByteCount(json) > MaxManifestBytes)
+        {
+            throw new InvalidOperationException($"HHAF {label} exceeds the {MaxManifestBytes}-byte limit");
+        }
     }
 
     private static string ValidateSha256(string value, string name)
@@ -667,6 +841,9 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
 
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex AppKeyRegex();
+
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$", RegexOptions.CultureInvariant)]
+    private static partial Regex VersionRegex();
 
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex CategoryRegex();
@@ -685,4 +862,7 @@ public sealed partial class HomeHarborAppManifestVerifier(ICommandRunner? runner
 
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256Regex();
+
+    [GeneratedRegex("@sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    private static partial Regex ContainerImageDigestRegex();
 }

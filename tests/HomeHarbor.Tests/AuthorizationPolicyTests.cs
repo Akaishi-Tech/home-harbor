@@ -43,6 +43,43 @@ public sealed class AuthorizationPolicyTests
         Assert.IsFalse(result.Succeeded);
     }
 
+    [TestMethod]
+    [DataRow(FamilyRoles.Owner, true)]
+    [DataRow(FamilyRoles.Admin, false)]
+    [DataRow(FamilyRoles.Member, false)]
+    [DataRow(FamilyRoles.Guest, false)]
+    public async Task FamilyOwnerPolicy_Allows_Only_Owner(string role, bool expected)
+    {
+        using var provider = new ServiceCollection()
+            .AddLogging()
+            .AddAuthorization(options => options.AddHomeHarborPolicies())
+            .BuildServiceProvider();
+        var authorization = provider.GetRequiredService<IAuthorizationService>();
+
+        var result = await authorization.AuthorizeAsync(User(role), null, AuthorizationPolicies.FamilyOwner);
+
+        Assert.AreEqual(expected, result.Succeeded);
+    }
+
+    [TestMethod]
+    [DataRow(FamilyRoles.Owner, true)]
+    [DataRow(FamilyRoles.Admin, true)]
+    [DataRow(FamilyRoles.Member, true)]
+    [DataRow(FamilyRoles.Child, false)]
+    [DataRow(FamilyRoles.Guest, false)]
+    public async Task FamilyMemberPolicy_Enforces_Content_Roles(string role, bool expected)
+    {
+        using var provider = new ServiceCollection()
+            .AddLogging()
+            .AddAuthorization(options => options.AddHomeHarborPolicies())
+            .BuildServiceProvider();
+        var authorization = provider.GetRequiredService<IAuthorizationService>();
+
+        var result = await authorization.AuthorizeAsync(User(role), null, AuthorizationPolicies.FamilyMember);
+
+        Assert.AreEqual(expected, result.Succeeded);
+    }
+
     private static async Task<AuthorizationResult> AuthorizeFamilyAdminAsync(ClaimsPrincipal user)
     {
         using var provider = new ServiceCollection()
@@ -57,6 +94,8 @@ public sealed class AuthorizationPolicyTests
         => new(new ClaimsIdentity(
         [
             new Claim(AuthClaims.TokenKind, AuthTokenKinds.User),
+            new Claim(AuthClaims.FamilyId, Guid.NewGuid().ToString()),
+            new Claim(AuthClaims.SessionId, Guid.NewGuid().ToString()),
             new Claim(ClaimTypes.Role, role)
         ], "Bearer"));
 }

@@ -19,13 +19,16 @@ export const queryClient = new QueryClient({
     },
     mutations: {
       retry: false,
+      // Mutation variables and responses can contain passwords or one-time
+      // credentials. Drop inactive mutations immediately instead of retaining
+      // them in the default five-minute cache.
+      gcTime: 0,
     },
   },
 });
 
 export const queryKeys = {
   setup: ["setup"] as const,
-  pairing: ["setup", "pairing"] as const,
   storageInventory: ["setup", "storage", "inventory"] as const,
   storageStatus: ["setup", "storage", "status"] as const,
   session: ["identity", "session"] as const,

@@ -16,6 +16,7 @@ public sealed class WebDavTokensController(
     ITokenGenerator tokenGenerator) : ControllerBase
 {
     [HttpGet]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> List([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -51,6 +52,18 @@ public sealed class WebDavTokensController(
         var username = string.IsNullOrWhiteSpace(request.Username)
             ? tokenGenerator.GenerateUsername("dav")
             : request.Username.Trim();
+        if (!IsValidUsername(username))
+            return BadRequest(new { error = "Username must contain 1 to 64 ASCII letters, digits, dots, underscores, or hyphens." });
+        if (request.Description?.Trim().Length > 160)
+            return BadRequest(new { error = "Description must not exceed 160 characters." });
+        if (!Enum.IsDefined(request.Scope))
+            return BadRequest(new { error = "WebDAV scope is invalid." });
+        if (request.DeviceId is { } deviceId && !await db.Devices.AsNoTracking().AnyAsync(
+            device => device.Id == deviceId && device.FamilyId == familyId.Value,
+            cancellationToken))
+        {
+            return BadRequest(new { error = "Device does not belong to this family." });
+        }
         if (await db.WebDavTokens.AsNoTracking().AnyAsync(t => t.Username == username, cancellationToken))
             return Conflict(new { error = "Username already exists." });
 
@@ -101,4 +114,9 @@ public sealed class WebDavTokensController(
         string? Username,
         WebDavTokenScope Scope,
         string? Description);
+
+    private static bool IsValidUsername(string username)
+        => username.Length is > 0 and <= 64 &&
+            username.All(character =>
+                character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '_' or '-');
 }

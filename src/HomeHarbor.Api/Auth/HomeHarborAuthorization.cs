@@ -17,10 +17,18 @@ public static class HomeHarborAuthorization
         options.AddPolicy(AuthorizationPolicies.FamilyAdmin, UserPolicyBuilder()
             .RequireRole(FamilyRoles.Owner, FamilyRoles.Admin)
             .Build());
+        options.AddPolicy(AuthorizationPolicies.FamilyOwner, UserPolicyBuilder()
+            .RequireRole(FamilyRoles.Owner)
+            .Build());
+        options.AddPolicy(AuthorizationPolicies.FamilyMember, UserPolicyBuilder()
+            .RequireRole(FamilyRoles.Owner, FamilyRoles.Admin, FamilyRoles.Member)
+            .Build());
     }
 
     private static AuthorizationPolicyBuilder UserPolicyBuilder()
         => new AuthorizationPolicyBuilder(JwtBearerDefaults.AuthenticationScheme)
             .RequireAuthenticatedUser()
-            .RequireClaim(AuthClaims.TokenKind, AuthTokenKinds.User);
+            .RequireClaim(AuthClaims.TokenKind, AuthTokenKinds.User)
+            .RequireClaim(AuthClaims.FamilyId)
+            .RequireClaim(AuthClaims.SessionId);
 }

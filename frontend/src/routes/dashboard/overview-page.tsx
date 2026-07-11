@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SectionHeader } from "@/components/glass/section-header";
+import { QueryErrorState } from "@/components/glass/query-error-state";
 import { StatTile, type StatTone } from "@/components/glass/stat-tile";
 import {
   GlassCard,
@@ -24,12 +25,39 @@ import { useOta, useOverview, usePolicy } from "@/hooks/queries";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Overview } from "@/types";
+import { useAuth } from "@/hooks/use-auth";
+import { isFamilyAdmin, isFamilyMember } from "@/lib/auth";
 
 export function OverviewPage() {
   const overview = useOverview();
   const policy = usePolicy();
-  const ota = useOta();
+  const auth = useAuth();
+  const canManage = isFamilyAdmin(auth);
+  const canUseMemberFeatures = isFamilyMember(auth);
+  const ota = useOta(canManage);
   const { t } = useTranslation();
+
+  if (overview.isError || policy.isError || ota.isError) {
+    return (
+      <div className="space-y-6">
+        <SectionHeader
+          eyebrow={t("pages.overview.eyebrow")}
+          title={t("pages.overview.titleFallback")}
+          description={t("pages.overview.description")}
+        />
+        <GlassCard>
+          <QueryErrorState
+            error={overview.error ?? policy.error ?? ota.error}
+            onRetry={() => {
+              void overview.refetch();
+              void policy.refetch();
+              void ota.refetch();
+            }}
+          />
+        </GlassCard>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -46,7 +74,11 @@ export function OverviewPage() {
           ))}
         </div>
       ) : overview.data ? (
-        <StatGrid modules={overview.data.modules} />
+        <StatGrid
+          modules={overview.data.modules}
+          canManage={canManage}
+          canUseMemberFeatures={canUseMemberFeatures}
+        />
       ) : null}
 
       <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
@@ -75,7 +107,9 @@ export function OverviewPage() {
             <StatusRow
               label="OTA"
               value={
-                ota.data
+                !canManage
+                  ? t("common.unavailable")
+                  : ota.data
                   ? `${ota.data.version}${t("common.separator")}${ota.data.updateState}`
                   : t("common.unknown")
               }
@@ -104,7 +138,15 @@ export function OverviewPage() {
   );
 }
 
-function StatGrid({ modules }: { modules: Overview["modules"] }) {
+function StatGrid({
+  modules,
+  canManage,
+  canUseMemberFeatures,
+}: {
+  modules: Overview["modules"];
+  canManage: boolean;
+  canUseMemberFeatures: boolean;
+}) {
   const { t } = useTranslation();
   const tiles: Array<{
     label: string;
@@ -134,7 +176,7 @@ function StatGrid({ modules }: { modules: Overview["modules"] }) {
       detail: modules.backups.latestJob?.state ?? t("pages.overview.notRun"),
       icon: Archive,
       tone: "warning",
-      to: "/dashboard/backups",
+      to: canUseMemberFeatures ? "/dashboard/backups" : undefined,
     },
     {
       label: t("pages.overview.vault"),
@@ -144,7 +186,7 @@ function StatGrid({ modules }: { modules: Overview["modules"] }) {
         : t("pages.overview.pendingEncryption"),
       icon: KeyRound,
       tone: "success",
-      to: "/dashboard/vault",
+      to: canUseMemberFeatures ? "/dashboard/vault" : undefined,
     },
     {
       label: t("pages.overview.devices"),
@@ -154,7 +196,7 @@ function StatGrid({ modules }: { modules: Overview["modules"] }) {
       }),
       icon: Smartphone,
       tone: "primary",
-      to: "/dashboard/devices",
+      to: canManage ? "/dashboard/devices" : undefined,
     },
     {
       label: t("pages.overview.remoteAccess"),
@@ -162,7 +204,7 @@ function StatGrid({ modules }: { modules: Overview["modules"] }) {
       detail: "WireGuard",
       icon: Globe,
       tone: "info",
-      to: "/dashboard/remote",
+      to: canManage ? "/dashboard/remote" : undefined,
     },
     {
       label: t("pages.overview.smb"),
@@ -172,7 +214,7 @@ function StatGrid({ modules }: { modules: Overview["modules"] }) {
       }),
       icon: HardDrive,
       tone: "primary",
-      to: "/dashboard/shares",
+      to: canManage ? "/dashboard/shares" : undefined,
     },
     {
       label: t("pages.overview.containers"),

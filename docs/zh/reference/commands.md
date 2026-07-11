@@ -21,7 +21,8 @@ make efi-loader
 make avb-helper
 make init-helper
 make appliance-build
-make system-build
+HOMEHARBOR_RELEASE_SEQUENCE=1234 make system-build
+HOMEHARBOR_RELEASE_SEQUENCE=1234 make iso-build
 make arch-package VERSION=0.1.0-dev
 ```
 
@@ -59,7 +60,8 @@ dotnet test tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj
 ```bash
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0-dev
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-plan system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- release-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- arch-package 0.1.0-dev "$(pwd)"
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-plan system/x86_64/kernel 0.1.0-dev "$(pwd)"
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-build system/x86_64/kernel 0.1.0-dev generic "$(pwd)"
@@ -97,6 +99,7 @@ HomeHarbor.Agent firstboot
 HomeHarbor.Agent postgres-init
 HomeHarbor.Agent postgres-bootstrap
 HomeHarbor.Agent ensure-caddy-config
+HomeHarbor.Agent display-tls-trust
 HomeHarbor.Agent render-caddyfile
 HomeHarbor.Agent storage-health
 HomeHarbor.Agent ensure-smb-config
@@ -116,6 +119,10 @@ HomeHarbor.Agent super create <mapper-name> <super-device> <logical-partition> [
 HomeHarbor.Agent super remove <mapper-name>
 ```
 
+`ota-apply` 默认在仅 root 可访问的
+`/homeharbor-data/.homeharbor-ota-work` 中展开完整的校验分区镜像。恢复或测试时可用
+`--work-dir` 覆盖该位置，但目标必须是由 root 控制、无符号链接且能容纳未压缩包的目录。
+
 ## Recovery
 
 ```bash
@@ -134,6 +141,7 @@ HomeHarbor.Recovery --fastboot-tcp
 | `HOMEHARBOR_RELEASE_PRIVATE_KEY` | release manifest 签名私钥 |
 | `HOMEHARBOR_RELEASE_PUBLIC_KEY` | release manifest 公钥 |
 | `HOMEHARBOR_RELEASE_KEY_ID` | channel-safe release key id |
+| `HOMEHARBOR_RELEASE_SEQUENCE` | 必须为正且全局递增的 release 整数；不能重置或复用 |
 | `HOMEHARBOR_SECURE_BOOT` | secure boot 构建开关 |
 | `HOMEHARBOR_SECURE_BOOT_KEY` | secure boot 和 AVB 签名 key |
 | `HOMEHARBOR_SECURE_BOOT_CERT` | secure boot 签名证书 |

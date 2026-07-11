@@ -6,11 +6,11 @@ using System.Text.Json.Nodes;
 
 namespace HomeHarbor.FullE2E.Tests.Infrastructure;
 
-internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : IDisposable
+internal sealed class HomeHarborApiScenario(Func<HttpClient> clientFactory, string setupBootstrapCode) : IDisposable
 {
-    private readonly HttpClient _api = new() { BaseAddress = apiBaseUri, Timeout = TimeSpan.FromSeconds(20) };
-    private readonly HttpClient _anonymous = new() { BaseAddress = apiBaseUri, Timeout = TimeSpan.FromSeconds(20) };
-    private readonly HttpClient _proxy = new() { BaseAddress = proxyBaseUri, Timeout = TimeSpan.FromSeconds(20) };
+    private readonly HttpClient _api = clientFactory();
+    private readonly HttpClient _anonymous = clientFactory();
+    private readonly HttpClient _proxy = clientFactory();
 
     private Guid _familyId;
     private Guid _setupDeviceId;
@@ -53,21 +53,18 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         Assert.IsFalse(before["initialized"]!.GetValue<bool>());
 
         var pairing = await GetObjectAsync(_anonymous, "/api/setup/pairing", cancellationToken);
-        Assert.IsFalse(string.IsNullOrWhiteSpace(pairing["code"]!.GetValue<string>()));
-        Assert.Contains("/setup?pair=", pairing["pairingUrl"]!.GetValue<string>());
+        Assert.IsTrue(pairing["codeRequired"]!.GetValue<bool>());
 
         using var qr = await _anonymous.GetAsync("/api/setup/pairing.svg", cancellationToken);
-        Assert.AreEqual(HttpStatusCode.OK, qr.StatusCode);
-        Assert.Contains("image/svg+xml", qr.Content.Headers.ContentType!.MediaType!);
-        Assert.Contains("<svg", await qr.Content.ReadAsStringAsync(cancellationToken));
+        Assert.AreEqual(HttpStatusCode.NotFound, qr.StatusCode);
 
         var setup = await PostObjectAsync(_anonymous, "/api/setup", new
         {
             familyName = "Harbor E2E Home",
             ownerDisplayName = "Owner",
-            ownerPassword = "owner-pass",
+            ownerPassword = "owner-pass-e2e-2026",
             deviceName = "E2E Browser",
-            pairingCode = pairing["code"]!.GetValue<string>()
+            pairingCode = setupBootstrapCode
         }, cancellationToken);
 
         _familyId = Guid.Parse(setup["family"]!["id"]!.GetValue<string>());
@@ -95,11 +92,11 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         var login = await PostObjectAsync(_anonymous, "/api/identity/login", new
         {
             displayName = "Owner",
-            password = "owner-pass"
+            password = "owner-pass-e2e-2026"
         }, cancellationToken);
         Assert.AreEqual("Bearer", login["tokenType"]!.GetValue<string>());
 
-        using var loginClient = new HttpClient { BaseAddress = apiBaseUri, Timeout = TimeSpan.FromSeconds(20) };
+        using var loginClient = clientFactory();
         loginClient.DefaultRequestHeaders.Authorization = Bearer(login["accessToken"]!.GetValue<string>());
         var session = await GetObjectAsync(loginClient, "/api/identity/session", cancellationToken);
         Assert.AreEqual(_familyId, Guid.Parse(session["familyId"]!.GetValue<string>()));
@@ -132,7 +129,7 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         {
             displayName = "Alex",
             role = "admin",
-            password = "alex-pass"
+            password = "alex-pass-e2e-2026"
         }, cancellationToken);
         Assert.AreEqual("admin", member["role"]!.GetValue<string>());
 
@@ -140,6 +137,10 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         Assert.AreEqual(HttpStatusCode.NoContent, deleted.StatusCode);
 
         var pairing = await GetObjectAsync(_api, "/api/setup/pairing", cancellationToken);
+        Assert.Contains("/pair#code=", pairing["pairingUrl"]!.GetValue<string>());
+        using var qr = await _api.GetAsync("/api/setup/pairing.svg", cancellationToken);
+        Assert.AreEqual(HttpStatusCode.OK, qr.StatusCode);
+        Assert.Contains("image/svg+xml", qr.Content.Headers.ContentType!.MediaType!);
         using var invalidPairing = await _api.PostAsJsonAsync("/api/devices", new
         {
             displayName = "Bad phone",
@@ -226,12 +227,12 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         Assert.AreEqual(HttpStatusCode.OK, head.StatusCode);
 
         using var copy = new HttpRequestMessage(new HttpMethod("COPY"), "/dav/files/Documents/note.txt");
-        copy.Headers.Add("Destination", $"{apiBaseUri}/dav/files/Documents/copy.txt");
+        copy.Headers.Add("Destination", new Uri(_api.BaseAddress!, "/dav/files/Documents/copy.txt").ToString());
         using var copied = await dav.SendAsync(copy, cancellationToken);
         Assert.AreEqual((HttpStatusCode)201, copied.StatusCode);
 
         using var noOverwriteCopy = new HttpRequestMessage(new HttpMethod("COPY"), "/dav/files/Documents/note.txt");
-        noOverwriteCopy.Headers.Add("Destination", $"{apiBaseUri}/dav/files/Documents/copy.txt");
+        noOverwriteCopy.Headers.Add("Destination", new Uri(_api.BaseAddress!, "/dav/files/Documents/copy.txt").ToString());
         noOverwriteCopy.Headers.Add("Overwrite", "F");
         using var copyConflict = await dav.SendAsync(noOverwriteCopy, cancellationToken);
         Assert.AreEqual((HttpStatusCode)412, copyConflict.StatusCode);
@@ -344,22 +345,24 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         Assert.AreEqual(HttpStatusCode.NotFound, unknownApp.StatusCode);
 
         var app = await PostObjectAsync(_api, "/api/apps/installs", new { appKey = "jellyfin" }, cancellationToken);
-        Assert.Contains("podman run", app["command"]!.GetValue<string>());
-        var appState = await PostObjectAsync(_api, $"/api/apps/installs/{app["id"]!.GetValue<string>()}/state", new { state = "running" }, cancellationToken);
-        Assert.AreEqual("running", appState["state"]!.GetValue<string>());
+        Assert.AreEqual("installed", app["desiredState"]!.GetValue<string>());
+        using var appState = await _api.PostAsJsonAsync(
+            $"/api/apps/installs/{app["id"]!.GetValue<string>()}/state",
+            new { state = "running" },
+            cancellationToken);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, appState.StatusCode);
         var installs = await GetArrayAsync(_api, "/api/apps/installs", cancellationToken);
-        Assert.Contains(i => i!["state"]!.GetValue<string>() == "running", installs);
+        Assert.Contains(i => i!["appKey"]!.GetValue<string>() == "jellyfin", installs);
 
         using var badCert = await _api.PostAsJsonAsync("/api/networking/certificates/self-signed", new { hostname = "" }, cancellationToken);
-        Assert.AreEqual(HttpStatusCode.BadRequest, badCert.StatusCode);
-        var cert = await PostObjectAsync(_api, "/api/networking/certificates/self-signed", new
+        Assert.AreEqual(HttpStatusCode.NotImplemented, badCert.StatusCode);
+        using var cert = await _api.PostAsJsonAsync("/api/networking/certificates/self-signed", new
         {
             hostname = "E2E.HomeHarbor.Local",
             days = 30
         }, cancellationToken);
-        Assert.AreEqual("e2e.homeharbor.local", cert["hostname"]!.GetValue<string>());
-        Assert.Contains("BEGIN CERTIFICATE", cert["certificatePem"]!.GetValue<string>());
-        Assert.IsGreaterThanOrEqualTo((await GetArrayAsync(_api, "/api/networking/certificates", cancellationToken)).Count, 1);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, cert.StatusCode);
+        Assert.HasCount(0, await GetArrayAsync(_api, "/api/networking/certificates", cancellationToken));
 
         using var badRoute = await _api.PostAsJsonAsync("/api/networking/proxy/routes", new { hostname = "bad" }, cancellationToken);
         Assert.AreEqual(HttpStatusCode.BadRequest, badRoute.StatusCode);
@@ -367,7 +370,7 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         {
             hostname = "media.homeharbor.local",
             upstreamUrl = "127.0.0.1:8096",
-            tlsEnabled = true
+            tlsEnabled = false
         }, cancellationToken);
         Assert.AreEqual("media.homeharbor.local", route["hostname"]!.GetValue<string>());
         Assert.IsGreaterThanOrEqualTo((await GetArrayAsync(_api, "/api/networking/proxy/routes", cancellationToken)).Count, 1);
@@ -377,26 +380,26 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         var target = await PostObjectAsync(_api, "/api/backups/targets", new
         {
             name = "USB backup",
-            repositoryUri = "file:///mnt/homeharbor-e2e"
+            repositoryUri = "file:///mnt/homeharbor-backup/e2e"
         }, cancellationToken);
         _backupTargetId = Guid.Parse(target["id"]!.GetValue<string>());
 
-        var verify = await PostObjectAsync(_api, $"/api/backups/targets/{_backupTargetId}/verify", new { }, cancellationToken);
-        Assert.Contains("restic", verify["command"]!.GetValue<string>());
-        var job = await PostObjectAsync(_api, "/api/backups/run", new { backupTargetId = _backupTargetId }, cancellationToken);
-        Assert.AreEqual("planned", job["state"]!.GetValue<string>());
-        var oneClick = await PostObjectAsync(_api, "/api/backups/one-click", new { backupTargetId = _backupTargetId }, cancellationToken);
-        Assert.Contains("restic", oneClick["restoreDrill"]!.GetValue<string>());
+        using var verify = await _api.PostAsJsonAsync($"/api/backups/targets/{_backupTargetId}/verify", new { }, cancellationToken);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, verify.StatusCode);
+        using var job = await _api.PostAsJsonAsync("/api/backups/run", new { backupTargetId = _backupTargetId }, cancellationToken);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, job.StatusCode);
+        using var oneClick = await _api.PostAsJsonAsync("/api/backups/one-click", new { backupTargetId = _backupTargetId }, cancellationToken);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, oneClick.StatusCode);
         Assert.IsGreaterThanOrEqualTo((await GetArrayAsync(_api, "/api/backups/targets", cancellationToken)).Count, 1);
-        Assert.IsGreaterThanOrEqualTo((await GetArrayAsync(_api, "/api/backups/jobs", cancellationToken)).Count, 2);
+        Assert.HasCount(0, await GetArrayAsync(_api, "/api/backups/jobs", cancellationToken));
 
         using var badDrill = await _api.PostAsJsonAsync("/api/recovery/drills", new { backupTargetId = Guid.NewGuid() }, cancellationToken);
-        Assert.AreEqual(HttpStatusCode.NotFound, badDrill.StatusCode);
-        var localDrill = await PostObjectAsync(_api, "/api/recovery/drills", new { }, cancellationToken);
-        Assert.AreEqual("completed", localDrill["state"]!.GetValue<string>());
-        var targetDrill = await PostObjectAsync(_api, "/api/recovery/drills", new { backupTargetId = _backupTargetId }, cancellationToken);
-        Assert.Contains("restic", targetDrill["result"]!.GetValue<string>());
-        Assert.IsGreaterThanOrEqualTo((await GetArrayAsync(_api, "/api/recovery/drills", cancellationToken)).Count, 2);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, badDrill.StatusCode);
+        using var localDrill = await _api.PostAsJsonAsync("/api/recovery/drills", new { }, cancellationToken);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, localDrill.StatusCode);
+        using var targetDrill = await _api.PostAsJsonAsync("/api/recovery/drills", new { backupTargetId = _backupTargetId }, cancellationToken);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, targetDrill.StatusCode);
+        Assert.HasCount(0, await GetArrayAsync(_api, "/api/recovery/drills", cancellationToken));
     }
 
     private async Task VerifyRemoteSecurityOtaAndOverviewAsync(CancellationToken cancellationToken)
@@ -404,20 +407,19 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
         var security = await GetObjectAsync(_api, "/api/security/policy", cancellationToken);
         Assert.IsTrue(security["localFirst"]!.GetValue<bool>());
 
-        var peer1 = await PostObjectAsync(_api, "/api/remote/wireguard/peers", new
+        using var peer1 = await _api.PostAsJsonAsync("/api/remote/wireguard/peers", new
         {
             name = "Travel phone",
             endpoint = "homeharbor.local:51820"
         }, cancellationToken);
-        Assert.AreEqual("10.44.0.2/32", peer1["address"]!.GetValue<string>());
-        Assert.Contains("[Interface]", peer1["config"]!.GetValue<string>());
-        var peer2 = await PostObjectAsync(_api, "/api/remote/wireguard/peers", new
+        Assert.AreEqual(HttpStatusCode.NotImplemented, peer1.StatusCode);
+        using var peer2 = await _api.PostAsJsonAsync("/api/remote/wireguard/peers", new
         {
             name = "Laptop",
             endpoint = "homeharbor.local:51820"
         }, cancellationToken);
-        Assert.AreEqual("10.44.0.3/32", peer2["address"]!.GetValue<string>());
-        Assert.IsGreaterThanOrEqualTo((await GetArrayAsync(_api, "/api/remote/wireguard/peers", cancellationToken)).Count, 2);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, peer2.StatusCode);
+        Assert.HasCount(0, await GetArrayAsync(_api, "/api/remote/wireguard/peers", cancellationToken));
 
         var ota = await GetObjectAsync(_api, "/api/ota/status", cancellationToken);
         Assert.IsFalse(string.IsNullOrWhiteSpace(ota["version"]!.GetValue<string>()));
@@ -434,7 +436,7 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
             signature = "dev-signature",
             type = "kernel-only"
         }, cancellationToken);
-        Assert.AreEqual(HttpStatusCode.Accepted, stage.StatusCode);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, stage.StatusCode);
 
         using var apply = await _api.PostAsJsonAsync("/api/ota/apply", new
         {
@@ -448,25 +450,25 @@ internal sealed class HomeHarborApiScenario(Uri apiBaseUri, Uri proxyBaseUri) : 
             signature = "dev-signature",
             type = "full-system"
         }, cancellationToken);
-        Assert.AreEqual(HttpStatusCode.Accepted, apply.StatusCode);
+        Assert.AreEqual(HttpStatusCode.NotImplemented, apply.StatusCode);
 
         _ = await GetArrayAsync(_api, "/api/storage/health", cancellationToken);
 
         var overview = await GetObjectAsync(_api, "/api/home/overview", cancellationToken);
         Assert.IsTrue(overview["initialized"]!.GetValue<bool>());
-        Assert.IsTrue(overview["security"]!["endToEndEncryption"]!.GetValue<bool>());
+        Assert.IsFalse(overview["security"]!["endToEndEncryption"]!.GetValue<bool>());
         Assert.IsGreaterThanOrEqualTo(overview["modules"]!["photos"]!["count"]!.GetValue<int>(), 1);
         Assert.IsGreaterThanOrEqualTo(overview["modules"]!["backups"]!["targetCount"]!.GetValue<int>(), 1);
         Assert.IsGreaterThanOrEqualTo(overview["modules"]!["vault"]!["count"]!.GetValue<int>(), 1);
         Assert.IsGreaterThanOrEqualTo(overview["modules"]!["devices"]!["count"]!.GetValue<int>(), 2);
         Assert.IsGreaterThanOrEqualTo(overview["modules"]!["devices"]!["syncStates"]!.GetValue<int>(), 1);
-        Assert.IsGreaterThanOrEqualTo(overview["modules"]!["remoteAccess"]!["peers"]!.GetValue<int>(), 2);
+        Assert.AreEqual(0, overview["modules"]!["remoteAccess"]!["peers"]!.GetValue<int>());
         Assert.IsGreaterThanOrEqualTo(overview["modules"]!["runtime"]!["apps"]!.GetValue<int>(), 1);
     }
 
     private HttpClient CreateDavClient(string username, string token)
     {
-        var client = new HttpClient { BaseAddress = apiBaseUri, Timeout = TimeSpan.FromSeconds(20) };
+        var client = clientFactory();
         client.DefaultRequestHeaders.Authorization = Basic(username, token);
         return client;
     }

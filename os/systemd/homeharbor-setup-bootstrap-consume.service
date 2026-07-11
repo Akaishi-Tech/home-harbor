@@ -1,0 +1,13 @@
+[Unit]
+Description=Retire the consumed HomeHarbor setup bootstrap code
+ConditionPathExists=/run/homeharbor/setup-bootstrap-consume
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent consume-setup-bootstrap
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/homeharbor /var/lib/homeharbor/setup
+UMask=0077

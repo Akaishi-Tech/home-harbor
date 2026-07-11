@@ -16,6 +16,8 @@ import { navItems } from "@/components/app-shell/nav";
 import { useTheme } from "@/providers/theme-provider";
 import { useLogout, useMediaIndex } from "@/hooks/queries";
 import { errorMessage } from "@/lib/format";
+import { useAuth } from "@/hooks/use-auth";
+import { isFamilyAdmin, isFamilyMember } from "@/lib/auth";
 
 export function CommandMenu({
   open,
@@ -29,7 +31,14 @@ export function CommandMenu({
   const { toggle } = useTheme();
   const logout = useLogout();
   const mediaIndex = useMediaIndex();
+  const auth = useAuth();
   const { t } = useTranslation();
+  const visibleItems = navItems.filter(
+    (item) =>
+      !item.access ||
+      (item.access === "admin" && isFamilyAdmin(auth)) ||
+      (item.access === "member" && isFamilyMember(auth)),
+  );
 
   function run(action: () => void) {
     onOpenChange(false);
@@ -47,7 +56,7 @@ export function CommandMenu({
       <CommandList>
         <CommandEmpty>{t("common.noMatches")}</CommandEmpty>
         <CommandGroup heading={t("common.goTo")}>
-          {navItems.map((item) => {
+          {visibleItems.map((item) => {
             const label = t(item.labelKey);
             const description = t(item.descriptionKey);
             return (
@@ -84,19 +93,21 @@ export function CommandMenu({
           >
             <RefreshCw className="size-4" /> {t("common.refreshData")}
           </CommandItem>
-          <CommandItem
-            value={t("common.indexMediaLibrary")}
-            onSelect={() =>
-              run(() =>
-                mediaIndex.mutate(undefined, {
-                  onSuccess: () => toast.success(t("toast.mediaIndexUpdated")),
-                  onError: (error) => toast.error(errorMessage(error)),
-                }),
-              )
-            }
-          >
-            <Images className="size-4" /> {t("common.indexMediaLibrary")}
-          </CommandItem>
+          {isFamilyAdmin(auth) ? (
+            <CommandItem
+              value={t("common.indexMediaLibrary")}
+              onSelect={() =>
+                run(() =>
+                  mediaIndex.mutate(undefined, {
+                    onSuccess: () => toast.success(t("toast.mediaIndexUpdated")),
+                    onError: (error) => toast.error(errorMessage(error)),
+                  }),
+                )
+              }
+            >
+              <Images className="size-4" /> {t("common.indexMediaLibrary")}
+            </CommandItem>
+          ) : null}
           <CommandItem
             value={t("common.logout")}
             onSelect={() =>

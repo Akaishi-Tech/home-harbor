@@ -377,10 +377,14 @@ package_homeharbor-control() {
   install -Dm644 "${source_dir}/os/systemd/homeharbor-boot-attempt.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-boot-attempt.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-boot-success.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-boot-success.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-firstboot.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-firstboot.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-setup-bootstrap-consume.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-setup-bootstrap-consume.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-setup-bootstrap-consume.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-setup-bootstrap-consume.path"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-apply.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-apply.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-apply.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-apply.path"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-ota-commit.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-ota-commit.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-caddy-render.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-caddy-render.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-caddy-render.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-caddy-render.path"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-tls-trust.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-tls-trust.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-health.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-health.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-health.timer" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-health.timer"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-smbd.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-smbd.service"
@@ -437,6 +441,8 @@ package_homeharbor-recovery() {
   _link_published_dotnet_libraries "${recovery_publish_dir}" "${pkgdir}/usr/lib/homeharbor/recovery"
 
   install -Dm644 "${source_dir}/os/systemd/homeharbor-fastbootd.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-fastbootd.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-recovery-action.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-recovery-action.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-recovery-action.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-recovery-action.path"
   install -Dm644 "${source_dir}/os/systemd/network/20-homeharbor-recovery-wired.network" "${pkgdir}/etc/systemd/network/20-homeharbor-recovery-wired.network"
   install -Dm644 "${source_dir}/os/systemd/serial-getty@ttyS0.service.d/recovery-autologin.conf" "${pkgdir}/etc/systemd/system/serial-getty@ttyS0.service.d/recovery-autologin.conf"
   install -Dm644 "${source_dir}/os/systemd/getty@tty1.service.d/recovery-autologin.conf" "${pkgdir}/etc/systemd/system/getty@tty1.service.d/recovery-autologin.conf"
@@ -458,7 +464,6 @@ package_homeharbor-installer() {
     'device-mapper'
     'dotnet-runtime'
     'dosfstools'
-    'efitools'
     'erofs-utils'
     'gpm'
     'mdadm'
@@ -467,7 +472,6 @@ package_homeharbor-installer() {
     'jq'
     'mokutil'
     'openssl'
-    'sbsigntools'
     'systemd'
     'tpm2-tss'
   )

@@ -1,38 +1,27 @@
+using HomeHarbor.Api.Auth;
 using HomeHarbor.Api.Data;
 using HomeHarbor.Api.Services;
 using HomeHarbor.Core.Storage;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 
 namespace HomeHarbor.Api.Controllers;
 
 [ApiController]
+[Authorize(Policy = AuthorizationPolicies.FamilyMember)]
 [Route("api/home")]
 public sealed class HomeController(
     HomeHarborDbContext db,
     IFamilyResolver families,
     IHomeHarborStorageService storage,
-    ISetupPairingService pairings,
     IOverviewCache overviewCache) : ControllerBase
 {
     [HttpGet("overview")]
     public async Task<IActionResult> Overview([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
-        if (resolved is null)
-        {
-            var ticket = pairings.GetOrCreate(BuildPublicOrigin());
-            return Ok(new
-            {
-                initialized = false,
-                setup = new
-                {
-                    ticket.PairingUrl,
-                    qrSvg = "/api/setup/pairing.svg",
-                    ticket.ExpiresAt
-                }
-            });
-        }
+        if (resolved is null) return NotFound(new { error = "Family space no longer exists." });
 
         var overview = await overviewCache.GetOrCreateAsync(
             resolved.Value,
@@ -101,8 +90,8 @@ public sealed class HomeController(
                     "/api/apps/catalog")),
             Security: new OverviewSecurity(
                 LocalStorage: true,
-                EndToEndEncryption: true,
-                OneClickExternalBackup: true),
+                EndToEndEncryption: false,
+                OneClickExternalBackup: false),
             Storage: latestHealth is null
                 ? new OverviewStorage("not-checked", null)
                 : new OverviewStorage(latestHealth.Status, latestHealth.CheckedAt),
@@ -120,9 +109,8 @@ public sealed class HomeController(
 
         long count = 0;
         long bytes = 0;
-        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        foreach (var info in storage.EnumerateFiles(familyId, area))
         {
-            var info = new FileInfo(path);
             count++;
             bytes += info.Length;
         }
@@ -130,14 +118,4 @@ public sealed class HomeController(
         return (count, bytes);
     }
 
-    private string BuildPublicOrigin()
-    {
-        var scheme = Request.Headers.TryGetValue("X-Forwarded-Proto", out var forwardedProto)
-            ? forwardedProto.ToString().Split(',')[0].Trim()
-            : Request.Scheme;
-        var host = Request.Headers.TryGetValue("X-Forwarded-Host", out var forwardedHost)
-            ? forwardedHost.ToString().Split(',')[0].Trim()
-            : Request.Host.Value;
-        return $"{scheme}://{host}";
-    }
 }

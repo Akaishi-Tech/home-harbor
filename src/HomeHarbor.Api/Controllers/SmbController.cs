@@ -21,6 +21,7 @@ public sealed partial class SmbController(
     private const int SmbUserPoolSize = 32;
 
     [HttpGet("shares")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Shares([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -42,6 +43,7 @@ public sealed partial class SmbController(
     }
 
     [HttpPost("shares")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> CreateShare([FromBody] CreateSmbShareRequest request, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
@@ -67,6 +69,7 @@ public sealed partial class SmbController(
     }
 
     [HttpPut("shares/{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> UpdateShare(Guid id, [FromBody] UpdateSmbShareRequest request, CancellationToken cancellationToken)
     {
         var share = await db.SmbShares.FindAsync([id], cancellationToken);
@@ -85,6 +88,7 @@ public sealed partial class SmbController(
     }
 
     [HttpGet("credentials")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Credentials([FromQuery] Guid? familyId, [FromQuery] Guid? shareId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -100,10 +104,13 @@ public sealed partial class SmbController(
     }
 
     [HttpPost("credentials")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> CreateCredential([FromBody] CreateSmbCredentialRequest request, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
         if (resolved is null) return BadRequest(new { error = "Create a family space first." });
+        if (request.DisplayName?.Trim().Length > 96)
+            return BadRequest(new { error = "displayName must not exceed 96 characters." });
 
         var share = request.ShareId is { } shareId
             ? await db.SmbShares.FirstOrDefaultAsync(s => s.Id == shareId && s.FamilyId == resolved.Value, cancellationToken)
@@ -133,7 +140,14 @@ public sealed partial class SmbController(
         _ = db.SmbCredentials.Add(credential);
         share.RuntimeState = "pending";
         share.UpdatedAt = now;
-        _ = await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            _ = await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new { error = "The selected SMB credential slot was claimed concurrently; retry the request." });
+        }
         await signals.WriteSmbPasswordAsync(credential.Id, credential.Username, credential.UnixUser, password, cancellationToken);
         signals.RequestSmbApply();
 
@@ -141,6 +155,7 @@ public sealed partial class SmbController(
     }
 
     [HttpDelete("credentials/{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> RevokeCredential(Guid id, CancellationToken cancellationToken)
     {
         var credential = await db.SmbCredentials.FindAsync([id], cancellationToken);

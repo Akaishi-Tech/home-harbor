@@ -4,11 +4,14 @@ import {
   configureUnauthorizedHandler,
 } from "@/lib/api";
 import { authStore } from "@/lib/auth-store";
+import { queryClient } from "@/lib/query";
 import {
   RootError,
   RootLayout,
   Splash,
   dashboardGuardLoader,
+  familyAdminGuardLoader,
+  familyMemberGuardLoader,
   loginGuardLoader,
   rootIndexLoader,
   setupGuardLoader,
@@ -25,6 +28,13 @@ export const router = createBrowserRouter([
     HydrateFallback: Splash,
     children: [
       { path: "/", loader: rootIndexLoader },
+      {
+        path: "/pair",
+        lazy: async () => ({
+          Component: (await import("@/routes/pair-device-page"))
+            .PairDevicePage,
+        }),
+      },
       {
         path: "/setup",
         loader: setupGuardLoader,
@@ -53,6 +63,7 @@ export const router = createBrowserRouter([
           },
           {
             path: "devices",
+            loader: familyAdminGuardLoader,
             lazy: async () => ({
               Component: (await import("@/routes/dashboard/devices-page"))
                 .DevicesPage,
@@ -74,6 +85,7 @@ export const router = createBrowserRouter([
           },
           {
             path: "shares",
+            loader: familyAdminGuardLoader,
             lazy: async () => ({
               Component: (await import("@/routes/dashboard/shares-page"))
                 .SharesPage,
@@ -81,6 +93,7 @@ export const router = createBrowserRouter([
           },
           {
             path: "backups",
+            loader: familyMemberGuardLoader,
             lazy: async () => ({
               Component: (await import("@/routes/dashboard/backups-page"))
                 .BackupsPage,
@@ -88,6 +101,7 @@ export const router = createBrowserRouter([
           },
           {
             path: "remote",
+            loader: familyAdminGuardLoader,
             lazy: async () => ({
               Component: (await import("@/routes/dashboard/remote-page"))
                 .RemotePage,
@@ -95,6 +109,7 @@ export const router = createBrowserRouter([
           },
           {
             path: "vault",
+            loader: familyAdminGuardLoader,
             lazy: async () => ({
               Component: (await import("@/routes/dashboard/vault-page"))
                 .VaultPage,
@@ -117,5 +132,6 @@ export const router = createBrowserRouter([
 // A 401 anywhere clears the session and bounces to login.
 configureUnauthorizedHandler(() => {
   authStore.clear();
+  queryClient.clear();
   void router.navigate("/login");
 });

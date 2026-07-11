@@ -68,6 +68,8 @@ This page summarizes the current HTTP routes by controller. Unless marked anonym
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/identity/login` | Anonymous: login |
+| `POST` | `/api/identity/recover-owner` | Anonymous: recover the initial primary owner with a recovery code, or physically enroll a credential-less legacy owner with the console setup code |
+| `POST` | `/api/identity/recovery-code/rotate` | Owner only: verify current password and rotate/create the recovery code |
 | `GET` | `/api/identity/session` | Current session |
 | `POST` | `/api/identity/logout` | Logout |
 

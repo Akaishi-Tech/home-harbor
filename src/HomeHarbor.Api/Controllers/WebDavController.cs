@@ -84,7 +84,8 @@ public sealed class WebDavController(
         var contentType = contentTypeProvider.TryGetContentType(fileName, out var ct)
             ? ct
             : "application/octet-stream";
-        return PhysicalFile(physicalPath, contentType, fileName, enableRangeProcessing: true);
+        var input = storage.OpenRead(identity.FamilyId, storageArea, normalized);
+        return File(input, contentType, fileName, enableRangeProcessing: true);
     }
 
     [HttpPut]

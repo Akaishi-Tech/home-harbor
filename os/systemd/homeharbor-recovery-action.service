@@ -1,0 +1,13 @@
+[Unit]
+Description=Apply a physical HomeHarbor recovery console action
+ConditionPathExists=/run/homeharbor-recovery/action.request
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/recovery/HomeHarbor.Recovery --apply-action /run/homeharbor-recovery/action.request
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/homeharbor-recovery
+UMask=0077

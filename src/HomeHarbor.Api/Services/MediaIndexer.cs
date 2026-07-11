@@ -38,20 +38,19 @@ public sealed class MediaIndexer(HomeHarborDbContext db, IHomeHarborStorageServi
         var existingAssets = await db.MediaAssets
             .Where(asset => asset.FamilyId == familyId && areaNames.Contains(asset.Area))
             .ToDictionaryAsync(asset => (asset.Area, asset.RelativePath), cancellationToken);
+        var seen = new HashSet<(string Area, string RelativePath)>();
 
         foreach (var area in indexedAreas)
         {
-            if (!Directory.Exists(area.Root)) continue;
-
-            foreach (var file in Directory.EnumerateFiles(area.Root, "*", SearchOption.AllDirectories))
+            foreach (var info in storage.EnumerateFiles(familyId, area.Area))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var mediaType = Classify(file);
+                var mediaType = Classify(info.FullName);
                 if (mediaType is null) continue;
 
-                var info = new FileInfo(file);
-                var relative = Path.GetRelativePath(area.Root, file).Replace(Path.DirectorySeparatorChar, '/');
+                var relative = Path.GetRelativePath(area.Root, info.FullName).Replace(Path.DirectorySeparatorChar, '/');
                 var key = (area.AreaName, relative);
+                _ = seen.Add(key);
 
                 if (!existingAssets.TryGetValue(key, out var existing))
                 {
@@ -73,6 +72,12 @@ public sealed class MediaIndexer(HomeHarborDbContext db, IHomeHarborStorageServi
                 indexed.Add(existing);
             }
         }
+
+        var stale = existingAssets
+            .Where(pair => !seen.Contains(pair.Key))
+            .Select(pair => pair.Value)
+            .ToArray();
+        db.MediaAssets.RemoveRange(stale);
 
         _ = await db.SaveChangesAsync(cancellationToken);
         return indexed;

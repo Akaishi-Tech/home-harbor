@@ -129,10 +129,6 @@ namespace HomeHarbor.Api.Data.Migrations
                     b.Property<DateTimeOffset>("NotBefore")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("PrivateKeyPem")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.HasKey("Id");
 
                     b.HasIndex("FamilyId", "Hostname")
@@ -205,7 +201,8 @@ namespace HomeHarbor.Api.Data.Migrations
 
                     b.HasIndex("FamilyId", "CreatedAt");
 
-                    b.HasIndex("FamilyId", "DisplayName");
+                    b.HasIndex("FamilyId", "DisplayName")
+                        .IsUnique();
 
                     b.ToTable("FamilyMembers");
                 });
@@ -228,6 +225,10 @@ namespace HomeHarbor.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(96)
                         .HasColumnType("character varying(96)");
+
+                    b.Property<string>("RecoveryCodeHash")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
 
                     b.HasKey("Id");
 
@@ -395,7 +396,8 @@ namespace HomeHarbor.Api.Data.Migrations
                     b.HasIndex("FamilyId", "DeletedAt");
 
                     b.HasIndex("FamilyId", "Name")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"DeletedAt\" IS NULL");
 
                     b.HasIndex("FamilyId", "UpdatedAt");
 
@@ -609,10 +611,12 @@ namespace HomeHarbor.Api.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("UnixUser")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"RevokedAt\" IS NULL");
 
                     b.HasIndex("Username")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"RevokedAt\" IS NULL");
 
                     b.HasIndex("FamilyId", "RevokedAt");
 
@@ -867,11 +871,6 @@ namespace HomeHarbor.Api.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(96)
                         .HasColumnType("character varying(96)");
-
-                    b.Property<string>("PrivateKey")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
 
                     b.Property<string>("PublicKey")
                         .IsRequired()

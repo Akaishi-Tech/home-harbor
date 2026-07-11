@@ -48,11 +48,33 @@ export type SetupStatus = {
 
 export type PairingTicket = {
   initialized: boolean;
-  code: string;
-  pairingUrl: string;
-  expiresAt: string;
-  qrSvg: string;
-  qrPayload: string;
+  codeRequired?: boolean;
+  code?: string;
+  pairingUrl?: string;
+  expiresAt: string | null;
+  qrSvg?: string;
+  qrPayload?: string;
+};
+
+export type DevicePairingResponse = {
+  device: {
+    id: string;
+    familyId: string;
+    displayName: string;
+    kind: string;
+    createdAt: string;
+    lastSeenAt: string | null;
+  };
+  sync: {
+    scopes: string[];
+    endpoint: string;
+  };
+  webDav: {
+    id: string;
+    username: string;
+    token: string;
+    scope: string;
+  } | null;
 };
 
 export type SetupResponse = {

@@ -3,7 +3,14 @@ Description=Apply HomeHarbor SMB runtime configuration
 Requires=homeharbor-api.service
 After=network-online.target homeharbor-api.service
 Wants=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=6
 
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent apply-smb
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

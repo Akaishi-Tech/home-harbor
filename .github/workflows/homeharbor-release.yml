@@ -47,6 +47,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           CHANNEL: ${{ steps.release.outputs.channel }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          HOMEHARBOR_RELEASE_SEQUENCE: ${{ github.run_number }}
           HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM: ${{ secrets.HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM }}
           HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM: ${{ secrets.HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM }}
           HOMEHARBOR_RELEASE_KEY_ID: ${{ secrets.HOMEHARBOR_RELEASE_KEY_ID }}
@@ -73,6 +74,7 @@ jobs:
             -e VERSION \
             -e CHANNEL \
             -e RELEASE_TAG \
+            -e HOMEHARBOR_RELEASE_SEQUENCE \
             -e HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM \
             -e HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM \
             -e HOMEHARBOR_RELEASE_KEY_ID \

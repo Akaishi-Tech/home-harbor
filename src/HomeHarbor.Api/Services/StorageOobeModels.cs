@@ -34,7 +34,8 @@ public sealed record StorageDevice(
     bool IsProtected,
     SmartHealth? Smart,
     IReadOnlyList<string> Warnings,
-    IReadOnlyList<StorageDevice> Children);
+    IReadOnlyList<StorageDevice> Children,
+    string? StableId = null);
 
 public sealed record StorageMount(string? Target, string? Source, string? FileSystem, string? Options);
 
@@ -48,7 +49,8 @@ public sealed record StorageTarget(
     string? Serial,
     string? Transport,
     bool Eligible,
-    IReadOnlyList<string> EligibilityReasons);
+    IReadOnlyList<string> EligibilityReasons,
+    string? StableId = null);
 
 public sealed record StorageUseProfile(
     int FamilyMembers,
@@ -82,7 +84,8 @@ public sealed record StoragePlanRequest(
     string? DataProfile,
     string? MetadataProfile,
     string? UnlockMode,
-    bool AllowRemovable);
+    bool AllowRemovable,
+    string? PairingCode = null);
 
 public sealed record StoragePlanTargetRequest(string Path, string? Kind);
 
@@ -112,11 +115,16 @@ public sealed record StoragePlanDevice(
     long SizeBytes,
     string? Model,
     string? Serial,
-    string? Transport);
+    string? Transport,
+    string? StableId = null);
 
 public sealed record StorageMountChange(string Target, string FileSystem, string Options);
 
-public sealed record StorageApplyRequest(string PlanId, string Confirmation, string? RecoveryPassphrase);
+public sealed record StorageApplyRequest(
+    string PlanId,
+    string Confirmation,
+    string? RecoveryPassphrase,
+    string? PairingCode = null);
 
 public sealed record StorageApplyStatus(
     StorageApplyState State,

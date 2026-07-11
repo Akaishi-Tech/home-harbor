@@ -11,7 +11,7 @@ namespace HomeHarbor.Api.Services;
 public sealed class StorageOobeService(
     IOptions<StorageOobeOptions> options,
     ILogger<StorageOobeService> logger,
-    KernelModuleDetector kernelModules) : IStorageOobeService
+    KernelModuleDetector kernelModules) : IStorageOobeService, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -20,6 +20,9 @@ public sealed class StorageOobeService(
     };
 
     private readonly StorageOobeOptions _options = options.Value;
+    private readonly SemaphoreSlim _applyGate = new(1, 1);
+
+    public void Dispose() => _applyGate.Dispose();
 
     public async Task<StorageInventory> InventoryAsync(CancellationToken cancellationToken)
     {
@@ -53,7 +56,7 @@ public sealed class StorageOobeService(
         var directory = Path.Combine(_options.StateDirectory, "plans");
         _ = Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, plan.PlanId + ".json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
+        await AtomicWriteTextAsync(path, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
         return plan;
     }
 
@@ -63,31 +66,58 @@ public sealed class StorageOobeService(
         string? recoveryPassphrase,
         CancellationToken cancellationToken)
     {
-        var plan = await ReadPlanAsync(planId, cancellationToken);
-        if (!string.Equals(confirmation, plan.ConfirmPhrase, StringComparison.Ordinal))
+        await _applyGate.WaitAsync(cancellationToken);
+        try
         {
-            throw new InvalidOperationException("Confirmation phrase did not match the storage plan.");
+            var currentStatus = await StatusAsync(cancellationToken);
+            if (currentStatus.State is StorageApplyState.PendingReboot or StorageApplyState.Running or StorageApplyState.Succeeded)
+                throw new InvalidOperationException("A storage plan has already been queued or applied.");
+
+            var plan = await ReadPlanAsync(planId, cancellationToken);
+            if (DateTimeOffset.UtcNow - plan.CreatedAt > TimeSpan.FromMinutes(Math.Max(1, _options.PlanLifetimeMinutes)))
+                throw new InvalidOperationException("Storage plan has expired. Refresh inventory and create a new plan.");
+            if (!string.Equals(confirmation, plan.ConfirmPhrase, StringComparison.Ordinal))
+                throw new InvalidOperationException("Confirmation phrase did not match the storage plan.");
+            ValidateRecoveryPassphrase(recoveryPassphrase);
+
+            var currentInventory = await InventoryAsync(cancellationToken);
+            ValidatePlanAgainstCurrentInventory(plan, currentInventory);
+
+            _ = Directory.CreateDirectory(_options.StateDirectory);
+            var pendingPath = PendingPlanPath();
+            var status = new StorageApplyStatus(
+                StorageApplyState.PendingReboot,
+                Progress: 5,
+                Message: "Storage plan is queued and will be applied by the root service.",
+                Error: null,
+                PlanId: plan.PlanId,
+                UpdatedAt: DateTimeOffset.UtcNow);
+
+            var queued = false;
+            try
+            {
+                await WriteOneShotPassphraseAsync(recoveryPassphrase!, cancellationToken);
+                await AtomicWriteTextAsync(pendingPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
+                await WriteStatusAsync(status, cancellationToken);
+                await TouchRequestAsync(cancellationToken);
+                queued = true;
+                File.Delete(PlanPath(plan.PlanId));
+                return status;
+            }
+            finally
+            {
+                if (!queued)
+                {
+                    DeleteIfExists(pendingPath);
+                    DeleteIfExists(_options.OneShotPassphrasePath);
+                    DeleteIfExists(_options.RequestPath);
+                }
+            }
         }
-        if (string.IsNullOrEmpty(recoveryPassphrase))
+        finally
         {
-            throw new InvalidOperationException("Recovery passphrase is required to apply the storage plan.");
+            _ = _applyGate.Release();
         }
-
-        _ = Directory.CreateDirectory(_options.StateDirectory);
-        var pendingPath = PendingPlanPath();
-        var status = new StorageApplyStatus(
-            StorageApplyState.PendingReboot,
-            Progress: 5,
-            Message: "Storage plan is queued and will be applied by the root service.",
-            Error: null,
-            PlanId: plan.PlanId,
-            UpdatedAt: DateTimeOffset.UtcNow);
-
-        await File.WriteAllTextAsync(pendingPath, JsonSerializer.Serialize(plan, JsonOptions), cancellationToken);
-        await WriteOneShotPassphraseAsync(recoveryPassphrase, cancellationToken);
-        await TouchRequestAsync(cancellationToken);
-        await WriteStatusAsync(status, cancellationToken);
-        return status;
     }
 
     public async Task<StorageApplyStatus> StatusAsync(CancellationToken cancellationToken)
@@ -97,8 +127,9 @@ public sealed class StorageOobeService(
         {
             try
             {
+                await using var statusInput = File.OpenRead(statusPath);
                 var status = await JsonSerializer.DeserializeAsync<StorageApplyStatus>(
-                    File.OpenRead(statusPath),
+                    statusInput,
                     JsonOptions,
                     cancellationToken);
                 if (status is not null) return status;
@@ -131,12 +162,12 @@ public sealed class StorageOobeService(
 
     private async Task<StoragePlan> ReadPlanAsync(string planId, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(planId) || planId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        if (!Guid.TryParseExact(planId, "N", out _))
         {
             throw new InvalidOperationException("Invalid storage plan id.");
         }
 
-        var path = Path.Combine(_options.StateDirectory, "plans", planId + ".json");
+        var path = PlanPath(planId);
         if (!File.Exists(path))
         {
             throw new FileNotFoundException("Storage plan was not found.", path);
@@ -150,30 +181,112 @@ public sealed class StorageOobeService(
     private async Task WriteStatusAsync(StorageApplyStatus status, CancellationToken cancellationToken)
     {
         _ = Directory.CreateDirectory(_options.StateDirectory);
-        await File.WriteAllTextAsync(StatusPath(), JsonSerializer.Serialize(status, JsonOptions), cancellationToken);
+        await AtomicWriteTextAsync(StatusPath(), JsonSerializer.Serialize(status, JsonOptions), cancellationToken);
     }
 
     private async Task WriteOneShotPassphraseAsync(string passphrase, CancellationToken cancellationToken)
     {
         var path = _options.OneShotPassphrasePath;
         _ = Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
-        await File.WriteAllTextAsync(path, passphrase, cancellationToken);
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
+        await AtomicWriteTextAsync(path, passphrase, cancellationToken, restrictToOwner: true);
     }
 
     private async Task TouchRequestAsync(CancellationToken cancellationToken)
     {
         var path = _options.RequestPath;
         _ = Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
-        await File.WriteAllTextAsync(path, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture), cancellationToken);
+        await AtomicWriteTextAsync(
+            path,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
+            cancellationToken,
+            restrictToOwner: true);
     }
 
     private string PendingPlanPath() => Path.Combine(_options.StateDirectory, "pending-plan.json");
 
     private string StatusPath() => Path.Combine(_options.StateDirectory, "status.json");
+
+    private string PlanPath(string planId) => Path.Combine(_options.StateDirectory, "plans", planId + ".json");
+
+    private static void ValidateRecoveryPassphrase(string? passphrase)
+    {
+        if (string.IsNullOrEmpty(passphrase) || passphrase.Length < 12)
+            throw new InvalidOperationException("Recovery passphrase must be at least 12 characters.");
+        if (passphrase.Length > 1024)
+            throw new InvalidOperationException("Recovery passphrase is too long.");
+        if (passphrase.Contains('\r') || passphrase.Contains('\n') || passphrase.Contains('\0'))
+            throw new InvalidOperationException("Recovery passphrase must be a single line without null bytes.");
+    }
+
+    private static void ValidatePlanAgainstCurrentInventory(StoragePlan plan, StorageInventory inventory)
+    {
+        var targets = inventory.Targets.ToDictionary(target => target.Path, StringComparer.Ordinal);
+        foreach (var planned in plan.Devices)
+        {
+            if (!targets.TryGetValue(planned.Path, out var current) || !current.Eligible)
+                throw new InvalidOperationException($"Storage target is no longer eligible: {planned.Path}");
+            if (!string.Equals(planned.Kind, current.Kind, StringComparison.Ordinal) ||
+                planned.SizeBytes != current.SizeBytes ||
+                !string.Equals(planned.Model, current.Model, StringComparison.Ordinal) ||
+                !string.Equals(planned.Serial, current.Serial, StringComparison.Ordinal) ||
+                !string.Equals(planned.Transport, current.Transport, StringComparison.Ordinal) ||
+                !string.Equals(planned.StableId, current.StableId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Storage target identity changed after planning: {planned.Path}");
+            }
+        }
+    }
+
+    private static async Task AtomicWriteTextAsync(
+        string path,
+        string contents,
+        CancellationToken cancellationToken,
+        bool restrictToOwner = false)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath) ?? ".";
+        _ = Directory.CreateDirectory(directory);
+        var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            var fileOptions = new FileStreamOptions
+            {
+                Access = FileAccess.Write,
+                Mode = FileMode.CreateNew,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous | FileOptions.WriteThrough
+            };
+            if (restrictToOwner && !OperatingSystem.IsWindows())
+                fileOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+            await using (var output = new FileStream(tempPath, fileOptions))
+            await using (var writer = new StreamWriter(output))
+            {
+                await writer.WriteAsync(contents.AsMemory(), cancellationToken);
+                await writer.FlushAsync(cancellationToken);
+                output.Flush(flushToDisk: true);
+            }
+
+            File.Move(tempPath, fullPath, overwrite: true);
+            if (restrictToOwner && !OperatingSystem.IsWindows())
+                File.SetUnixFileMode(fullPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        finally
+        {
+            DeleteIfExists(tempPath);
+        }
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+    }
 
     private async Task<IReadOnlyList<StorageMount>> ReadMountsAsync(List<string> warnings, CancellationToken cancellationToken)
     {
@@ -230,7 +343,7 @@ public sealed class StorageOobeService(
     {
         var (ExitCode, Output) = await ProcessRunner.CaptureAsync(
             "lsblk",
-            ["-J", "-b", "-o", "NAME,PATH,SIZE,TYPE,MODEL,SERIAL,TRAN,ROTA,RM,MOUNTPOINTS,FSTYPE,LABEL,PARTLABEL,UUID,PKNAME"],
+            ["-J", "-b", "-o", "NAME,PATH,SIZE,TYPE,MODEL,SERIAL,WWN,TRAN,ROTA,RM,MOUNTPOINTS,FSTYPE,LABEL,PARTLABEL,UUID,PARTUUID,PKNAME"],
             TimeSpan.FromSeconds(5),
             cancellationToken);
         if (ExitCode != 0)
@@ -314,7 +427,10 @@ public sealed class StorageOobeService(
             IsProtected: protectedByLabel,
             Smart: smart,
             Warnings: deviceWarnings,
-            Children: children);
+            Children: children,
+            StableId: string.Equals(type, "part", StringComparison.Ordinal)
+                ? StringProperty(node, "partuuid")
+                : StringProperty(node, "wwn"));
     }
 
     private static async Task<SmartHealth?> SmartStatusAsync(string path, List<string> warnings, CancellationToken cancellationToken)
@@ -397,7 +513,8 @@ public sealed class StorageOobeService(
                 Serial: device.Serial,
                 Transport: device.Transport,
                 Eligible: reasons.Count == 0,
-                EligibilityReasons: reasons));
+                EligibilityReasons: reasons,
+                StableId: device.StableId));
         }
 
         foreach (var disk in flattened.Where(d => d.Type == "disk"))
@@ -411,7 +528,8 @@ public sealed class StorageOobeService(
                 Serial: disk.Serial,
                 Transport: disk.Transport,
                 Eligible: reasons.Count == 0,
-                EligibilityReasons: reasons));
+                EligibilityReasons: reasons,
+                StableId: disk.StableId));
         }
 
         return targets
@@ -445,33 +563,17 @@ public sealed class StorageOobeService(
         ];
     }
 
-    private async Task<StorageFileSystemCapability> DetectZfsCapabilityAsync(CancellationToken cancellationToken)
+    private Task<StorageFileSystemCapability> DetectZfsCapabilityAsync(CancellationToken cancellationToken)
     {
-        var moduleAvailable = await IsZfsModuleAvailableAsync(cancellationToken);
-        var toolsAvailable = await ZfsToolsAvailableAsync(cancellationToken);
-        var available = moduleAvailable && toolsAvailable;
-        var reason = available
-            ? null
-            : !moduleAvailable
-                ? "zfs kernel module is not available."
-                : toolsAvailable
-                    ? null
-                    : "zfs-utils kernel addon is not mounted; boot the zfs kernel channel with its signed addon.";
-
-        return new StorageFileSystemCapability(
+        _ = kernelModules;
+        _ = cancellationToken;
+        return Task.FromResult(new StorageFileSystemCapability(
             FileSystem: "zfs",
-            Available: available,
-            UnavailableReason: reason,
+            Available: false,
+            UnavailableReason: "ZFS is unavailable until its userspace addon metadata is cryptographically bound into the signed boot UKI.",
             RaidModes: ["recommended", "single", "mirror", "raid10", "raid5", "raid6"],
-            CanPrepareOnline: false);
+            CanPrepareOnline: false));
     }
-
-    private Task<bool> IsZfsModuleAvailableAsync(CancellationToken cancellationToken)
-        => kernelModules.IsModuleAvailableAsync("zfs", cancellationToken: cancellationToken);
-
-    private static async Task<bool> ZfsToolsAvailableAsync(CancellationToken cancellationToken)
-        => await CommandAvailableAsync("zfs", ["--version"], cancellationToken) &&
-            await CommandAvailableAsync("zpool", ["version"], cancellationToken);
 
     private static async Task<bool> CommandAvailableAsync(
         string fileName,
@@ -703,7 +805,8 @@ public static class StorageOobePlanner
                 SizeBytes: target.SizeBytes,
                 Model: target.Model,
                 Serial: target.Serial,
-                Transport: target.Transport));
+                Transport: target.Transport,
+                StableId: target.StableId));
         }
 
         var fileSystem = NormalizeFileSystem(request.FileSystem);

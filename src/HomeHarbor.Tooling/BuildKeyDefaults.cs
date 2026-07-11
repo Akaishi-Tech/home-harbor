@@ -49,7 +49,6 @@ public static class BuildKeyDefaults
         {
             2048 => "SHA256_RSA2048",
             4096 => "SHA256_RSA4096",
-            8192 => "SHA256_RSA8192",
             _ => null
         };
         if (!string.IsNullOrWhiteSpace(algorithm))
@@ -70,5 +69,26 @@ public static class BuildKeyDefaults
         {
             return null;
         }
+    }
+
+    internal static string RequireSupportedAvbSigningAlgorithm(string keyPath, string? configuredAlgorithm)
+    {
+        var keySize = TryGetRsaKeySize(keyPath)
+            ?? throw new InvalidOperationException("HOMEHARBOR_SECURE_BOOT_KEY is not a readable RSA PEM key");
+        var expected = keySize switch
+        {
+            2048 => "SHA256_RSA2048",
+            4096 => "SHA256_RSA4096",
+            _ => throw new InvalidOperationException(
+                $"HomeHarborBoot supports only RSA-2048 and RSA-4096 AVB keys; got RSA-{keySize}")
+        };
+        var actual = string.IsNullOrWhiteSpace(configuredAlgorithm) ? expected : configuredAlgorithm.Trim();
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"HOMEHARBOR_AVB_ALGORITHM {actual} does not match the RSA-{keySize} AVB signing key; expected {expected}");
+        }
+
+        return expected;
     }
 }

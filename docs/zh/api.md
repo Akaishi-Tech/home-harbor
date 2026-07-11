@@ -35,12 +35,12 @@ dotnet run --project src/HomeHarbor.Api/HomeHarbor.Api.csproj -- database-migrat
 | `HomeHarbor:Cache:OverviewTtlSeconds` | `30` | dashboard overview cache TTL |
 | `HomeHarbor:Jwt:Issuer` | `HomeHarbor` | JWT issuer |
 | `HomeHarbor:Jwt:Audience` | `HomeHarbor.Frontend` | JWT audience |
-| `HomeHarbor:Jwt:SigningKeyPath` | `/var/lib/homeharbor/jwt-signing.key` | 本机 JWT signing key |
+| `HomeHarbor:Jwt:SigningKeyPath` | `/var/lib/homeharbor/api/jwt-signing.key` | 本机 JWT signing key |
 | `HomeHarbor:Jwt:AccessTokenDays` | `30` | 用户 token 有效期 |
 | `HomeHarbor:Automation:TokenPath` | `/run/homeharbor/automation.jwt` | 自动化 token 输出路径 |
 | `HomeHarbor:Automation:TokenDays` | `365` | automation token 有效期 |
 | `HomeHarbor:Runtime:RequestDirectory` | `/run/homeharbor` | runtime 请求目录 |
-| `HomeHarbor:Runtime:SmbCredentialDirectory` | `/run/homeharbor/smb-credentials` | SMB credential material |
+| `HomeHarbor:Runtime:SmbCredentialDirectory` | `/run/homeharbor-smb-credentials` | SMB credential material |
 | `HomeHarbor:Runtime:DataUnlockMetadataPath` | `/var/lib/homeharbor/security/data-unlock.json` | storage unlock metadata |
 | `HomeHarbor:StorageOobe:StateDirectory` | `/var/lib/homeharbor/storage` | 存储 OOBE 状态目录 |
 | `HomeHarbor:StorageOobe:OneShotPassphrasePath` | `/run/homeharbor/storage-apply.passphrase` | storage apply 一次性 passphrase |
@@ -62,6 +62,10 @@ Storage OOBE ready 之前，pre-storage gate 只允许 `/api/setup*` 和 `/api/s
 - 数据库 member session 存在且未过期，JWT `jti` hash 与 session token hash 一致。
 
 `POST /api/identity/logout` 删除当前 session。`GET /api/identity/session` 返回当前 session。
+
+`POST /api/identity/recover-owner` 在验证当前一次性 recovery code 后，匿名重置初始 primary owner 的密码。对于 primary owner password hash 和 family recovery-code hash 都缺失的旧版安装，此端点也接受设备物理控制台显示的一次性 setup code；任一凭据完成登记后，该升级路径立即关闭。恢复目标始终是唯一 display name 与 `FamilySpace.OwnerDisplayName` 相同的成员；新增其他 owner 不会改变恢复目标。恢复成功会撤销该 owner 的 session、使已提交的 code 失效，并只返回一次替换 code。
+
+`POST /api/identity/recovery-code/rotate` 仅允许已认证 owner 调用，并要求提供 `currentPassword`。它可为旧版本创建且没有 recovery-code hash 的家庭补建 code，也可轮换现有 code。数据库只保存 hash；新明文 code 仅返回一次，必须立即安全保存。轮换尝试受限流保护。初始 primary owner 不允许删除。
 
 ## Setup 入口
 

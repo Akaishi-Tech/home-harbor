@@ -1,5 +1,7 @@
+using HomeHarbor.Api.Auth;
 using HomeHarbor.Api.Data;
 using HomeHarbor.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,6 +12,7 @@ namespace HomeHarbor.Api.Controllers;
 public sealed class MediaController(HomeHarborDbContext db, IFamilyResolver families, IMediaIndexer indexer) : ControllerBase
 {
     [HttpGet("assets")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Assets([FromQuery] Guid? familyId, [FromQuery] string? type, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -22,6 +25,7 @@ public sealed class MediaController(HomeHarborDbContext db, IFamilyResolver fami
     }
 
     [HttpPost("index")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Index([FromBody] IndexMediaRequest request, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);

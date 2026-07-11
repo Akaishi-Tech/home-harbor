@@ -1,5 +1,11 @@
-import { authFromResponse, clearAuth, loadAuth, saveAuth } from "@/lib/auth";
-import type { AuthResponse, AuthState } from "@/types";
+import {
+  authFromResponse,
+  authFromSession,
+  clearAuth,
+  loadAuth,
+  saveAuth,
+} from "@/lib/auth";
+import type { AuthState } from "@/types";
 
 /**
  * Framework-agnostic auth store. A plain observable (not React context) so it
@@ -28,16 +34,20 @@ export const authStore = {
     emit();
     return current;
   },
-  setFromResponse(response: AuthResponse): AuthState {
+  setFromResponse(response: unknown): AuthState {
     return authStore.set(authFromResponse(response));
+  },
+  setFromSession(response: unknown): AuthState | null {
+    if (!current) return null;
+    return authStore.set(authFromSession(current, response));
   },
   update(patch: Partial<AuthState>): AuthState | null {
     if (!current) return null;
     return authStore.set({ ...current, ...patch });
   },
   clear(): void {
-    if (!current) return;
     clearAuth();
+    if (!current) return;
     current = null;
     emit();
   },

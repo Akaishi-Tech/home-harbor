@@ -1,4 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Net.Sockets;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
@@ -9,6 +10,7 @@ using HomeHarbor.Core.Storage;
 using HomeHarbor.Tooling;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -41,6 +43,8 @@ builder.Services.Configure<HomeHarborRuntimeOptions>(
     builder.Configuration.GetSection(HomeHarborRuntimeOptions.SectionName));
 builder.Services.Configure<StorageOobeOptions>(
     builder.Configuration.GetSection(StorageOobeOptions.SectionName));
+builder.Services.Configure<SetupPairingOptions>(
+    builder.Configuration.GetSection(SetupPairingOptions.SectionName));
 
 var cacheOptions = builder.Configuration
     .GetSection(HomeHarborCacheOptions.SectionName)
@@ -129,7 +133,13 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
 
                 var sessionIdRaw = principal?.FindFirstValue(AuthClaims.SessionId);
                 var tokenId = principal?.FindFirstValue(JwtRegisteredClaimNames.Jti);
-                if (!Guid.TryParse(sessionIdRaw, out var sessionId) || string.IsNullOrWhiteSpace(tokenId))
+                var familyIdRaw = principal?.FindFirstValue(AuthClaims.FamilyId);
+                var memberIdRaw = principal?.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                    ?? principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+                if (!Guid.TryParse(sessionIdRaw, out var sessionId) ||
+                    !Guid.TryParse(familyIdRaw, out var familyId) ||
+                    !Guid.TryParse(memberIdRaw, out var memberId) ||
+                    string.IsNullOrWhiteSpace(tokenId))
                 {
                     context.Fail("Missing session identity.");
                     return;
@@ -138,12 +148,24 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
                 var db = context.HttpContext.RequestServices.GetRequiredService<HomeHarborDbContext>();
                 var tokenHash = JwtTokenService.HashTokenId(tokenId);
                 var session = await db.MemberSessions.AsNoTracking().FirstOrDefaultAsync(
-                    s => s.Id == sessionId && s.TokenHash == tokenHash,
+                    s => s.Id == sessionId &&
+                        s.TokenHash == tokenHash &&
+                        s.FamilyId == familyId &&
+                        s.MemberId == memberId,
                     context.HttpContext.RequestAborted);
                 if (session is null || session.ExpiresAt <= DateTimeOffset.UtcNow)
                 {
                     context.Fail("Session has expired.");
                     return;
+                }
+
+                var member = await db.FamilyMembers.AsNoTracking().FirstOrDefaultAsync(
+                    m => m.Id == memberId && m.FamilyId == familyId,
+                    context.HttpContext.RequestAborted);
+                var claimedRole = principal?.FindFirstValue(ClaimTypes.Role);
+                if (member is null || !string.Equals(member.Role, claimedRole, StringComparison.Ordinal))
+                {
+                    context.Fail("Session membership has changed. Sign in again.");
                 }
             }
         };
@@ -157,11 +179,12 @@ builder.Services.AddCors(options =>
 {
     var origins = builder.Configuration
         .GetSection("HomeHarbor:Frontend:AllowedOrigins")
-        .Get<string[]>() ?? ["http://localhost:5173", "http://127.0.0.1:5173"];
+        .Get<string[]>() ?? [];
     options.AddPolicy("HomeHarborFrontend", policy =>
-        policy.WithOrigins(origins)
-            .AllowAnyHeader()
-            .AllowAnyMethod());
+    {
+        if (origins.Length > 0) _ = policy.WithOrigins(origins);
+        _ = policy.AllowAnyHeader().AllowAnyMethod();
+    });
 });
 builder.Services.AddControllers().AddJsonOptions(options =>
 {
@@ -169,17 +192,25 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 });
 builder.Services.AddSingleton<IContentTypeProvider, FileExtensionContentTypeProvider>();
 builder.Services.AddSingleton<ITokenGenerator, TokenGenerator>();
+builder.Services.AddSingleton<AuthenticationFailureThrottle>();
 builder.Services.AddSingleton<IJwtTokenService, JwtTokenService>();
 builder.Services.AddSingleton<ISetupPairingService, SetupPairingService>();
 builder.Services.AddSingleton<IHomeHarborStorageService, HomeHarborStorageService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IFamilyResolver, FamilyResolver>();
 builder.Services.AddScoped<IMediaIndexer, MediaIndexer>();
-builder.Services.AddSingleton<ICertificateService, CertificateService>();
 builder.Services.AddSingleton<IReverseProxyConfigService, ReverseProxyConfigService>();
 builder.Services.AddSingleton<IStorageHealthService, StorageHealthService>();
 builder.Services.AddSingleton<IStorageOobeService, StorageOobeService>();
-builder.Services.AddHttpClient<IAppRuntimeCatalog, AppRuntimeCatalog>(client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services
+    .AddHttpClient<IAppRuntimeCatalog, AppRuntimeCatalog>(client => client.Timeout = TimeSpan.FromSeconds(5))
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+        ConnectTimeout = TimeSpan.FromSeconds(5),
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    });
 builder.Services.AddSingleton<KernelModuleDetector>();
 builder.Services.AddSingleton<ISmbConfigService, SmbConfigService>();
 builder.Services.AddSingleton<IRuntimeSignalService, RuntimeSignalService>();
@@ -196,6 +227,7 @@ if (migrateDatabase)
 }
 
 var app = builder.Build();
+const long maxApiRequestBodyBytes = 1024 * 1024;
 
 if (useDevelopmentMemoryCacheFallback)
 {
@@ -215,6 +247,44 @@ if (app.Environment.IsDevelopment())
     _ = app.MapOpenApi();
 }
 
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.XContentTypeOptions = "nosniff";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers.XFrameOptions = "DENY";
+    context.Response.Headers.ContentSecurityPolicy =
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; " +
+        "script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; " +
+        "connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; manifest-src 'self'";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()";
+    var trustedForwardedHttps = context.Connection.RemoteIpAddress is null &&
+        string.Equals(
+            context.Request.Headers["X-Forwarded-Proto"].ToString().Split(',')[0].Trim(),
+            Uri.UriSchemeHttps,
+            StringComparison.OrdinalIgnoreCase);
+    if (context.Request.IsHttps || trustedForwardedHttps)
+        context.Response.Headers.StrictTransportSecurity = "max-age=31536000";
+
+    if (context.Request.Path.StartsWithSegments("/api"))
+    {
+        var maxBodyFeature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (maxBodyFeature is { IsReadOnly: false }) maxBodyFeature.MaxRequestBodySize = maxApiRequestBodyBytes;
+        if (context.Request.ContentLength is > maxApiRequestBodyBytes)
+        {
+            context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            await context.Response.WriteAsJsonAsync(new { error = "API request body exceeds the 1 MiB limit." });
+            return;
+        }
+    }
+
+    if (context.Request.Path.StartsWithSegments("/api"))
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers.Pragma = "no-cache";
+    }
+
+    await next();
+});
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.Use(async (context, next) =>
@@ -223,15 +293,19 @@ app.Use(async (context, next) =>
     {
         await next();
     }
-    catch (InvalidOperationException ex) when (ex.Message.Contains("Path", StringComparison.OrdinalIgnoreCase))
+    catch (InvalidOperationException ex)
     {
+        if (context.Response.HasStarted) throw;
+        app.Logger.LogWarning(ex, "Rejected invalid request {Method} {Path}; trace {TraceId}.", context.Request.Method, context.Request.Path, context.TraceIdentifier);
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
-        await context.Response.WriteAsJsonAsync(new { error = ex.Message });
+        await context.Response.WriteAsJsonAsync(new { error = "The request is invalid.", traceId = context.TraceIdentifier });
     }
     catch (UnauthorizedAccessException ex)
     {
+        if (context.Response.HasStarted) throw;
+        app.Logger.LogWarning(ex, "Denied request {Method} {Path}; trace {TraceId}.", context.Request.Method, context.Request.Path, context.TraceIdentifier);
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await context.Response.WriteAsJsonAsync(new { error = ex.Message });
+        await context.Response.WriteAsJsonAsync(new { error = "Access is denied.", traceId = context.TraceIdentifier });
     }
 });
 app.UseCors("HomeHarborFrontend");
@@ -264,10 +338,14 @@ app.Run();
 static void ConfigureApiSocket(WebApplicationBuilder builder)
 {
     var socketPath = builder.Configuration.GetValue<string>($"{HomeHarborApiOptions.SectionName}:UnixSocketPath");
-    if (string.IsNullOrWhiteSpace(socketPath)) return;
+    var maxUploadBytes = builder.Configuration.GetValue<long?>(
+        $"{HomeHarborStorageOptions.SectionName}:MaxUploadBytes") ?? new HomeHarborStorageOptions().MaxUploadBytes;
 
     _ = builder.WebHost.ConfigureKestrel(options =>
     {
+        options.Limits.MaxRequestBodySize = Math.Max(1, maxUploadBytes);
+        if (string.IsNullOrWhiteSpace(socketPath)) return;
+
         var directory = Path.GetDirectoryName(socketPath);
         if (!string.IsNullOrWhiteSpace(directory)) _ = Directory.CreateDirectory(directory);
         File.Delete(socketPath);

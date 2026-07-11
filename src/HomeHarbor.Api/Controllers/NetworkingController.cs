@@ -12,10 +12,11 @@ namespace HomeHarbor.Api.Controllers;
 public sealed class NetworkingController(
     HomeHarborDbContext db,
     IFamilyResolver families,
-    ICertificateService certificates,
-    IReverseProxyConfigService proxyConfig) : ControllerBase
+    IReverseProxyConfigService proxyConfig,
+    IRuntimeSignalService signals) : ControllerBase
 {
     [HttpGet("certificates")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Certificates([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -30,39 +31,15 @@ public sealed class NetworkingController(
     }
 
     [HttpPost("certificates/self-signed")]
-    public async Task<IActionResult> CreateSelfSigned([FromBody] CreateCertificateRequest request, CancellationToken cancellationToken)
-    {
-        var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
-        if (resolved is null) return BadRequest(new { error = "Create a family space first." });
-        if (string.IsNullOrWhiteSpace(request.Hostname)) return BadRequest(new { error = "hostname is required." });
-
-        var hostname = request.Hostname.Trim().ToLowerInvariant();
-        var generated = certificates.CreateSelfSigned(hostname, TimeSpan.FromDays(Math.Clamp(request.Days ?? 365, 1, 3650)));
-        var record = await db.Certificates.FirstOrDefaultAsync(
-            c => c.FamilyId == resolved.Value && c.Hostname == hostname,
-            cancellationToken);
-        if (record is null)
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
+    public IActionResult CreateSelfSigned([FromBody] CreateCertificateRequest request)
+        => StatusCode(StatusCodes.Status501NotImplemented, new
         {
-            record = new CertificateEntity
-            {
-                Id = Guid.NewGuid(),
-                FamilyId = resolved.Value,
-                Hostname = hostname,
-                CreatedAt = DateTimeOffset.UtcNow
-            };
-            _ = db.Certificates.Add(record);
-        }
-
-        record.Kind = "self-signed";
-        record.CertificatePem = generated.CertificatePem;
-        record.PrivateKeyPem = generated.PrivateKeyPem;
-        record.NotBefore = generated.NotBefore;
-        record.NotAfter = generated.NotAfter;
-        _ = await db.SaveChangesAsync(cancellationToken);
-        return Ok(new { record.Id, record.Hostname, record.Kind, record.NotBefore, record.NotAfter, record.CertificatePem });
-    }
+            error = "Certificate provisioning is unavailable until private keys can be stored outside the database and activated by the reverse proxy."
+        });
 
     [HttpGet("proxy/routes")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Routes([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -76,13 +53,18 @@ public sealed class NetworkingController(
     }
 
     [HttpPost("proxy/routes")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> AddRoute([FromBody] AddProxyRouteRequest request, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
         if (resolved is null) return BadRequest(new { error = "Create a family space first." });
         if (!ReverseProxyConfigService.TryNormalizeHostname(request.Hostname, out var hostname, out var hostnameError))
             return BadRequest(new { error = hostnameError });
-        if (!ReverseProxyConfigService.TryNormalizeUpstreamUrl(request.UpstreamUrl, out var upstreamUrl, out var upstreamUrlError))
+        if (string.Equals(hostname, ReverseProxyConfigService.ControlPlaneHostname, StringComparison.OrdinalIgnoreCase))
+            return Conflict(new { error = "homeharbor.local is reserved for the control plane." });
+        if (hostname.EndsWith(".local", StringComparison.OrdinalIgnoreCase) && request.TlsEnabled)
+            return BadRequest(new { error = ".local routes must use the appliance internal CA rather than public ACME." });
+        if (!ReverseProxyConfigService.TryNormalizeUserUpstreamUrl(request.UpstreamUrl, out var upstreamUrl, out var upstreamUrlError))
             return BadRequest(new { error = upstreamUrlError });
 
         var route = await db.ReverseProxyRoutes.FirstOrDefaultAsync(
@@ -103,6 +85,7 @@ public sealed class NetworkingController(
         route.UpstreamUrl = upstreamUrl;
         route.TlsEnabled = request.TlsEnabled;
         _ = await db.SaveChangesAsync(cancellationToken);
+        signals.RequestCaddyRender();
         return Ok(route);
     }
 

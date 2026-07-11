@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace HomeHarbor.Tooling;
 
@@ -15,8 +16,9 @@ public sealed record SystemAppPackageManifest(
     string? KernelChannel,
     string CreatedAt);
 
-public sealed class SystemAppPackageManifestVerifier(ICommandRunner? runner = null)
+public sealed partial class SystemAppPackageManifestVerifier(ICommandRunner? runner = null)
 {
+    public const int MaxManifestBytes = 1024 * 1024;
     private readonly ICommandRunner _runner = runner ?? new ProcessCommandRunner();
 
     public async Task<SystemAppPackageManifest> VerifyAsync(
@@ -34,7 +36,15 @@ public sealed class SystemAppPackageManifestVerifier(ICommandRunner? runner = nu
             throw new FileNotFoundException("public key not found", publicKeyPath);
         }
 
-        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath, cancellationToken));
+        var manifestLength = new FileInfo(manifestPath).Length;
+        if (manifestLength is < 1 or > MaxManifestBytes)
+        {
+            throw new InvalidOperationException($"system app manifest must be between 1 and {MaxManifestBytes} bytes");
+        }
+
+        using var doc = JsonDocument.Parse(
+            await File.ReadAllTextAsync(manifestPath, cancellationToken),
+            new JsonDocumentOptions { MaxDepth = 16 });
         var root = doc.RootElement;
         var algorithm = StringProperty(root, "signatureAlgorithm");
         if (!string.Equals(algorithm, "Ed25519", StringComparison.Ordinal))
@@ -64,11 +74,13 @@ public sealed class SystemAppPackageManifestVerifier(ICommandRunner? runner = nu
             var payloadPath = Path.Combine(work, "manifest.payload.json");
             var signaturePath = Path.Combine(work, "manifest.signature.bin");
             await File.WriteAllTextAsync(payloadPath, payload, cancellationToken);
-            await File.WriteAllBytesAsync(signaturePath, Convert.FromBase64String(signatureText), cancellationToken);
-            if (new FileInfo(signaturePath).Length == 0)
+            var signature = Convert.FromBase64String(signatureText);
+            if (signature.Length != 64)
             {
-                throw new InvalidOperationException("system app manifest signature is missing or empty");
+                throw new InvalidOperationException("system app manifest Ed25519 signature must be exactly 64 bytes");
             }
+
+            await File.WriteAllBytesAsync(signaturePath, signature, cancellationToken);
 
             var result = await _runner.RunAsync(
                 "openssl",
@@ -89,16 +101,16 @@ public sealed class SystemAppPackageManifestVerifier(ICommandRunner? runner = nu
 
         return new SystemAppPackageManifest(
             SchemaVersion: IntProperty(root, "schemaVersion"),
-            AppKey: RequiredString(root, "appKey"),
-            Version: RequiredString(root, "version"),
+            AppKey: ValidateAppKey(RequiredString(root, "appKey")),
+            Version: ValidateVersion(RequiredString(root, "version")),
             Channel: ReleaseChannel.Require(RequiredString(root, "channel"), "system app manifest channel"),
             Kind: RequiredString(root, "kind"),
-            PayloadUrl: RequiredString(root, "payloadUrl"),
-            PayloadSha256: RequiredString(root, "payloadSha256"),
+            PayloadUrl: ValidatePayloadUrl(RequiredString(root, "payloadUrl")),
+            PayloadSha256: ValidateSha256(RequiredString(root, "payloadSha256")),
             KernelChannel: StringProperty(root, "kernelChannel") is { } kernelChannel
                 ? KernelChannel.Require(kernelChannel, "system app manifest kernelChannel")
                 : null,
-            CreatedAt: RequiredString(root, "createdAt"));
+            CreatedAt: ValidateTimestamp(RequiredString(root, "createdAt")));
     }
 
     public static string CanonicalPayload(JsonElement manifest)
@@ -115,6 +127,11 @@ public sealed class SystemAppPackageManifestVerifier(ICommandRunner? runner = nu
         }
 
         _ = ReleaseChannel.Require(RequiredString(manifest, "channel"), "system app manifest channel");
+        _ = ValidateAppKey(RequiredString(manifest, "appKey"));
+        _ = ValidateVersion(RequiredString(manifest, "version"));
+        _ = ValidatePayloadUrl(RequiredString(manifest, "payloadUrl"));
+        _ = ValidateSha256(RequiredString(manifest, "payloadSha256"));
+        _ = ValidateTimestamp(RequiredString(manifest, "createdAt"));
         if (StringProperty(manifest, "kernelChannel") is { } kernelChannel)
         {
             _ = KernelChannel.Require(kernelChannel, "system app manifest kernelChannel");
@@ -174,7 +191,9 @@ public sealed class SystemAppPackageManifestVerifier(ICommandRunner? runner = nu
 
     private static string? StringProperty(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
-            ? value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString()
+            ? value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : throw new InvalidOperationException("system app manifest field must be a string: " + name)
             : null;
 
     private static int IntProperty(JsonElement element, string name)
@@ -185,8 +204,68 @@ public sealed class SystemAppPackageManifestVerifier(ICommandRunner? runner = nu
 
         return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
             ? number
-            : value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out number)
-            ? number
             : throw new InvalidOperationException("system app manifest field must be an integer: " + name);
     }
+
+    private static string ValidateAppKey(string value)
+    {
+        var appKey = value.Trim();
+        return AppKeyRegex().IsMatch(appKey)
+            ? appKey
+            : throw new InvalidOperationException("system app manifest appKey is invalid: " + value);
+    }
+
+    private static string ValidateVersion(string value)
+    {
+        var version = value.Trim();
+        return VersionRegex().IsMatch(version)
+            ? version
+            : throw new InvalidOperationException("system app manifest version is invalid: " + value);
+    }
+
+    private static string ValidatePayloadUrl(string value)
+    {
+        var text = value.Trim();
+        if (text.Length is < 1 or > 2048 || !Uri.TryCreate(text, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeFile) ||
+            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment) ||
+            (uri.Scheme == Uri.UriSchemeFile && !string.IsNullOrEmpty(uri.Host)))
+        {
+            throw new InvalidOperationException("system app manifest payloadUrl must be an HTTPS URL or a local file URL without credentials or fragments");
+        }
+
+        if (uri.Scheme == Uri.UriSchemeHttps)
+        {
+            _ = BoundedUriFetcher.ValidateUri(text, label: "system app payload URL");
+        }
+
+        return text;
+    }
+
+    private static string ValidateSha256(string value)
+    {
+        var digest = value.Trim().ToLowerInvariant();
+        return Sha256Regex().IsMatch(digest)
+            ? digest
+            : throw new InvalidOperationException("system app manifest payloadSha256 must be a SHA-256 hex digest");
+    }
+
+    private static string ValidateTimestamp(string value)
+        => value.Length <= 64 &&
+           DateTimeOffset.TryParse(
+               value,
+               System.Globalization.CultureInfo.InvariantCulture,
+               System.Globalization.DateTimeStyles.RoundtripKind,
+               out _)
+            ? value
+            : throw new InvalidOperationException("system app manifest createdAt must be an ISO-8601 timestamp");
+
+    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
+    private static partial Regex AppKeyRegex();
+
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$", RegexOptions.CultureInvariant)]
+    private static partial Regex VersionRegex();
+
+    [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    private static partial Regex Sha256Regex();
 }

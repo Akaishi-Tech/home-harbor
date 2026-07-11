@@ -1,6 +1,8 @@
 using HomeHarbor.Api.Services;
+using HomeHarbor.Api.Auth;
 using HomeHarbor.Core.Ota;
 using HomeHarbor.Tooling;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace HomeHarbor.Api.Controllers;
@@ -24,32 +26,24 @@ public sealed class OtaController : ControllerBase
         });
 
     [HttpPost("apply")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult Apply([FromBody] OtaManifest manifest)
     {
-        var channel = ReleaseChannel.Require(manifest.Channel, "OTA manifest channel");
-        return Accepted(new
+        _ = manifest;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
-            manifest.Version,
-            channel,
-            kernelChannel = manifest.KernelChannel is null ? null : KernelChannel.Require(manifest.KernelChannel, "OTA manifest kernelChannel"),
-            manifest.Type,
-            status = "apply-planned",
-            next = "appliance OTA updater validates the bundle, writes the inactive boot slot resources and any requested root slot payloads, then reboots"
+            error = "OTA apply is unavailable until the appliance updater pipeline is connected. No update was scheduled."
         });
     }
 
     [HttpPost("stage")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult Stage([FromBody] OtaManifest manifest)
     {
-        var channel = ReleaseChannel.Require(manifest.Channel, "OTA manifest channel");
-        return Accepted(new
+        _ = manifest;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
-            manifest.Version,
-            channel,
-            kernelChannel = manifest.KernelChannel is null ? null : KernelChannel.Require(manifest.KernelChannel, "OTA manifest kernelChannel"),
-            manifest.Type,
-            status = "staged-metadata-only",
-            next = "appliance OTA updater will validate the bundle and stage the next boot slot environment"
+            error = "OTA staging is unavailable until the appliance updater pipeline is connected. No update was staged."
         });
     }
 }

@@ -34,25 +34,68 @@ Manifests include these requirements:
 
 - `bootMode` is `raw-uki` or `secure-boot-raw-uki`.
 - `channel` is allowed.
+- `releaseSequence` is a positive integer that increases for every release.
 - `packageKind=system` uses `type=full-system`.
 - `packageKind=kernel` uses `type=kernel-only`.
 
-The canonical manifest payload is generated with fixed field ordering. The signature algorithm is Ed25519 and verification uses `openssl pkeyutl -verify -pubin -rawin`.
+The canonical manifest payload, including `releaseSequence`, is generated with fixed field ordering. The signature algorithm is Ed25519 and verification uses `openssl pkeyutl -verify -pubin -rawin`.
 
-## Full-System Bundle
+For network OTA, the updater compares the signed target sequence with the trusted
+sequences embedded in the current immutable root and signed kernel command line.
+Updates for one release are deliberately split and applied kernel first:
 
-A full-system bundle contains rootfs, modules, firmware, recovery, bootloader, fallback boot, vbmeta, and boot payloads. Secure Boot mode also includes a MokManager hash.
+1. Apply the `kernel/kernel-only` bundle for sequence N. It stages the inactive
+   boot, modules, firmware, and recovery slots, and atomically updates the signed
+   ESP boot selector and existing fallback Secure Boot paths.
+2. Reboot into and commit that kernel.
+3. Apply the `system/full-system` bundle for the same sequence N. Its target
+   sequence must exactly equal the sequence in the currently running signed
+   kernel; a newer system bundle fails before any target partition or ESP write
+   and instructs the operator to apply the matching kernel bundle first.
+4. Reboot into and commit the new root slot.
 
-Key payloads:
+Each bundle must strictly advance the component it replaces. A missing,
+malformed, replayed, or out-of-order sequence fails closed. The sequence is
+independent of the display version and must never be reset or reused.
+
+This check does not prevent a physical offline attacker from replacing every
+current root, boot, and verification-state artifact with an older, internally
+consistent signed set. Secure Boot and AVB prove authenticity, not freshness.
+Preventing that class of rollback requires a hardware-backed monotonic anchor,
+such as a TPM NV counter or enforced AVB rollback index.
+
+## System Bundle
+
+A `system/full-system` bundle updates only the root component and its AVB
+metadata. It contains:
 
 - `rootfs.img`
+- `vbmeta_a.img`
+- `vbmeta_b.img`
+
+It intentionally does not carry kernel, modules, firmware, recovery, or ESP
+boot assets. Those belong to the matching kernel bundle and must be running
+before this bundle can be staged.
+
+## Kernel Bundle
+
+A `kernel/kernel-only` bundle contains:
+
 - `modules.img`
 - `firmware.img`
 - `recovery.img`
 - `boot.efi`
-- `bootloader.efi`
-- `vbmeta_a.img`
-- `vbmeta_b.img`
+- `HomeHarborBoot.efi`
+- `BOOTX64.EFI`
+- `mmx64.efi` when Secure Boot is enabled
+
+`HomeHarborBoot.efi` and its signed `bootloaderHash` are mandatory. During
+apply, the updater installs it atomically at
+`/EFI/HomeHarbor/HomeHarborBoot.efi`, refreshes an existing
+`/EFI/BOOT/BOOTX64.EFI`, and in Secure Boot mode refreshes existing
+`grubx64.efi` and `mmx64.efi` compatibility paths. Each temporary file is
+flushed, renamed on the ESP, read back and hash-checked, then the ESP is synced
+before one-shot boot state or pending metadata is changed.
 
 Each payload should have a hash. The manifest records those hashes and signs the canonical payload.
 
@@ -76,6 +119,7 @@ Generic boot cmdline carries sealed boot inputs while the boot selector publishe
 - `homeharbor.firmware_b_verity`
 - `homeharbor.recovery_a_verity`
 - `homeharbor.recovery_b_verity`
+- `homeharbor.release_sequence`
 - `homeharbor.version`
 
 ## Secure Boot
@@ -97,8 +141,13 @@ dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj 
 Build base image and OTA inputs:
 
 ```bash
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+HOMEHARBOR_RELEASE_SEQUENCE=1234 \
+  dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
+  system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
 ```
+
+Use a positive value greater than every sequence previously released for the
+same appliance lineage. `release-build` has the same requirement.
 
 Build Arch packages and kernel-channel artifacts:
 
@@ -124,6 +173,9 @@ Release metadata is produced by the C# build pipeline and consumed by the GitHub
 The GitHub release workflow publishes daily and stable assets from
 `artifacts/channels/{version}`. It uploads system OTA artifacts, generic and ZFS
 kernel-channel OTA artifacts, live installer ISOs, and channel metadata.
+
+The workflow passes the monotonically increasing GitHub `run_number` as
+`HOMEHARBOR_RELEASE_SEQUENCE` to the image-build container.
 
 The workflow sets `HOMEHARBOR_RELEASE_SKIP_FULL_E2E=1` during artifact builds,
 so it does not itself complete appliance VM validation. Before publishing a

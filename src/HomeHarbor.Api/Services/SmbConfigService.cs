@@ -22,6 +22,10 @@ public sealed class SmbConfigService : ISmbConfigService
         _ = builder.AppendLine("   netbios name = HOMEHARBOR");
         _ = builder.AppendLine("   security = user");
         _ = builder.AppendLine("   map to guest = never");
+        _ = builder.AppendLine("   server min protocol = SMB3_00");
+        _ = builder.AppendLine("   server signing = mandatory");
+        _ = builder.AppendLine("   smb encrypt = required");
+        _ = builder.AppendLine("   ntlm auth = ntlmv2-only");
         _ = builder.AppendLine("   passdb backend = tdbsam");
         _ = builder.AppendLine("   private dir = /var/lib/homeharbor/samba/private");
         _ = builder.AppendLine("   state directory = /var/lib/homeharbor/samba/state");
@@ -34,6 +38,9 @@ public sealed class SmbConfigService : ISmbConfigService
         _ = builder.AppendLine("   printing = bsd");
         _ = builder.AppendLine("   dns proxy = no");
         _ = builder.AppendLine("   smb ports = 445");
+        _ = builder.AppendLine("   follow symlinks = no");
+        _ = builder.AppendLine("   wide links = no");
+        _ = builder.AppendLine("   unix extensions = no");
         _ = builder.AppendLine();
 
         foreach (var share in shares.Where(s => s.Enabled).OrderBy(s => s.ShareName, StringComparer.OrdinalIgnoreCase))

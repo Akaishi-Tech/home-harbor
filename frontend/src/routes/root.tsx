@@ -3,10 +3,11 @@ import { useTranslation } from "react-i18next";
 import { MeshBackground } from "@/components/glass/mesh-background";
 import { Brand } from "@/components/app-shell/brand";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { authStore } from "@/lib/auth-store";
+import { isFamilyAdmin, isFamilyMember } from "@/lib/auth";
 import { errorMessage } from "@/lib/format";
-import type { SessionResponse, SetupStatus } from "@/types";
+import type { SetupStatus } from "@/types";
 
 export function RootLayout() {
   return (
@@ -54,38 +55,53 @@ export function RootError() {
 }
 
 export async function rootIndexLoader() {
-  const setup = await api<SetupStatus>("/api/setup");
+  const setup = await api<SetupStatus>("/api/setup", { auth: false });
   if (!setup.initialized) return redirect("/setup");
-  if (!authStore.get()) return redirect("/login");
-
-  try {
-    const session = await api<SessionResponse>("/api/identity/session");
-    authStore.update({
-      expiresAt: session.expiresAt,
-      member: session.member,
-      family: session.family,
-      familyId: session.familyId,
-    });
-    return redirect("/dashboard");
-  } catch {
-    authStore.clear();
-    return redirect("/login");
-  }
+  return (await refreshStoredSession())
+    ? redirect("/dashboard")
+    : redirect("/login");
 }
 
 export async function setupGuardLoader(): Promise<SetupStatus | Response> {
-  const setup = await api<SetupStatus>("/api/setup");
+  const setup = await api<SetupStatus>("/api/setup", { auth: false });
   if (setup.initialized) return redirect("/login");
   return setup;
 }
 
 export async function loginGuardLoader(): Promise<SetupStatus | Response> {
-  const setup = await api<SetupStatus>("/api/setup");
+  const setup = await api<SetupStatus>("/api/setup", { auth: false });
   if (!setup.initialized) return redirect("/setup");
+  if (await refreshStoredSession()) return redirect("/dashboard");
   return setup;
 }
 
-export function dashboardGuardLoader(): Response | null {
+export async function dashboardGuardLoader(): Promise<Response | null> {
   if (!authStore.get()) return redirect("/login");
-  return null;
+  return (await refreshStoredSession()) ? null : redirect("/login");
+}
+
+export function familyAdminGuardLoader(): Response | null {
+  const auth = authStore.get();
+  if (!auth) return redirect("/login");
+  return isFamilyAdmin(auth) ? null : redirect("/dashboard");
+}
+
+export function familyMemberGuardLoader(): Response | null {
+  const auth = authStore.get();
+  if (!auth) return redirect("/login");
+  return isFamilyMember(auth) ? null : redirect("/dashboard");
+}
+
+async function refreshStoredSession(): Promise<boolean> {
+  if (!authStore.get()) return false;
+
+  try {
+    const session = await api<unknown>("/api/identity/session");
+    if (!authStore.setFromSession(session)) return false;
+    return true;
+  } catch (error) {
+    if (error instanceof ApiError && error.status !== 401) throw error;
+    authStore.clear();
+    return false;
+  }
 }

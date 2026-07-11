@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch HomeHarbor Caddy render requests
+
+[Path]
+PathChanged=/run/homeharbor/caddy-render.request
+Unit=homeharbor-caddy-render.service
+
+[Install]
+WantedBy=multi-user.target

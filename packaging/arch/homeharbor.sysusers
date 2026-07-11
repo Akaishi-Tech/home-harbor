@@ -1,6 +1,7 @@
+g homeharbor-api -
 u homeharbor - "HomeHarbor service user" /var/lib/homeharbor /usr/bin/nologin
 u homeharbor-containers - "HomeHarbor rootless container user" /var/lib/homeharbor-containers /usr/bin/nologin
-m caddy homeharbor
+m caddy homeharbor-api
 m homeharbor valkey
 g homeharbor-smb -
 u homeharbor-smb001 - "HomeHarbor SMB credential 001" /var/lib/homeharbor /usr/bin/nologin

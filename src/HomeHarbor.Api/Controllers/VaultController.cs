@@ -1,11 +1,14 @@
+using HomeHarbor.Api.Auth;
 using HomeHarbor.Api.Data;
 using HomeHarbor.Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace HomeHarbor.Api.Controllers;
 
 [ApiController]
+[Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
 [Route("api/vault/items")]
 public sealed class VaultController(HomeHarborDbContext db, IFamilyResolver families) : ControllerBase
 {
@@ -44,6 +47,13 @@ public sealed class VaultController(HomeHarborDbContext db, IFamilyResolver fami
             string.IsNullOrWhiteSpace(request.KeyHint))
         {
             return BadRequest(new { error = "Name, encryptedPayload, nonce, and keyHint are required." });
+        }
+        if (request.Name.Trim().Length > 160 ||
+            request.EncryptedPayload.Length > 768 * 1024 ||
+            request.Nonce.Length > 128 ||
+            request.KeyHint.Length > 128)
+        {
+            return BadRequest(new { error = "Vault item fields exceed their allowed size." });
         }
 
         var now = DateTimeOffset.UtcNow;

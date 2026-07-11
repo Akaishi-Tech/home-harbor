@@ -51,24 +51,56 @@ int read_efi_boot_next(char *slot, char *root_slot, char *mode, char *recovery_s
     return 0;
 }
 
-EFI_STATUS write_efi_boot_current(char *slot, char *root_slot, char *mode, char *recovery_slot) {
-    char payload[32];
+static int valid_boot_slot(char slot) {
+    return slot == 'A' || slot == 'B';
+}
+
+static int valid_vbmeta_digest(const char *digest) {
+    UINTN i;
+
+    if (!digest) {
+        return 0;
+    }
+    for (i = 0; i < 64U; i++) {
+        char c = digest[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            return 0;
+        }
+    }
+    return digest[64] == 0;
+}
+
+EFI_STATUS write_efi_boot_current(
+    char *slot,
+    char *root_slot,
+    char *mode,
+    char *recovery_slot,
+    const char *vbmeta_digest) {
+    char payload[96];
     UINTN i = 0;
+    UINTN digest_index;
     UINTN size;
 
-    if (!gRT || !gRT->SetVariable) {
+    if (!gRT || !gRT->SetVariable || !valid_vbmeta_digest(vbmeta_digest)) {
         return 1;
     }
 
     if (mode[0] == 'r') {
         const char *prefix = "recovery:";
+        if (!valid_boot_slot(recovery_slot[0])) {
+            return 1;
+        }
         while (prefix[i]) {
             payload[i] = prefix[i];
             i++;
         }
         payload[i++] = recovery_slot[0];
+        payload[i++] = ':';
     } else {
         const char *prefix = "normal:";
+        if (!valid_boot_slot(slot[0]) || !valid_boot_slot(root_slot[0])) {
+            return 1;
+        }
         while (prefix[i]) {
             payload[i] = prefix[i];
             i++;
@@ -76,9 +108,13 @@ EFI_STATUS write_efi_boot_current(char *slot, char *root_slot, char *mode, char 
         payload[i++] = slot[0];
         payload[i++] = ':';
         payload[i++] = root_slot[0];
+        payload[i++] = ':';
+    }
+    for (digest_index = 0; digest_index < 64U; digest_index++) {
+        payload[i++] = vbmeta_digest[digest_index];
     }
     payload[i] = 0;
-    size = ascii_length(payload);
+    size = i;
 
     return gRT->SetVariable(L"HomeHarborBootCurrent",
         &HomeHarborBootVariableGuid,

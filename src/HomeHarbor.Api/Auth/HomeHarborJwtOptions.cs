@@ -6,6 +6,6 @@ public sealed class HomeHarborJwtOptions
 
     public string Issuer { get; set; } = "HomeHarbor";
     public string Audience { get; set; } = "HomeHarbor.Frontend";
-    public string SigningKeyPath { get; set; } = "/var/lib/homeharbor/jwt-signing.key";
+    public string SigningKeyPath { get; set; } = "/var/lib/homeharbor/api/jwt-signing.key";
     public int AccessTokenDays { get; set; } = 30;
 }

@@ -63,8 +63,17 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
 
         await RequireToolsAsync(["dotnet", "fakeroot", "makepkg", "pnpm", "tar"], cancellationToken);
 
-        var packageWork = Env.String("HOMEHARBOR_PACKAGE_WORK", Path.Combine(_root, ".work", "arch-package", version));
-        var packageOutput = Env.String("HOMEHARBOR_PACKAGE_OUTPUT", Path.Combine(_root, "artifacts", "packages", version));
+        var workRoot = Path.Combine(_root, ".work");
+        var artifactsRoot = Path.Combine(_root, "artifacts");
+        var packageWork = RequireManagedBuildPath(
+            Env.String("HOMEHARBOR_PACKAGE_WORK", Path.Combine(workRoot, "arch-package", version)),
+            "HOMEHARBOR_PACKAGE_WORK",
+            workRoot);
+        var packageOutput = RequireManagedBuildPath(
+            Env.String("HOMEHARBOR_PACKAGE_OUTPUT", Path.Combine(artifactsRoot, "packages", version)),
+            "HOMEHARBOR_PACKAGE_OUTPUT",
+            workRoot,
+            artifactsRoot);
         var sourceDir = Path.Combine(packageWork, "source");
         var buildDir = Path.Combine(packageWork, "makepkg");
         var sourceTarball = Path.Combine(sourceDir, $"homeharbor-{version}.tar.gz");
@@ -173,7 +182,9 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
             }
 
             _ = Directory.CreateDirectory(Path.GetDirectoryName(fullOutput)!);
-            await File.WriteAllTextAsync(fullOutput, RenderAvbPublicKeyHeader(await File.ReadAllBytesAsync(encodedKey, cancellationToken)), Encoding.ASCII, cancellationToken);
+            var encoded = await File.ReadAllBytesAsync(encodedKey, cancellationToken);
+            _ = RequireSelectorSupportedAvbPublicKey(encoded);
+            await File.WriteAllTextAsync(fullOutput, RenderAvbPublicKeyHeader(encoded), Encoding.ASCII, cancellationToken);
         }
         finally
         {
@@ -213,7 +224,32 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         }
 
         var bits = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
-        return bits is 2048 or 4096 or 8192 && data.Length == 8 + bits / 8 * 2;
+        return bits is 2048 or 4096 && data.Length == 8 + bits / 8 * 2;
+    }
+
+    internal static int RequireSelectorSupportedAvbPublicKey(byte[] data)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        if (data.Length < 8)
+        {
+            throw new InvalidOperationException("encoded AVB public key is truncated");
+        }
+
+        var bits = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
+        if (bits is not (2048 or 4096))
+        {
+            throw new InvalidOperationException(
+                $"HomeHarborBoot supports only RSA-2048 and RSA-4096 AVB keys; got RSA-{bits}");
+        }
+
+        var expectedBytes = checked(8 + bits / 8 * 2);
+        if (data.Length != expectedBytes)
+        {
+            throw new InvalidOperationException(
+                $"encoded RSA-{bits} AVB public key has an unexpected size: {data.Length} != {expectedBytes}");
+        }
+
+        return bits;
     }
 
     private static void RequireSafeVersion(string version)
@@ -222,6 +258,42 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         {
             throw new InvalidOperationException("version must contain only letters, numbers, dot, underscore, and dash: " + version);
         }
+    }
+
+    internal static string RequireManagedBuildPath(string path, string label, params string[] allowedRoots)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var matchingRoot = allowedRoots
+            .Select(Path.GetFullPath)
+            .FirstOrDefault(root => SecurityGuards.IsInsideDirectory(fullPath, root) &&
+                !string.Equals(fullPath, root, StringComparison.Ordinal));
+        if (matchingRoot is null)
+        {
+            throw new InvalidOperationException(label + " must be a child of a managed .work or artifacts directory: " + fullPath);
+        }
+
+        var current = fullPath;
+        while (SecurityGuards.IsInsideDirectory(current, matchingRoot))
+        {
+            if (File.Exists(current) || Directory.Exists(current))
+            {
+                var attributes = File.GetAttributes(current);
+                if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    throw new InvalidOperationException(label + " must not traverse a symbolic link: " + current);
+                }
+            }
+
+            if (string.Equals(current, matchingRoot, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            current = Path.GetDirectoryName(current)
+                ?? throw new InvalidOperationException(label + " has no managed parent directory");
+        }
+
+        return fullPath;
     }
 
     private static void RequireFile(string path, string message)

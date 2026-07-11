@@ -10,6 +10,8 @@ public sealed class StorageOobeOptions
 
     public string RequestPath { get; set; } = "/run/homeharbor/storage-apply.request";
 
+    public int PlanLifetimeMinutes { get; set; } = 30;
+
     public string[] ProtectedPartitionLabels { get; set; } =
     [
         "esp",

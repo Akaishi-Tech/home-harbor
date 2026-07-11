@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
-#include <glob.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -23,6 +22,9 @@
 #define RUN_DIR "/run/homeharbor"
 #define ROOT_PATH RUN_DIR "/root"
 #define STATE_PATH RUN_DIR "/init-state.env"
+#define BOOT_RUN_DIR "/run/homeharbor-boot"
+#define BOOT_ENV_PATH BOOT_RUN_DIR "/boot.env"
+#define LEGACY_BOOT_ENV_PATH RUN_DIR "/boot.env"
 
 #ifndef HOMEHARBOR_ENABLE_INITRAMFS_EMERGENCY_SHELL
 #define HOMEHARBOR_ENABLE_INITRAMFS_EMERGENCY_SHELL 0
@@ -831,26 +833,48 @@ static void read_data_unlock_env(const char *path) {
     parse_key_value_file(path, read_data_env_line);
 }
 
-static char payload_slot(const char *payload, int index) {
-    char *copy = xstrdup(payload);
-    char *save = NULL;
-    char *part;
-    int position = 0;
-    char result = '\0';
+typedef struct {
+    bool recovery;
+    char boot_slot;
+    char root_slot;
+    char recovery_slot;
+    char vbmeta_digest[65];
+} BootCurrentPayload;
 
-    for (part = strtok_r(copy, ":", &save); part; part = strtok_r(NULL, ":", &save)) {
-        if (position == index) {
-            if (strcmp(part, "A") == 0 || strcmp(part, "a") == 0) {
-                result = 'A';
-            } else if (strcmp(part, "B") == 0 || strcmp(part, "b") == 0) {
-                result = 'B';
-            }
-            break;
-        }
-        position++;
+static char normalized_payload_slot(char value) {
+    if (value == 'A' || value == 'a') {
+        return 'A';
     }
-    free(copy);
-    return result;
+    if (value == 'B' || value == 'b') {
+        return 'B';
+    }
+    return '\0';
+}
+
+static bool parse_boot_current_payload(const char *payload, BootCurrentPayload *current) {
+    if (!payload || !current || strlen(payload) != 75) {
+        return false;
+    }
+
+    memset(current, 0, sizeof(*current));
+    if (strncmp(payload, "normal:", 7) == 0 && payload[8] == ':' && payload[10] == ':') {
+        current->boot_slot = normalized_payload_slot(payload[7]);
+        current->root_slot = normalized_payload_slot(payload[9]);
+        if (!current->boot_slot || !current->root_slot) {
+            return false;
+        }
+    } else if (strncmp(payload, "recovery:", 9) == 0 && payload[10] == ':') {
+        current->recovery = true;
+        current->recovery_slot = normalized_payload_slot(payload[9]);
+        if (!current->recovery_slot) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    memcpy(current->vbmeta_digest, payload + 11, 65);
+    return chars_match(current->vbmeta_digest, is_hex_char) && strlen(current->vbmeta_digest) == 64;
 }
 
 static char *efi_var_path(const char *name) {
@@ -873,38 +897,31 @@ static char *read_boot_current(void) {
     ensure_efivarfs();
     char *path = efi_var_path("HomeHarborBootCurrent");
     size_t len = 0;
-    unsigned char *bytes = read_bytes_skip(path, 4, 64, &len);
+    unsigned char *bytes = read_bytes_skip(path, 4, 96, &len);
     free(path);
     if (!bytes) {
         return NULL;
     }
-    size_t out = 0;
     for (size_t i = 0; i < len; i++) {
-        if (bytes[i] != '\0') {
-            bytes[out++] = bytes[i];
+        if (bytes[i] == '\0') {
+            free(bytes);
+            return NULL;
         }
     }
-    bytes[out] = '\0';
     return (char *)bytes;
 }
 
 static void apply_boot_current(const char *expected_mode) {
     char *payload = read_boot_current();
-    if (!payload) {
+    BootCurrentPayload current;
+    if (!payload || !parse_boot_current_payload(payload, &current)) {
+        free(payload);
         fail("HomeHarbor current boot EFI variable is missing or invalid");
     }
 
-    if (strcmp(expected_mode, "normal") == 0 && strncmp(payload, "normal:", 7) == 0) {
-        char boot = payload_slot(payload, 1);
-        char root = payload_slot(payload, 2);
-        if (!boot) {
-            free(payload);
-            fail("HomeHarbor current boot slot is invalid");
-        }
-        if (!root) {
-            free(payload);
-            fail("HomeHarbor current root slot is invalid");
-        }
+    if (strcmp(expected_mode, "normal") == 0 && !current.recovery) {
+        char boot = current.boot_slot;
+        char root = current.root_slot;
         char boot_lower = (char)tolower((unsigned char)boot);
         char root_lower = (char)tolower((unsigned char)root);
         char text[128];
@@ -922,20 +939,30 @@ static void apply_boot_current(const char *expected_mode) {
         set_string(&state.firmware_logical, text);
         snprintf(text, sizeof(text), "vbmeta_%c", root_lower);
         set_string(&state.vbmeta_partition, text);
-    } else if (strcmp(expected_mode, "recovery") == 0 && strncmp(payload, "recovery:", 9) == 0) {
-        char recovery = payload_slot(payload, 1);
-        if (!recovery) {
-            free(payload);
-            fail("HomeHarbor current recovery slot is invalid");
-        }
+        set_string(&state.vbmeta_digest, current.vbmeta_digest);
+    } else if (strcmp(expected_mode, "recovery") == 0 && current.recovery) {
+        char recovery = current.recovery_slot;
         char text[2] = {recovery, '\0'};
         set_string(&state.recovery_slot, text);
+        set_string(&state.vbmeta_digest, current.vbmeta_digest);
     } else {
         free(payload);
         fail("HomeHarbor current boot EFI variable is missing or invalid");
     }
 
     free(payload);
+}
+
+static bool boot_current_requests_recovery(void) {
+    char *payload = read_boot_current();
+    BootCurrentPayload current;
+    if (!payload || !parse_boot_current_payload(payload, &current)) {
+        free(payload);
+        fail("HomeHarbor current boot EFI variable is missing or invalid");
+    }
+    bool recovery = current.recovery;
+    free(payload);
+    return recovery;
 }
 
 static void validate_boot_env(void) {
@@ -958,6 +985,7 @@ static void validate_boot_env(void) {
     validate_logical("modules", state.modules_logical);
     validate_logical("firmware", state.firmware_logical);
     validate_logical("vbmeta", state.vbmeta_partition);
+    validate_sha256("vbmeta", state.vbmeta_digest);
     validate_addons();
 }
 
@@ -991,12 +1019,59 @@ static void record_boot_addons(FILE *file) {
     }
 }
 
-static void record_boot_env(void) {
-    mkdir_p(RUN_DIR, 0755);
-    FILE *file = fopen(RUN_DIR "/boot.env", "w");
-    if (!file) {
-        fail("HomeHarbor could not record boot environment");
+static FILE *open_boot_env_file(void) {
+    mkdir_p(BOOT_RUN_DIR, 0700);
+    struct stat directory;
+    if (lstat(BOOT_RUN_DIR, &directory) != 0 || !S_ISDIR(directory.st_mode) || directory.st_uid != 0) {
+        fail("HomeHarbor boot environment directory is not root-owned");
     }
+    if (chmod(BOOT_RUN_DIR, 0700) != 0) {
+        fail("HomeHarbor could not protect the boot environment directory");
+    }
+
+    int fd = open(BOOT_ENV_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        fail("HomeHarbor could not create the protected boot environment");
+    }
+    struct stat file_state;
+    if (fstat(fd, &file_state) != 0 || !S_ISREG(file_state.st_mode) || file_state.st_uid != 0 || fchmod(fd, 0600) != 0) {
+        close(fd);
+        fail("HomeHarbor boot environment file is not a protected root-owned file");
+    }
+
+    FILE *file = fdopen(fd, "w");
+    if (!file) {
+        close(fd);
+        fail("HomeHarbor could not open the protected boot environment");
+    }
+    return file;
+}
+
+static void finish_boot_env_file(FILE *file) {
+    if (fflush(file) != 0 || fsync(fileno(file)) != 0 || fclose(file) != 0) {
+        fail("HomeHarbor could not persist the protected boot environment");
+    }
+
+    mkdir_p(RUN_DIR, 0755);
+    int legacy_fd = open(LEGACY_BOOT_ENV_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (legacy_fd < 0) {
+        fail("HomeHarbor could not create the legacy boot environment mountpoint");
+    }
+    if (fchmod(legacy_fd, 0600) != 0) {
+        close(legacy_fd);
+        fail("HomeHarbor could not protect the legacy boot environment mountpoint");
+    }
+    if (close(legacy_fd) != 0) {
+        fail("HomeHarbor could not close the legacy boot environment mountpoint");
+    }
+    if (mount(BOOT_ENV_PATH, LEGACY_BOOT_ENV_PATH, NULL, MS_BIND, NULL) != 0 ||
+        mount(NULL, LEGACY_BOOT_ENV_PATH, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+        fail("HomeHarbor could not publish the protected boot environment compatibility mount");
+    }
+}
+
+static void record_boot_env(void) {
+    FILE *file = open_boot_env_file();
     fprintf(file, "HOMEHARBOR_BOOT_MODE=%s\n", nonempty_or(state.boot_mode, "legacy"));
     fprintf(file, "HOMEHARBOR_BOOT_CONFIG=%s\n", nonempty_or(state.boot_config, ""));
     if (!is_empty(state.boot_slot)) {
@@ -1021,7 +1096,7 @@ static void record_boot_env(void) {
         fprintf(file, "HOMEHARBOR_ADDONS=%s\n", state.addons);
         record_boot_addons(file);
     }
-    fclose(file);
+    finish_boot_env_file(file);
 }
 
 static void save_init_state(void) {
@@ -1580,11 +1655,7 @@ static const char *slot_verity_arg(const char *label, const char *logical) {
 }
 
 static void record_recovery_boot_env(const char *slot_label, const char *vbmeta_digest, const char *root_digest) {
-    mkdir_p(RUN_DIR, 0755);
-    FILE *file = fopen(RUN_DIR "/boot.env", "w");
-    if (!file) {
-        fail("HomeHarbor could not record recovery boot environment");
-    }
+    FILE *file = open_boot_env_file();
     fprintf(file, "HOMEHARBOR_BOOT_SLOT=RECOVERY\n");
     fprintf(file, "HOMEHARBOR_SLOT=RECOVERY\n");
     fprintf(file, "HOMEHARBOR_RECOVERY_SLOT=%s\n", nonempty_or(state.recovery_slot, ""));
@@ -1594,7 +1665,7 @@ static void record_recovery_boot_env(const char *slot_label, const char *vbmeta_
         fprintf(file, "HOMEHARBOR_VBMETA_DIGEST=%s\n", vbmeta_digest);
     }
     fprintf(file, "HOMEHARBOR_ROOT_DESCRIPTOR_DIGEST=%s\n", root_digest);
-    fclose(file);
+    finish_boot_env_file(file);
 }
 
 static void open_recovery_verity(void) {
@@ -1629,7 +1700,9 @@ static void open_recovery_verity(void) {
             recovery_verity_arg = recovery_b_verity;
         }
     }
-    if (is_empty(recovery_vbmeta_digest)) {
+    if (!is_empty(state.vbmeta_digest)) {
+        set_string(&recovery_vbmeta_digest, state.vbmeta_digest);
+    } else if (is_empty(recovery_vbmeta_digest)) {
         if (strcmp(slot_label, "a") == 0) {
             set_string(&recovery_vbmeta_digest, recovery_vbmeta_a_digest);
         } else if (strcmp(slot_label, "b") == 0) {
@@ -1652,6 +1725,7 @@ static void open_recovery_verity(void) {
     if (!is_block_device(recovery_vbmetadev)) {
         fail("HomeHarbor recovery vbmeta device not found: %s", recovery_vbmeta);
     }
+    validate_sha256("recovery vbmeta", recovery_vbmeta_digest);
     dm_remove("homeharbor-recovery-root");
     VerityDescriptor descriptor = avb_descriptor(
         recovery_vbmetadev,
@@ -1722,6 +1796,13 @@ static void run_hook(void) {
 
     char *boot_generic = cmdline_arg("homeharbor.boot_generic", "0");
     if (strcmp(boot_generic, "1") == 0) {
+        if (boot_current_requests_recovery()) {
+            free(boot_generic);
+            printf(":: opening HomeHarbor recovery root from signed generic UKI geometry\n");
+            open_recovery_verity();
+            save_init_state();
+            return;
+        }
         apply_boot_current("normal");
     }
     free(boot_generic);
@@ -1900,24 +1981,8 @@ static char *mount_kernel_addons(void) {
     return lowerdirs;
 }
 
-static void append_system_app_usr_lowerdirs(char **lowerdirs) {
-    glob_t matches;
-    memset(&matches, 0, sizeof(matches));
-    int rc = glob("/new_root/homeharbor-data/system-apps/active/*/usr", GLOB_NOSORT, NULL, &matches);
-    if (rc == 0) {
-        for (size_t i = 0; i < matches.gl_pathc; i++) {
-            struct stat st;
-            if (stat(matches.gl_pathv[i], &st) == 0 && S_ISDIR(st.st_mode)) {
-                append_lowerdir(lowerdirs, matches.gl_pathv[i]);
-            }
-        }
-    }
-    globfree(&matches);
-}
-
 static void mount_usr_overlay(void) {
     char *lowerdirs = mount_kernel_addons();
-    append_system_app_usr_lowerdirs(&lowerdirs);
     if (is_empty(lowerdirs)) {
         free(lowerdirs);
         return;

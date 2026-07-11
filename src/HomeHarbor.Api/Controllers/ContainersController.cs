@@ -16,6 +16,7 @@ public sealed class ContainersController(
     IRuntimeSignalService signals) : ControllerBase
 {
     [HttpGet]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> List([FromQuery] Guid? familyId, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(familyId, cancellationToken);
@@ -30,6 +31,7 @@ public sealed class ContainersController(
     }
 
     [HttpGet("{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Get(Guid id, CancellationToken cancellationToken)
     {
         var container = await db.ManagedContainers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id, cancellationToken);
@@ -39,6 +41,7 @@ public sealed class ContainersController(
     }
 
     [HttpPost]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Create([FromBody] MutateContainerRequest request, CancellationToken cancellationToken)
     {
         var resolved = await families.ResolveAsync(request.FamilyId, cancellationToken);
@@ -55,78 +58,121 @@ public sealed class ContainersController(
             return BadRequest(new { error = ex.Message });
         }
 
-        if (await db.ManagedContainers.AsNoTracking().AnyAsync(c => c.FamilyId == resolved.Value && c.Name == definition.Name && c.DeletedAt == null, cancellationToken))
-            return Conflict(new { error = "A container with this name already exists." });
-
-        var now = DateTimeOffset.UtcNow;
-        var container = new ManagedContainerEntity
+        await ContainerMutationGate.Instance.WaitAsync(cancellationToken);
+        try
         {
-            Id = id,
-            FamilyId = resolved.Value,
-            Name = definition.Name,
-            Image = definition.Image,
-            DesiredState = "stopped",
-            RuntimeState = "planned",
-            RequestedAction = "reload",
-            ServiceName = $"homeharbor-{id:N}",
-            DefinitionJson = specs.Serialize(definition),
-            CreatedAt = now,
-            UpdatedAt = now
-        };
-        _ = db.ManagedContainers.Add(container);
-        _ = await db.SaveChangesAsync(cancellationToken);
-        signals.RequestContainerApply();
-        return Ok(ContainerResponse(container));
+            var existing = await db.ManagedContainers.AsNoTracking()
+                .Where(container => container.DeletedAt == null)
+                .ToListAsync(cancellationToken);
+            if (existing.Any(container => container.FamilyId == resolved.Value && container.Name == definition.Name))
+                return Conflict(new { error = "A container with this name already exists." });
+            try
+            {
+                specs.EnsurePortsAvailable(definition, existing);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Conflict(new { error = ex.Message });
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var container = new ManagedContainerEntity
+            {
+                Id = id,
+                FamilyId = resolved.Value,
+                Name = definition.Name,
+                Image = definition.Image,
+                DesiredState = "stopped",
+                RuntimeState = "planned",
+                RequestedAction = "reload",
+                ServiceName = $"homeharbor-{id:N}",
+                DefinitionJson = specs.Serialize(definition),
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _ = db.ManagedContainers.Add(container);
+            _ = await db.SaveChangesAsync(cancellationToken);
+            signals.RequestContainerApply();
+            return Ok(ContainerResponse(container));
+        }
+        finally
+        {
+            _ = ContainerMutationGate.Instance.Release();
+        }
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Update(Guid id, [FromBody] MutateContainerRequest request, CancellationToken cancellationToken)
     {
-        var container = await db.ManagedContainers.FindAsync([id], cancellationToken);
-        if (container is null || container.DeletedAt is not null) return NotFound(new { error = "Container not found." });
-        await families.RequireAccessAsync(container.FamilyId, cancellationToken);
-
-        ContainerDefinition definition;
+        await ContainerMutationGate.Instance.WaitAsync(cancellationToken);
         try
         {
-            definition = specs.Normalize(container.FamilyId, container.Id, request.ToDefinitionRequest());
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+            var container = await db.ManagedContainers.FindAsync([id], cancellationToken);
+            if (container is null || container.DeletedAt is not null) return NotFound(new { error = "Container not found." });
+            await families.RequireAccessAsync(container.FamilyId, cancellationToken);
 
-        if (!string.Equals(container.Name, definition.Name, StringComparison.Ordinal) &&
-            await db.ManagedContainers.AsNoTracking().AnyAsync(c => c.FamilyId == container.FamilyId && c.Name == definition.Name && c.DeletedAt == null, cancellationToken))
-        {
-            return Conflict(new { error = "A container with this name already exists." });
-        }
+            ContainerDefinition definition;
+            try
+            {
+                definition = specs.Normalize(container.FamilyId, container.Id, request.ToDefinitionRequest());
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
 
-        container.Name = definition.Name;
-        container.Image = definition.Image;
-        container.DefinitionJson = specs.Serialize(definition);
-        container.RequestedAction = container.DesiredState == "running" ? "restart" : "reload";
-        container.RuntimeState = "pending";
-        container.LastError = string.Empty;
-        container.UpdatedAt = DateTimeOffset.UtcNow;
-        _ = await db.SaveChangesAsync(cancellationToken);
-        signals.RequestContainerApply();
-        return Ok(ContainerResponse(container));
+            var existing = await db.ManagedContainers.AsNoTracking()
+                .Where(candidate => candidate.DeletedAt == null)
+                .ToListAsync(cancellationToken);
+            if (!string.Equals(container.Name, definition.Name, StringComparison.Ordinal) &&
+                existing.Any(candidate => candidate.FamilyId == container.FamilyId && candidate.Name == definition.Name))
+            {
+                return Conflict(new { error = "A container with this name already exists." });
+            }
+            try
+            {
+                specs.EnsurePortsAvailable(definition, existing, container.Id);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Conflict(new { error = ex.Message });
+            }
+
+            container.Name = definition.Name;
+            container.Image = definition.Image;
+            container.DefinitionJson = specs.Serialize(definition);
+            container.RequestedAction = container.DesiredState == "running" ? "restart" : "reload";
+            container.RuntimeState = "pending";
+            container.LastError = string.Empty;
+            container.UpdatedAt = DateTimeOffset.UtcNow;
+            _ = await db.SaveChangesAsync(cancellationToken);
+            signals.RequestContainerApply();
+            return Ok(ContainerResponse(container));
+        }
+        finally
+        {
+            _ = ContainerMutationGate.Instance.Release();
+        }
     }
 
     [HttpPost("{id:guid}/start")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public Task<IActionResult> Start(Guid id, CancellationToken cancellationToken)
         => SetDesiredState(id, "running", "start", cancellationToken);
 
     [HttpPost("{id:guid}/stop")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public Task<IActionResult> Stop(Guid id, CancellationToken cancellationToken)
         => SetDesiredState(id, "stopped", "stop", cancellationToken);
 
     [HttpPost("{id:guid}/restart")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public Task<IActionResult> Restart(Guid id, CancellationToken cancellationToken)
         => SetDesiredState(id, "running", "restart", cancellationToken);
 
     [HttpDelete("{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         var container = await db.ManagedContainers.FindAsync([id], cancellationToken);

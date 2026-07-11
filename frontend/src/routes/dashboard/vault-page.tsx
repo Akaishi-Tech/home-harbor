@@ -48,6 +48,8 @@ import { errorMessage, formatDateTime } from "@/lib/format";
 import {
   decryptVault,
   hasRecoverableVaultKey,
+  MAX_VAULT_SECRET_LENGTH,
+  MIN_VAULT_SECRET_LENGTH,
   type DecryptedVaultPayload,
 } from "@/lib/vault";
 import { cn } from "@/lib/utils";
@@ -129,6 +131,13 @@ export function VaultPage() {
       toast.error(t("pages.vault.secretRequired"));
       return;
     }
+    if (
+      vaultSecret.length < MIN_VAULT_SECRET_LENGTH ||
+      vaultSecret.length > MAX_VAULT_SECRET_LENGTH
+    ) {
+      toast.error(t("pages.vault.weakSecret"));
+      return;
+    }
 
     createVaultItem.mutate(
       {
@@ -139,8 +148,13 @@ export function VaultPage() {
         onSuccess: () => {
           toast.success(t("toast.vaultSaved"));
           form.reset(defaults);
+          createVaultItem.reset();
         },
-        onError: (error) => toast.error(errorMessage(error)),
+        onError: (error) => {
+          toast.error(errorMessage(error));
+          // Mutation variables contain the vault key and plaintext password.
+          createVaultItem.reset();
+        },
       },
     );
   }
@@ -255,6 +269,12 @@ export function VaultPage() {
                     onChange={(event) => changeVaultSecret(event.target.value)}
                     placeholder={t("pages.vault.keyPlaceholder")}
                   />
+                  {vaultSecret.length > 0 &&
+                  vaultSecret.length < MIN_VAULT_SECRET_LENGTH ? (
+                    <p className="text-xs text-warning-foreground">
+                      {t("pages.vault.weakSecret")}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit" disabled={!vaultSecret}>
@@ -347,7 +367,11 @@ export function VaultPage() {
                   <Button
                     type="submit"
                     className="w-full"
-                    disabled={createVaultItem.isPending || !vaultSecret}
+                    disabled={
+                      createVaultItem.isPending ||
+                      vaultSecret.length < MIN_VAULT_SECRET_LENGTH ||
+                      vaultSecret.length > MAX_VAULT_SECRET_LENGTH
+                    }
                   >
                     <Lock className="size-4" />
                     {createVaultItem.isPending

@@ -26,8 +26,14 @@ internal static partial class InstallDiskCommand
         Action<string>? output = null,
         TextReader? input = null,
         bool? inputInteractive = null,
+        bool allowVerifiedArchisoRoot = false,
         CancellationToken cancellationToken = default)
-        => await RunAsync(InstallDiskOptions.Parse(args), output, input, inputInteractive, cancellationToken);
+        => await RunAsync(
+            InstallDiskOptions.Parse(args) with { AllowVerifiedArchisoRoot = allowVerifiedArchisoRoot },
+            output,
+            input,
+            inputInteractive,
+            cancellationToken);
 
     private static async Task<int> RunAsync(
         InstallDiskOptions options,
@@ -50,7 +56,7 @@ internal static partial class InstallDiskCommand
         {
             return await InstallDiskProcess.RunStreamingAsync(
                 "lsblk",
-                ["-J", "-b", "-o", "NAME,PATH,SIZE,TYPE,MODEL,SERIAL,TRAN,MOUNTPOINTS"],
+                ["-J", "-b", "-o", "NAME,PATH,SIZE,TYPE,MODEL,SERIAL,WWN,TRAN,MOUNTPOINTS"],
                 io,
                 cancellationToken);
         }
@@ -70,15 +76,21 @@ internal sealed record InstallDiskOptions(
     string PublicKey,
     string? VerifyScript,
     string? Confirm,
+    long? ExpectedSizeBytes,
+    string? ExpectedSerial,
+    string? ExpectedWwn,
+    string? ExpectedResolvedPath,
     bool Yes,
     bool DryRun,
     bool ListDisks,
-    bool ShowHelp)
+    bool ShowHelp,
+    bool AllowVerifiedArchisoRoot = false)
 {
     public const string Usage = """
         Usage:
           HomeHarbor.Installer install-disk --list-disks
           HomeHarbor.Installer install-disk --target /dev/sdX --system-ota PATH --kernel-ota PATH --public-key PATH --confirm "ERASE /dev/sdX"
+            --expected-size-bytes BYTES --expected-resolved-path /dev/sdX [--expected-serial SERIAL | --expected-wwn WWN]
             [--system-manifest PATH] [--dry-run] [--yes]
 
         Environment:
@@ -108,6 +120,10 @@ internal sealed record InstallDiskOptions(
             StringOption("--public-key", "/etc/homeharbor/release.pub.pem", "Release public key."),
             NullableStringOption("--verify-script", "Manifest verification helper script."),
             NullableStringOption("--confirm", "Required erase confirmation phrase."),
+            new Option<long?>("--expected-size-bytes") { Description = "Size captured when the target disk was selected." },
+            NullableStringOption("--expected-serial", "Serial captured when the target disk was selected."),
+            NullableStringOption("--expected-wwn", "WWN captured when the target disk was selected."),
+            NullableStringOption("--expected-resolved-path", "Canonical path captured when the target disk was selected."),
             new Option<bool>("--yes") { Description = "Confirm non-interactively." },
             new Option<bool>("--dry-run") { Description = "Print the install plan without writing." },
             MovedOption("--data-unlock"),
@@ -125,6 +141,10 @@ internal sealed record InstallDiskOptions(
             parseResult.GetValue(options.PublicKey)!,
             parseResult.GetValue(options.VerifyScript),
             parseResult.GetValue(options.Confirm),
+            parseResult.GetValue(options.ExpectedSizeBytes),
+            parseResult.GetValue(options.ExpectedSerial),
+            parseResult.GetValue(options.ExpectedWwn),
+            parseResult.GetValue(options.ExpectedResolvedPath),
             parseResult.GetValue(options.Yes),
             parseResult.GetValue(options.DryRun),
             parseResult.GetValue(options.ListDisks),
@@ -162,6 +182,10 @@ internal sealed record InstallDiskOptions(
         Option<string> PublicKey,
         Option<string?> VerifyScript,
         Option<string?> Confirm,
+        Option<long?> ExpectedSizeBytes,
+        Option<string?> ExpectedSerial,
+        Option<string?> ExpectedWwn,
+        Option<string?> ExpectedResolvedPath,
         Option<bool> Yes,
         Option<bool> DryRun,
         Option<string?> DataUnlock,
@@ -178,6 +202,10 @@ internal sealed record InstallDiskOptions(
             command.Options.Add(ChannelFile);
             command.Options.Add(PublicKey);
             command.Options.Add(VerifyScript);
+            command.Options.Add(ExpectedSizeBytes);
+            command.Options.Add(ExpectedSerial);
+            command.Options.Add(ExpectedWwn);
+            command.Options.Add(ExpectedResolvedPath);
             command.Options.Add(Confirm);
             command.Options.Add(Yes);
             command.Options.Add(DryRun);
@@ -303,7 +331,93 @@ internal sealed record AvbHashtreeDescriptor(
     }
 }
 
-internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, InstallDiskIo io)
+internal sealed record InstallDiskTargetIdentity(
+    string Path,
+    long SizeBytes,
+    string Type,
+    string? Serial,
+    string? Wwn)
+{
+    internal static InstallDiskTargetIdentity ParseLsblkJson(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("blockdevices", out var devices) ||
+            devices.ValueKind != JsonValueKind.Array || devices.GetArrayLength() != 1)
+        {
+            throw new InvalidOperationException("lsblk did not return exactly one install target");
+        }
+
+        var item = devices[0];
+        return new InstallDiskTargetIdentity(
+            JsonValue(item, "path") ?? string.Empty,
+            JsonLong(item, "size"),
+            JsonValue(item, "type") ?? string.Empty,
+            Normalize(JsonValue(item, "serial")),
+            Normalize(JsonValue(item, "wwn")));
+    }
+
+    internal void ValidateExpected(
+        string selectedPath,
+        string expectedResolvedPath,
+        long expectedSizeBytes,
+        string? expectedSerial,
+        string? expectedWwn)
+    {
+        expectedSerial = Normalize(expectedSerial);
+        expectedWwn = Normalize(expectedWwn);
+        if (expectedSizeBytes <= 0 || string.IsNullOrWhiteSpace(expectedResolvedPath))
+        {
+            throw new InvalidOperationException("install target identity snapshot is incomplete");
+        }
+        if (expectedSerial is null && expectedWwn is null &&
+            !selectedPath.StartsWith("/dev/disk/by-id/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("install target requires a serial, WWN, or /dev/disk/by-id path");
+        }
+        if (!string.Equals(Type, "disk", StringComparison.Ordinal) ||
+            !string.Equals(Path, expectedResolvedPath, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("install target path or type changed after selection");
+        }
+        if (SizeBytes != expectedSizeBytes)
+        {
+            throw new InvalidOperationException(
+                $"install target size changed after selection: expected {expectedSizeBytes}, current {SizeBytes}");
+        }
+        if (expectedSerial is not null && !string.Equals(Serial, expectedSerial, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("install target serial changed after selection");
+        }
+        if (expectedWwn is not null && !string.Equals(Wwn, expectedWwn, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("install target WWN changed after selection");
+        }
+    }
+
+    private static string? JsonValue(JsonElement item, string property)
+        => item.TryGetProperty(property, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString()
+            : null;
+
+    private static long JsonLong(JsonElement item, string property)
+    {
+        if (!item.TryGetProperty(property, out var value)) return 0;
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt64(out var number) => number,
+            JsonValueKind.String when long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) => number,
+            _ => 0
+        };
+    }
+
+    private static string? Normalize(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+internal sealed partial class InstallDiskExecutor(
+    InstallDiskOptions options,
+    InstallDiskIo io,
+    ICommandRunner? commandRunner = null)
 {
     private const long MiB = 1024L * 1024L;
     private const long EspSizeMiB = 768;
@@ -322,9 +436,13 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
     private const long SuperGroupBytes = 2 * RootImageBytes + 2 * ModulesImageBytes + 2 * FirmwareImageBytes;
     private const long SuperPartitionBytes = SuperGroupBytes + SuperReservedBytes;
     private const long SuperPartitionMiB = SuperPartitionBytes / MiB;
+    private const int MaxOtaBundleMembers = 256;
+    private const long MaxOtaBundleFileBytes = 4L * 1024 * 1024 * 1024;
+    private const long MaxOtaBundleTotalBytes = 8L * 1024 * 1024 * 1024;
     private const string BootEnvDir = "lib/homeharbor/ota";
     private const string SecureBootPublicCertSha256 = "dd56573ce2b017f074bd2514ac9a152d0f95394a77bd6cc2c2f0f39ac538ff41";
 
+    private readonly ICommandRunner _commandRunner = commandRunner ?? new ProcessCommandRunner();
     private readonly List<KernelAddon> _kernelAddons = [];
     private string _targetReal = string.Empty;
     private bool _targetIsBlock;
@@ -338,9 +456,11 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
     private string _systemRoot = string.Empty;
     private string _kernelRoot = string.Empty;
     private string _version = string.Empty;
+    private long _releaseSequence;
     private string _channel = string.Empty;
     private string _bootMode = string.Empty;
     private string _kernelVersion = string.Empty;
+    private long _kernelReleaseSequence;
     private string _kernelChannel = string.Empty;
     private string _kernelRelease = string.Empty;
     private string _kernelBootMode = string.Empty;
@@ -379,6 +499,10 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         if (!_targetIsFile && !_targetIsBlock)
         {
             throw new InvalidOperationException("target must be a block device or sparse image file: " + _targetReal);
+        }
+        if (_targetIsBlock)
+        {
+            await ValidateTargetIdentityAsync(cancellationToken);
         }
 
         _runtimeDir = Path.Combine(Path.GetTempPath(), "homeharbor-install-" + Guid.NewGuid().ToString("N"));
@@ -456,16 +580,16 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         }
     }
 
-    private static async Task<string> ResolveTargetAsync(string target, CancellationToken cancellationToken)
+    private async Task<string> ResolveTargetAsync(string target, CancellationToken cancellationToken)
     {
-        if (File.Exists(target))
+        if (!target.StartsWith("/dev/", StringComparison.Ordinal) && File.Exists(target))
         {
             return Path.GetFullPath(target);
         }
 
-        var result = await InstallDiskProcess.CaptureAsync("readlink", ["-f", target], cancellationToken);
-        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output)
-            ? result.Output.Trim()
+        var result = await _commandRunner.RunAsync("readlink", ["-f", target], cancellationToken: cancellationToken);
+        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Stdout)
+            ? result.Stdout.Trim()
             : throw new InvalidOperationException("target does not exist: " + target);
     }
 
@@ -514,7 +638,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         var otaType = JsonString(doc.RootElement, "type");
         if (string.Equals(bundle, options.SystemOta, StringComparison.Ordinal))
         {
-            if (packageKind != "system" && otaType != "full-system")
+            if (packageKind != "system" || otaType != "full-system")
             {
                 throw new InvalidOperationException("system OTA must be packageKind=system/type=full-system");
             }
@@ -523,7 +647,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         if (!string.IsNullOrWhiteSpace(options.KernelOta) &&
             string.Equals(bundle, options.KernelOta, StringComparison.Ordinal))
         {
-            if (packageKind != "kernel" && otaType != "kernel-only")
+            if (packageKind != "kernel" || otaType != "kernel-only")
             {
                 throw new InvalidOperationException("kernel OTA must be packageKind=kernel/type=kernel-only");
             }
@@ -567,12 +691,26 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         using var gzip = new GZipStream(file, CompressionMode.Decompress);
         using var reader = new TarReader(gzip);
         var members = new List<string>();
+        var memberCount = 0;
+        long totalBytes = 0;
         TarEntry? entry;
         while ((entry = reader.GetNextEntry()) is not null)
         {
+            memberCount++;
+            if (memberCount > MaxOtaBundleMembers)
+            {
+                throw new InvalidOperationException($"OTA bundle has too many members; maximum is {MaxOtaBundleMembers}");
+            }
+
             if (!string.IsNullOrWhiteSpace(entry.Name))
             {
+                TarSafety.ValidateMemberPath(entry.Name, "OTA bundle");
                 members.Add(entry.Name);
+            }
+
+            if (entry.EntryType is TarEntryType.RegularFile or TarEntryType.V7RegularFile or TarEntryType.ContiguousFile)
+            {
+                totalBytes = AddOtaEntrySize(totalBytes, entry.Length, entry.Name);
             }
         }
 
@@ -590,15 +728,35 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         using var gzip = new GZipStream(file, CompressionMode.Decompress);
         using var reader = new TarReader(gzip);
         var found = false;
+        var memberCount = 0;
+        long totalBytes = 0;
+        var members = new HashSet<string>(StringComparer.Ordinal);
         TarEntry? entry;
         while ((entry = reader.GetNextEntry()) is not null)
         {
+            memberCount++;
+            if (memberCount > MaxOtaBundleMembers)
+            {
+                throw new InvalidOperationException($"OTA bundle has too many members; maximum is {MaxOtaBundleMembers}");
+            }
+
             if (string.IsNullOrWhiteSpace(entry.Name))
             {
                 continue;
             }
 
             TarSafety.ValidateMemberPath(entry.Name, "OTA bundle");
+            var normalizedName = entry.Name.TrimEnd('/');
+            if (!members.Add(normalizedName))
+            {
+                throw new InvalidOperationException("OTA bundle contains a duplicate member: " + entry.Name);
+            }
+
+            if (entry.EntryType is TarEntryType.RegularFile or TarEntryType.V7RegularFile or TarEntryType.ContiguousFile)
+            {
+                totalBytes = AddOtaEntrySize(totalBytes, entry.Length, entry.Name);
+            }
+
             if (singleMember is not null && !string.Equals(entry.Name, singleMember, StringComparison.Ordinal))
             {
                 continue;
@@ -617,7 +775,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
                 continue;
             }
 
-            if (entry.EntryType is not TarEntryType.RegularFile and not TarEntryType.V7RegularFile)
+            if (entry.EntryType is not TarEntryType.RegularFile and not TarEntryType.V7RegularFile and not TarEntryType.ContiguousFile)
             {
                 throw new InvalidOperationException("unsupported OTA bundle member type: " + entry.Name);
             }
@@ -626,7 +784,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             await using var output = File.Create(outputPath);
             if (entry.DataStream is not null)
             {
-                await entry.DataStream.CopyToAsync(output, cancellationToken);
+                await CopyOtaEntryAsync(entry, output, cancellationToken);
             }
 
             found = true;
@@ -638,6 +796,38 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         }
     }
 
+    private static long AddOtaEntrySize(long total, long size, string member)
+    {
+        if (size < 0 || size > MaxOtaBundleFileBytes || total > MaxOtaBundleTotalBytes - size)
+        {
+            throw new InvalidOperationException("OTA bundle decompressed size limit exceeded by member: " + member);
+        }
+
+        return total + size;
+    }
+
+    private static async Task CopyOtaEntryAsync(TarEntry entry, Stream output, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[1024 * 1024];
+        long copied = 0;
+        int read;
+        while ((read = await entry.DataStream!.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+        {
+            if (copied > entry.Length - read || copied > MaxOtaBundleFileBytes - read)
+            {
+                throw new InvalidOperationException("OTA bundle member exceeds its declared or allowed size: " + entry.Name);
+            }
+
+            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            copied += read;
+        }
+
+        if (copied != entry.Length)
+        {
+            throw new InvalidOperationException("OTA bundle member size mismatch: " + entry.Name);
+        }
+    }
+
     private void LoadPreflightManifests()
     {
         using var systemDoc = JsonDocument.Parse(File.ReadAllText(Path.Combine(_systemRoot, "manifest.json")));
@@ -645,9 +835,11 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         var system = systemDoc.RootElement;
         var kernel = kernelDoc.RootElement;
         _version = JsonString(system, "version") ?? string.Empty;
+        _releaseSequence = OtaManifestVerifier.ReleaseSequenceProperty(system);
         _channel = ReleaseChannel.Require(JsonString(system, "channel"), "system OTA channel");
         _bootMode = JsonString(system, "bootMode") ?? string.Empty;
         _kernelVersion = JsonString(kernel, "version") ?? string.Empty;
+        _kernelReleaseSequence = OtaManifestVerifier.ReleaseSequenceProperty(kernel);
         _kernelChannel = KernelChannel.Require(JsonString(kernel, "kernelChannel"), "kernel OTA kernelChannel");
         _kernelRelease = JsonString(kernel, "kernelRelease") ?? string.Empty;
         _kernelBootMode = JsonString(kernel, "bootMode") ?? string.Empty;
@@ -671,6 +863,12 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         if (!string.Equals(_kernelVersion, _version, StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"kernel OTA version {_kernelVersion} does not match system OTA version {_version}");
+        }
+
+        if (_kernelReleaseSequence != _releaseSequence)
+        {
+            throw new InvalidOperationException(
+                $"kernel OTA releaseSequence {_kernelReleaseSequence} does not match system OTA releaseSequence {_releaseSequence}");
         }
 
         if (_kernelChannel != "generic" && _kernelChannel != "zfs")
@@ -710,6 +908,19 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         {
             throw new InvalidOperationException("raw UKI manifest is missing vbmeta digests");
         }
+
+        using var kernelDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(_kernelRoot, "manifest.json")));
+        var kernelManifest = kernelDocument.RootElement;
+        if (string.IsNullOrWhiteSpace(JsonString(kernelManifest, "bootloaderHash")))
+        {
+            throw new InvalidOperationException("kernel OTA manifest is missing the CI-built boot selector hash");
+        }
+        if (_bootMode == "secure-boot-raw-uki" &&
+            (string.IsNullOrWhiteSpace(JsonString(kernelManifest, "fallbackBootHash")) ||
+             string.IsNullOrWhiteSpace(JsonString(kernelManifest, "mokManagerHash"))))
+        {
+            throw new InvalidOperationException("secure boot kernel OTA manifest is missing prebuilt shim or MokManager hashes");
+        }
     }
 
     private async Task ValidateChannelMetadataAsync(CancellationToken cancellationToken)
@@ -723,6 +934,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         using var doc = await JsonDocument.ParseAsync(file, cancellationToken: cancellationToken);
         var channelName = ReleaseChannel.Require(JsonString(doc.RootElement, "channel"), "channel metadata channel");
         var channelVersion = JsonString(doc.RootElement, "currentVersion") ?? string.Empty;
+        var channelReleaseSequence = OtaManifestVerifier.ReleaseSequenceProperty(doc.RootElement);
         if (!string.Equals(channelName, _channel, StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"channel metadata {channelName} does not match OTA channel {_channel}");
@@ -733,6 +945,13 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         {
             throw new InvalidOperationException($"channel version {channelVersion} does not match OTA version {_version}");
         }
+
+
+        if (channelReleaseSequence != _releaseSequence)
+        {
+            throw new InvalidOperationException(
+                $"channel releaseSequence {channelReleaseSequence} does not match OTA releaseSequence {_releaseSequence}");
+        }
     }
 
     private async Task ValidateTargetSafetyAsync(CancellationToken cancellationToken)
@@ -742,9 +961,11 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             return;
         }
 
-        var rootParent = await RootParentDeviceAsync(cancellationToken);
-        if (!string.IsNullOrWhiteSpace(rootParent) &&
-            string.Equals(_targetReal, rootParent, StringComparison.Ordinal))
+        var rootAncestors = await BlockDeviceSafety.RootAncestorDevicesAsync(
+            _commandRunner,
+            options.AllowVerifiedArchisoRoot,
+            cancellationToken);
+        if (rootAncestors.Contains(_targetReal))
         {
             throw new InvalidOperationException("refusing to install over the currently booted system disk: " + _targetReal);
         }
@@ -764,6 +985,37 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         }
 
         return new FileInfo(_targetReal).Length;
+    }
+
+    private async Task ValidateTargetIdentityAsync(CancellationToken cancellationToken)
+    {
+        var expectedSize = options.ExpectedSizeBytes
+            ?? throw new InvalidOperationException("block-device installs require --expected-size-bytes from disk selection");
+        var expectedResolvedPath = options.ExpectedResolvedPath?.Trim();
+        if (string.IsNullOrWhiteSpace(expectedResolvedPath) || !expectedResolvedPath.StartsWith("/dev/", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("block-device installs require --expected-resolved-path from disk selection");
+        }
+
+        var currentResolved = await ResolveTargetAsync(options.Target!, cancellationToken);
+        if (!string.Equals(currentResolved, _targetReal, StringComparison.Ordinal) ||
+            !string.Equals(currentResolved, expectedResolvedPath, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("install target resolved path changed after selection");
+        }
+
+        var identity = await _commandRunner.RunAsync(
+            "lsblk",
+            ["-J", "-b", "-d", "-o", "PATH,SIZE,TYPE,SERIAL,WWN", currentResolved],
+            cancellationToken: cancellationToken);
+        _ = identity.EnsureSuccess("failed to read install target identity");
+        var json = identity.Stdout;
+        InstallDiskTargetIdentity.ParseLsblkJson(json).ValidateExpected(
+            options.Target!,
+            expectedResolvedPath,
+            expectedSize,
+            options.ExpectedSerial,
+            options.ExpectedWwn);
     }
 
     private void ValidateSystemManifestHashFields()
@@ -799,6 +1051,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         io.WriteLine("HomeHarbor installer dry run.");
         io.WriteLine("target=" + _targetReal);
         io.WriteLine("version=" + _version);
+        io.WriteLine("releaseSequence=" + _releaseSequence.ToString(CultureInfo.InvariantCulture));
         io.WriteLine("channel=" + _channel);
         io.WriteLine("bootMode=" + _bootMode);
         io.WriteLine("kernelChannel=" + _kernelChannel);
@@ -843,6 +1096,10 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
     {
         RequireTools(["avbtool", "blockdev", "dd", "lpmake", "mkfs.ext4", "mkfs.vfat", "mount", "sgdisk", "sync", "umount", "wipefs"]);
         var installTarget = _targetReal;
+        if (_targetIsBlock)
+        {
+            await ValidateAndCreatePartitionTableForBlockTargetAsync(installTarget, cancellationToken);
+        }
         if (_targetIsFile)
         {
             RequireTools(["losetup"]);
@@ -852,9 +1109,8 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
                 cancellationToken);
             _loopDevice = loop.Trim();
             installTarget = _loopDevice;
+            await CreatePartitionTableAsync(installTarget, cancellationToken);
         }
-
-        await CreatePartitionTableAsync(installTarget, cancellationToken);
 
         var espPart = PartitionPath(installTarget, 1);
         var bootAPart = PartitionPath(installTarget, 2);
@@ -907,10 +1163,8 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         var modulesDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "modules_b.verity"), "modules");
         var firmwareDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "firmware_a.verity"), "firmware");
         var firmwareDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "firmware_b.verity"), "firmware");
-        var recoveryDescriptorA = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "recovery_a.verity"), "recovery");
-        var recoveryDescriptorB = VerityDescriptorFromArg(Path.Combine(_kernelRoot, "recovery_b.verity"), "recovery");
 
-        await WriteAvbErofsLogicalPairAsync(
+        await PrepareCompleteAvbLogicalPairAsync(
             Path.Combine(_systemRoot, "rootfs.img"),
             "rootfs",
             "root_a",
@@ -919,7 +1173,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             rootDescriptorA,
             rootDescriptorB,
             cancellationToken);
-        await WriteAvbErofsLogicalPairAsync(
+        await PrepareCompleteAvbLogicalPairAsync(
             Path.Combine(_kernelRoot, "modules.img"),
             "modules",
             "modules_a",
@@ -928,7 +1182,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             modulesDescriptorA,
             modulesDescriptorB,
             cancellationToken);
-        await WriteAvbErofsLogicalPairAsync(
+        await PrepareCompleteAvbLogicalPairAsync(
             Path.Combine(_kernelRoot, "firmware.img"),
             "firmware",
             "firmware_a",
@@ -937,15 +1191,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             firmwareDescriptorA,
             firmwareDescriptorB,
             cancellationToken);
-        await WriteAvbErofsLogicalPairAsync(
-            Path.Combine(_kernelRoot, "recovery.img"),
-            "recovery",
-            "recovery_a",
-            "recovery_b",
-            RecoveryImageBytes,
-            recoveryDescriptorA,
-            recoveryDescriptorB,
-            cancellationToken);
+        PrepareCompleteRecoveryLogicalPair(Path.Combine(_kernelRoot, "recovery.img"));
 
         var bootEnvRoot = Path.Combine(_work, "state", BootEnvDir);
         WriteBootEnv(Path.Combine(bootEnvRoot, "boot_a.env"), "A", "A", "root_a", _kernelRelease, "modules_a", "firmware_a", "vbmeta_a", _vbmetaDigestA, rootDescriptorA.RootDigest, modulesDescriptorA.RootDigest, firmwareDescriptorA.RootDigest, _version);
@@ -976,19 +1222,41 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
 
     private async Task CreatePartitionTableAsync(string installTarget, CancellationToken cancellationToken)
     {
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["--zap-all", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "1:1MiB:+" + EspSizeMiB + "MiB", "-t", "1:ef00", "-c", "1:esp", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "2:0:+" + (BootImageBytes / MiB) + "MiB", "-t", "2:8300", "-c", "2:boot_a", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "3:0:+" + (BootImageBytes / MiB) + "MiB", "-t", "3:8300", "-c", "3:boot_b", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "4:0:+" + SuperPartitionMiB + "MiB", "-t", "4:8300", "-c", "4:super", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "5:0:+" + StateSizeMiB + "MiB", "-t", "5:8300", "-c", "5:state", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "6:0:+" + (RecoveryImageBytes / MiB) + "MiB", "-t", "6:8300", "-c", "6:recovery_a", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "7:0:+" + (RecoveryImageBytes / MiB) + "MiB", "-t", "7:8300", "-c", "7:recovery_b", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "8:0:+" + (VbmetaImageBytes / MiB) + "MiB", "-t", "8:8300", "-c", "8:vbmeta_a", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "9:0:+" + (VbmetaImageBytes / MiB) + "MiB", "-t", "9:8300", "-c", "9:vbmeta_b", installTarget], io, cancellationToken: cancellationToken);
-        await InstallDiskProcess.RunRequiredAsync("sgdisk", ["-n", "10:0:0", "-t", "10:8309", "-c", "10:data-candidate", installTarget], io, cancellationToken: cancellationToken);
-        _ = await InstallDiskProcess.RunStreamingAsync("blockdev", ["--rereadpt", installTarget], io, cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["--zap-all", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "1:1MiB:+" + EspSizeMiB + "MiB", "-t", "1:ef00", "-c", "1:esp", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "2:0:+" + (BootImageBytes / MiB) + "MiB", "-t", "2:8300", "-c", "2:boot_a", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "3:0:+" + (BootImageBytes / MiB) + "MiB", "-t", "3:8300", "-c", "3:boot_b", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "4:0:+" + SuperPartitionMiB + "MiB", "-t", "4:8300", "-c", "4:super", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "5:0:+" + StateSizeMiB + "MiB", "-t", "5:8300", "-c", "5:state", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "6:0:+" + (RecoveryImageBytes / MiB) + "MiB", "-t", "6:8300", "-c", "6:recovery_a", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "7:0:+" + (RecoveryImageBytes / MiB) + "MiB", "-t", "7:8300", "-c", "7:recovery_b", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "8:0:+" + (VbmetaImageBytes / MiB) + "MiB", "-t", "8:8300", "-c", "8:vbmeta_a", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "9:0:+" + (VbmetaImageBytes / MiB) + "MiB", "-t", "9:8300", "-c", "9:vbmeta_b", installTarget], cancellationToken);
+        await RunRequiredCommandAsync("sgdisk", ["-n", "10:0:0", "-t", "10:8309", "-c", "10:data-candidate", installTarget], cancellationToken);
+        _ = await _commandRunner.RunAsync("blockdev", ["--rereadpt", installTarget], cancellationToken: cancellationToken);
         await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+    }
+
+    internal async Task ValidateAndCreatePartitionTableForBlockTargetAsync(
+        string resolvedTarget,
+        CancellationToken cancellationToken)
+    {
+        _targetReal = resolvedTarget;
+        _targetIsBlock = true;
+        await ValidateTargetIdentityAsync(cancellationToken);
+        await ValidateTargetSafetyAsync(cancellationToken);
+        await CreatePartitionTableAsync(resolvedTarget, cancellationToken);
+    }
+
+    private async Task RunRequiredCommandAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        var result = await _commandRunner.RunAsync(fileName, arguments, cancellationToken: cancellationToken);
+        if (!string.IsNullOrEmpty(result.Stdout)) io.Write(result.Stdout);
+        if (!string.IsNullOrEmpty(result.Stderr)) io.Write(result.Stderr);
+        _ = result.EnsureSuccess();
     }
 
     private async Task ValidateSystemPayloadHashesAsync(CancellationToken cancellationToken)
@@ -1011,18 +1279,11 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
 
     private async Task ValidateOptionalKernelBootloaderPayloadsAsync(CancellationToken cancellationToken)
     {
-        if (File.Exists(Path.Combine(_kernelRoot, "HomeHarborBoot.efi")))
-        {
-            await ValidatePayloadHashAsync(_kernelRoot, "HomeHarborBoot.efi", "bootloaderHash", cancellationToken);
-        }
+        await ValidatePayloadHashAsync(_kernelRoot, "HomeHarborBoot.efi", "bootloaderHash", cancellationToken);
 
-        if (File.Exists(Path.Combine(_kernelRoot, "BOOTX64.EFI")))
+        if (_bootMode == "secure-boot-raw-uki")
         {
             await ValidatePayloadHashAsync(_kernelRoot, "BOOTX64.EFI", "fallbackBootHash", cancellationToken);
-        }
-
-        if (_bootMode == "secure-boot-raw-uki" && File.Exists(Path.Combine(_kernelRoot, "mmx64.efi")))
-        {
             await ValidatePayloadHashAsync(_kernelRoot, "mmx64.efi", "mokManagerHash", cancellationToken);
         }
     }
@@ -1075,22 +1336,8 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         }
     }
 
-    private static async Task WriteErofsLogicalAsync(string erofsImage, string logicalImage, long logicalBytes, string label, CancellationToken cancellationToken)
-    {
-        var erofsSize = new FileInfo(erofsImage).Length;
-        if (erofsSize > logicalBytes)
-        {
-            throw new InvalidOperationException($"{label} EROFS is larger than logical area: {erofsSize} > {logicalBytes}");
-        }
-
-        await using var input = File.OpenRead(erofsImage);
-        await using var output = new FileStream(logicalImage, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
-        output.SetLength(logicalBytes);
-        await input.CopyToAsync(output, cancellationToken);
-    }
-
-    private async Task WriteAvbErofsLogicalPairAsync(
-        string erofsImage,
+    private async Task PrepareCompleteAvbLogicalPairAsync(
+        string completeImage,
         string label,
         string partitionA,
         string partitionB,
@@ -1109,85 +1356,86 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
             throw new InvalidOperationException($"{label} AVB descriptors differ across A/B slots");
         }
 
+        ValidateDescriptorForCompletePartitionImage(completeImage, partitionBytes, partitionA, descriptorA);
+        ValidateDescriptorForCompletePartitionImage(completeImage, partitionBytes, partitionB, descriptorB);
+        await VerifyCompleteVerityImageAsync(completeImage, label, descriptorA, cancellationToken);
+
         var logicalA = Path.Combine(_work, partitionA + ".logical");
         var logicalB = Path.Combine(_work, partitionB + ".logical");
-        await WriteErofsLogicalAsync(erofsImage, logicalA, descriptorA.ImageSizeBytes, label, cancellationToken);
+        File.Copy(completeImage, logicalA, overwrite: true);
         File.Copy(logicalA, logicalB, overwrite: true);
-        await AddHashtreeFooterAsync(logicalA, partitionBytes, partitionA, descriptorA, cancellationToken);
-        await AddHashtreeFooterAsync(logicalB, partitionBytes, partitionB, descriptorB, cancellationToken);
     }
 
-    private async Task AddHashtreeFooterAsync(
-        string image,
-        long partitionBytes,
-        string partitionName,
-        AvbHashtreeDescriptor descriptor,
-        CancellationToken cancellationToken)
-    {
-        ValidateDescriptorForHashtreeFooter(image, partitionBytes, partitionName, descriptor);
-        var generatedVbmeta = Path.Combine(_work, partitionName + ".install.vbmeta");
-        await InstallDiskProcess.RunRequiredAsync(
-            "avbtool",
-            [
-                "add_hashtree_footer",
-                "--image", image,
-                "--partition_size", partitionBytes.ToString(CultureInfo.InvariantCulture),
-                "--partition_name", descriptor.PartitionName,
-                "--hash_algorithm", descriptor.HashAlgorithm,
-                "--salt", descriptor.Salt,
-                "--block_size", descriptor.DataBlockSize.ToString(CultureInfo.InvariantCulture),
-                "--do_not_generate_fec",
-                "--do_not_use_ab",
-                "--output_vbmeta_image", generatedVbmeta,
-                "--do_not_append_vbmeta_image",
-                "--algorithm", "NONE"
-            ],
-            io,
-            stream: false,
-            cancellationToken: cancellationToken);
-
-        var actual = await AvbDescriptorFromVbmetaAsync(generatedVbmeta, descriptor.PartitionName, cancellationToken);
-        if (!descriptor.MatchesHashtree(actual))
-        {
-            throw new InvalidOperationException(partitionName + " generated AVB hashtree descriptor mismatch");
-        }
-
-        await using var stream = new FileStream(image, FileMode.Open, FileAccess.Write, FileShare.None);
-        stream.SetLength(partitionBytes);
-    }
-
-    private static void ValidateDescriptorForHashtreeFooter(
+    private static void ValidateDescriptorForCompletePartitionImage(
         string image,
         long partitionBytes,
         string partitionName,
         AvbHashtreeDescriptor descriptor)
     {
+        if (!File.Exists(image))
+        {
+            throw new InvalidOperationException("complete " + partitionName + " partition image is missing: " + image);
+        }
+
         var descriptorPartitionName = AvbPartitionNames.DescriptorName(partitionName);
         if (!string.Equals(descriptor.PartitionName, descriptorPartitionName, StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"AVB descriptor partition mismatch: expected {descriptorPartitionName}, got {descriptor.PartitionName}");
         }
 
-        if (descriptor.DataBlockSize != descriptor.HashBlockSize)
+        if (descriptor.DataBlockSize != descriptor.HashBlockSize ||
+            descriptor.TreeOffset != descriptor.ImageSizeBytes ||
+            descriptor.ImageSizeBytes >= partitionBytes)
         {
-            throw new InvalidOperationException(partitionName + " AVB descriptor uses different data and hash block sizes");
+            throw new InvalidOperationException(partitionName + " AVB descriptor has invalid complete-image geometry");
         }
 
-        if (descriptor.TreeOffset != descriptor.ImageSizeBytes)
+        if (new FileInfo(image).Length != partitionBytes)
         {
-            throw new InvalidOperationException(partitionName + " AVB tree offset does not follow the padded EROFS image");
+            throw new InvalidOperationException($"complete {partitionName} partition image must be exactly {partitionBytes} bytes");
+        }
+    }
+
+    private async Task VerifyCompleteVerityImageAsync(
+        string image,
+        string label,
+        AvbHashtreeDescriptor descriptor,
+        CancellationToken cancellationToken)
+    {
+        await InstallDiskProcess.RunRequiredAsync(
+            "veritysetup",
+            [
+                "verify",
+                "--no-superblock",
+                "--hash=" + descriptor.HashAlgorithm,
+                "--data-block-size=" + descriptor.DataBlockSize.ToString(CultureInfo.InvariantCulture),
+                "--hash-block-size=" + descriptor.HashBlockSize.ToString(CultureInfo.InvariantCulture),
+                "--data-blocks=" + descriptor.DataBlocks.ToString(CultureInfo.InvariantCulture),
+                "--hash-offset=" + descriptor.TreeOffset.ToString(CultureInfo.InvariantCulture),
+                "--salt=" + descriptor.Salt,
+                image,
+                image,
+                descriptor.RootDigest
+            ],
+            io,
+            stream: false,
+            cancellationToken: cancellationToken);
+    }
+
+    private void PrepareCompleteRecoveryLogicalPair(string recoveryImage)
+    {
+        if (!File.Exists(recoveryImage))
+        {
+            throw new InvalidOperationException("complete recovery partition image is missing: " + recoveryImage);
+        }
+        if (new FileInfo(recoveryImage).Length != RecoveryImageBytes)
+        {
+            throw new InvalidOperationException(
+                $"complete recovery partition image must be exactly {RecoveryImageBytes} bytes: {recoveryImage}");
         }
 
-        if (descriptor.ImageSizeBytes >= partitionBytes)
-        {
-            throw new InvalidOperationException(partitionName + " AVB data image does not leave room for a hashtree");
-        }
-
-        var imageBytes = new FileInfo(image).Length;
-        if (imageBytes != descriptor.ImageSizeBytes)
-        {
-            throw new InvalidOperationException($"{partitionName} logical data size mismatch: {imageBytes} != {descriptor.ImageSizeBytes}");
-        }
+        File.Copy(recoveryImage, Path.Combine(_work, "recovery_a.logical"), overwrite: true);
+        File.Copy(recoveryImage, Path.Combine(_work, "recovery_b.logical"), overwrite: true);
     }
 
     private static async Task<string> AvbVbmetaDigestAsync(string image, CancellationToken cancellationToken)
@@ -1309,6 +1557,7 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         _ = builder.AppendLine("HOMEHARBOR_MODULES_DESCRIPTOR_DIGEST=" + modulesDescriptorDigest);
         _ = builder.AppendLine("HOMEHARBOR_FIRMWARE_DESCRIPTOR_DIGEST=" + firmwareDescriptorDigest);
         _ = builder.AppendLine("HOMEHARBOR_VERSION=" + version);
+        _ = builder.AppendLine(ReleaseSequence.OsReleaseKey + "=" + _releaseSequence.ToString(CultureInfo.InvariantCulture));
         var addonList = AddonList();
         if (!string.IsNullOrWhiteSpace(addonList))
         {
@@ -1434,29 +1683,15 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         _espMounted = true;
         var selector = Path.Combine(_work, "HomeHarborBoot.efi");
         var kernelSelector = Path.Combine(_kernelRoot, "HomeHarborBoot.efi");
-        if (File.Exists(kernelSelector))
+        if (!File.Exists(kernelSelector))
         {
-            File.Copy(kernelSelector, selector, overwrite: true);
-            SetMode(selector, UnixFileModes.Mode644);
+            throw new InvalidOperationException(
+                "kernel OTA is missing the CI-built HomeHarborBoot.efi; the installer never builds or signs boot code locally");
         }
-        else
-        {
-            var root = FindHomeHarborRoot();
-            var builder = Path.Combine(root, "src", "HomeHarbor.ImageBuilder", "HomeHarbor.ImageBuilder.csproj");
-            if (!File.Exists(builder))
-            {
-                throw new InvalidOperationException("kernel OTA does not contain HomeHarborBoot.efi and local EFI loader builder is unavailable");
-            }
+        File.Copy(kernelSelector, selector, overwrite: true);
+        SetMode(selector, UnixFileModes.Mode644);
 
-            await InstallDiskProcess.RunRequiredAsync(
-                "dotnet",
-                ["run", "--project", builder, "--", "build-efi-loader", selector, root],
-                io,
-                cancellationToken: cancellationToken);
-            await SignEfiFileAsync(selector, cancellationToken);
-        }
-
-        await InstallBootSelectorAsync(esp, selector, cancellationToken);
+        InstallBootSelector(esp, selector);
         var fallbackBoot = Path.Combine(_kernelRoot, "BOOTX64.EFI");
         if (File.Exists(fallbackBoot))
         {
@@ -1474,11 +1709,6 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         }
 
         BootState.Initialize(esp, "A", "A", "A");
-        if (SecureBootEnabled())
-        {
-            ValidateSecureBootConfig();
-            await InstallSecureBootEnrollmentAsync(esp, cancellationToken);
-        }
 
         if (_bootMode == "secure-boot-raw-uki")
         {
@@ -1486,109 +1716,12 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         }
     }
 
-    private async Task InstallBootSelectorAsync(string esp, string selector, CancellationToken cancellationToken)
+    private static void InstallBootSelector(string esp, string selector)
     {
         var homeHarborSelector = Path.Combine(esp, "EFI", "HomeHarbor", "HomeHarborBoot.efi");
         var fallbackSelector = Path.Combine(esp, "EFI", "BOOT", "BOOTX64.EFI");
         InstallFile(selector, homeHarborSelector, UnixFileModes.Mode644);
         InstallFile(selector, fallbackSelector, UnixFileModes.Mode644);
-        await SignEfiFileAsync(homeHarborSelector, cancellationToken);
-        await SignEfiFileAsync(fallbackSelector, cancellationToken);
-    }
-
-    private async Task SignEfiFileAsync(string path, CancellationToken cancellationToken)
-    {
-        if (!SecureBootEnabled() || !File.Exists(path))
-        {
-            return;
-        }
-
-        var temp = path + ".signed." + Environment.ProcessId;
-        try
-        {
-            await InstallDiskProcess.RunRequiredAsync(
-                "sbsign",
-                ["--key", RequiredEnvironment("HOMEHARBOR_SECURE_BOOT_KEY"), "--cert", RequiredEnvironment("HOMEHARBOR_SECURE_BOOT_CERT"), "--output", temp, path],
-                io,
-                cancellationToken: cancellationToken);
-            File.Move(temp, path, overwrite: true);
-        }
-        finally
-        {
-            TryDeleteFile(temp);
-        }
-    }
-
-    private async Task InstallSecureBootEnrollmentAsync(string esp, CancellationToken cancellationToken)
-    {
-        if (!SecureBootEnabled())
-        {
-            return;
-        }
-
-        var enrollMode = SecureBootEnrollMode();
-        if (enrollMode == "off")
-        {
-            return;
-        }
-
-        var uuid = (await InstallDiskProcess.CaptureRequiredAsync("systemd-id128", ["new", "--uuid"], cancellationToken)).Trim();
-        var work = Path.Combine(_runtimeDir, "secure-boot-enroll-" + Guid.NewGuid().ToString("N"));
-        _ = Directory.CreateDirectory(work);
-        try
-        {
-            var der = Path.Combine(work, "secure-boot.der");
-            await InstallDiskProcess.RunRequiredAsync(
-                "openssl",
-                ["x509", "-outform", "DER", "-in", RequiredEnvironment("HOMEHARBOR_SECURE_BOOT_CERT"), "-out", der],
-                io,
-                cancellationToken: cancellationToken);
-            foreach (var key in new[] { "PK", "KEK", "db" })
-            {
-                await InstallDiskProcess.RunRequiredAsync(
-                    "sbsiglist",
-                    ["--owner", uuid, "--type", "x509", "--output", Path.Combine(work, key + ".esl"), der],
-                    io,
-                    cancellationToken: cancellationToken);
-            }
-
-            var keysDir = Path.Combine(esp, "loader", "keys", "auto");
-            _ = Directory.CreateDirectory(keysDir);
-            SetMode(keysDir, UnixFileModes.Mode755);
-            const string attr = "NON_VOLATILE,RUNTIME_ACCESS,BOOTSERVICE_ACCESS,TIME_BASED_AUTHENTICATED_WRITE_ACCESS";
-            foreach (var key in new[] { "PK", "KEK", "db" })
-            {
-                await InstallDiskProcess.RunRequiredAsync(
-                    "sbvarsign",
-                    [
-                        "--attr", attr,
-                        "--key", RequiredEnvironment("HOMEHARBOR_SECURE_BOOT_KEY"),
-                        "--cert", RequiredEnvironment("HOMEHARBOR_SECURE_BOOT_CERT"),
-                        "--output", Path.Combine(keysDir, key + ".auth"),
-                        key,
-                        Path.Combine(work, key + ".esl")
-                    ],
-                    io,
-                    cancellationToken: cancellationToken);
-            }
-
-            var loaderConf = Path.Combine(esp, "loader", "loader.conf");
-            _ = Directory.CreateDirectory(Path.GetDirectoryName(loaderConf)!);
-            var existing = File.Exists(loaderConf)
-                ? File.ReadAllLines(loaderConf).Where(line =>
-                    !line.StartsWith("secure-boot-enroll", StringComparison.Ordinal) &&
-                    !line.StartsWith("secure-boot-enroll-action", StringComparison.Ordinal) &&
-                    !line.StartsWith("secure-boot-enroll-timeout-sec", StringComparison.Ordinal)).ToList()
-                : [];
-            existing.Add("secure-boot-enroll " + enrollMode);
-            existing.Add("secure-boot-enroll-action reboot");
-            File.WriteAllLines(loaderConf, existing);
-            SetMode(loaderConf, UnixFileModes.Mode644);
-        }
-        finally
-        {
-            TryDeleteDirectory(work);
-        }
     }
 
     private async Task InstallSecureBootMokAsync(CancellationToken cancellationToken)
@@ -1695,44 +1828,8 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         throw new InvalidOperationException("HomeHarbor Secure Boot public certificate was not found");
     }
 
-    private static void ValidateSecureBootConfig()
-    {
-        var key = Environment.GetEnvironmentVariable("HOMEHARBOR_SECURE_BOOT_KEY");
-        if (string.IsNullOrWhiteSpace(key) || !File.Exists(key))
-        {
-            throw new InvalidOperationException("HOMEHARBOR_SECURE_BOOT_KEY must point to the Secure Boot signing key when HOMEHARBOR_SECURE_BOOT=1");
-        }
-
-        var cert = Environment.GetEnvironmentVariable("HOMEHARBOR_SECURE_BOOT_CERT");
-        if (string.IsNullOrWhiteSpace(cert) || !File.Exists(cert))
-        {
-            throw new InvalidOperationException("HOMEHARBOR_SECURE_BOOT_CERT must point to the Secure Boot signing certificate when HOMEHARBOR_SECURE_BOOT=1");
-        }
-
-        var enrollMode = SecureBootEnrollMode();
-        if (enrollMode is not ("manual" or "force" or "off"))
-        {
-            throw new InvalidOperationException("HOMEHARBOR_SECURE_BOOT_ENROLL must be manual, force, or off; got: " + enrollMode);
-        }
-
-        if (enrollMode != "off")
-        {
-            RequireTools(["openssl", "sbsiglist", "sbvarsign", "systemd-id128"]);
-        }
-    }
-
-    private static bool SecureBootEnabled()
-        => Environment.GetEnvironmentVariable("HOMEHARBOR_SECURE_BOOT") == "1";
-
-    private static string SecureBootEnrollMode()
-        => Environment.GetEnvironmentVariable("HOMEHARBOR_SECURE_BOOT_ENROLL") ?? "manual";
-
     private static string SecureBootMokEnrollMode()
         => Environment.GetEnvironmentVariable("HOMEHARBOR_SECURE_BOOT_MOK_ENROLL") ?? "auto";
-
-    private static string RequiredEnvironment(string name)
-        => Environment.GetEnvironmentVariable(name)
-           ?? throw new InvalidOperationException(name + " is required");
 
     private async Task UnmountEspAsync(CancellationToken cancellationToken)
     {
@@ -1790,37 +1887,19 @@ internal sealed partial class InstallDiskExecutor(InstallDiskOptions options, In
         }
     }
 
-    private static async Task<bool> IsBlockDeviceAsync(string path, CancellationToken cancellationToken)
+    private async Task<bool> IsBlockDeviceAsync(string path, CancellationToken cancellationToken)
     {
-        var result = await InstallDiskProcess.CaptureAsync("test", ["-b", path], cancellationToken);
-        return result.ExitCode == 0;
-    }
-
-    private static async Task<bool> TargetHasMountsAsync(string device, CancellationToken cancellationToken)
-    {
-        var result = await InstallDiskProcess.CaptureAsync("lsblk", ["-nrpo", "MOUNTPOINTS", device], cancellationToken);
-        return result.ExitCode == 0 && result.Output.Split('\n').Any(line => !string.IsNullOrWhiteSpace(line));
-    }
-
-    private static async Task<string?> RootParentDeviceAsync(CancellationToken cancellationToken)
-    {
-        var sourceResult = await InstallDiskProcess.CaptureAsync("findmnt", ["-n", "-o", "SOURCE", "/"], cancellationToken);
-        var source = sourceResult.ExitCode == 0 ? sourceResult.Output.Trim() : string.Empty;
-        if (string.IsNullOrWhiteSpace(source) || !await IsBlockDeviceAsync(source, cancellationToken))
+        var result = await _commandRunner.RunAsync("test", ["-b", path], cancellationToken: cancellationToken);
+        return result.ExitCode switch
         {
-            return null;
-        }
-
-        var parentResult = await InstallDiskProcess.CaptureAsync("lsblk", ["-no", "PKNAME", source], cancellationToken);
-        var parent = parentResult.ExitCode == 0 ? parentResult.Output.Split('\n').FirstOrDefault()?.Trim() : null;
-        if (string.IsNullOrWhiteSpace(parent))
-        {
-            return null;
-        }
-
-        var realResult = await InstallDiskProcess.CaptureAsync("readlink", ["-f", "/dev/" + parent], cancellationToken);
-        return realResult.ExitCode == 0 ? realResult.Output.Trim() : "/dev/" + parent;
+            0 => true,
+            1 => false,
+            _ => throw new InvalidOperationException("failed to determine whether the target is a block device: " + path)
+        };
     }
+
+    private async Task<bool> TargetHasMountsAsync(string device, CancellationToken cancellationToken)
+        => await BlockDeviceSafety.DeviceHasMountsAsync(_commandRunner, device, cancellationToken);
 
     private static string PartitionPath(string device, int index)
         => device + PartitionSuffix(device) + index.ToString(CultureInfo.InvariantCulture);

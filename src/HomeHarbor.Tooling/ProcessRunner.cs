@@ -51,6 +51,23 @@ public sealed class ProcessCommandRunner : ICommandRunner
         {
             using var process = Process.Start(start)
                 ?? throw new InvalidOperationException("Failed to start " + fileName);
+            using var cancellationRegistration = timeout.Token.Register(
+                static state =>
+                {
+                    var runningProcess = (Process)state!;
+                    try
+                    {
+                        if (!runningProcess.HasExited)
+                        {
+                            runningProcess.Kill(entireProcessTree: true);
+                        }
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+                    {
+                        // The process exited concurrently or cannot be killed on this platform.
+                    }
+                },
+                process);
 
             var stdout = ReadPipeAsync(process.StandardOutput, options.StreamOutput ? Console.Out : null, timeout.Token);
             var stderr = ReadPipeAsync(process.StandardError, options.StreamError ? Console.Error : null, timeout.Token);

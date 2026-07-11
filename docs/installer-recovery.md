@@ -37,6 +37,11 @@ HomeHarbor.ImageBuilder system-build <manifest> <version> [repo-root]
 
 A full ISO can carry the full payload. A tiny ISO is better suited to downloading payloads from release/channel metadata.
 
+Before starting Web OOBE, install the public appliance CA from
+`http://homeharbor.local/homeharbor-ca.crt` and verify its SHA-256 fingerprint
+against the physical console. Do not enter the setup code or a password through
+an untrusted browser certificate warning.
+
 ## Boot State
 
 Boot state is managed by `HomeHarbor.Tooling.BootState` and EFI boot variables. Installer and Agent both expose `boot-state` subcommands:
@@ -55,8 +60,10 @@ OTA and recovery transitions should update boot state through these tools instea
 The entry project is `src/HomeHarbor.Recovery`. By default it starts an interactive console:
 
 - `s`: show `homeharbor-fastbootd.service` status.
+- `u`: open a 10-minute physical authorization window and show a one-time session token.
+- `l`: revoke the authorization window and any active fastboot session.
 - `r`: reboot.
-- `n`: set default normal boot to A/A and reboot.
+- `n`: return to the existing healthy default normal-boot slots and reboot.
 - `q`: redraw.
 
 The default state directory is `/var/lib/homeharbor/recovery`.
@@ -74,7 +81,18 @@ Defaults:
 - Listen address: `HOMEHARBOR_FASTBOOTD_LISTEN` or `0.0.0.0`.
 - Port: `HOMEHARBOR_FASTBOOTD_PORT` or `5554`.
 
-The service implements the fastboot TCP handshake and supports `getvar`, `download`, `flash`, `erase`, `set_active`, `reboot`, and `reboot-recovery`.
+The service implements the fastboot TCP handshake and supports `getvar`, `download`, `flash`, `erase`, `set_active`, `reboot`, and `reboot-recovery`. Read-only `getvar` requests remain available while locked. Every destructive command requires both the 10-minute physical authorization window and authentication of that specific TCP session:
+
+1. On the physical recovery console, press `u`, type `UNLOCK`, and copy the token shown once.
+2. On a trusted workstation, start the authenticated loopback proxy and enter the token at its hidden prompt:
+
+   ```bash
+   dotnet run --project src/HomeHarbor.Recovery/HomeHarbor.Recovery.csproj -- --fastboot-auth-proxy <appliance-ip>
+   ```
+
+3. While the proxy stays open, run one stock fastboot operation through it, for example `fastboot -s tcp:127.0.0.1:5555 flash root_a root.img`.
+
+The proxy listens only on loopback and keeps authentication and the stock fastboot operation on the same upstream TCP session. The token is single-use and cannot authorize a later connection. Disconnecting the authenticated session, pressing `l`, issuing a new token, or reaching the expiry revokes authorization. Raw tokens are never written to disk or command logs.
 
 ## VM Validation
 

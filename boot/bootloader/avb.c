@@ -154,6 +154,60 @@ static void sha256_final(SHA256_CONTEXT *ctx, UINT8 digest[SHA256_DIGEST_BYTES])
     }
 }
 
+static void hex_encode(const UINT8 *bytes, UINTN length, char *output) {
+    static const char alphabet[] = "0123456789abcdef";
+    UINTN i;
+
+    for (i = 0; i < length; i++) {
+        output[i * 2U] = alphabet[bytes[i] >> 4];
+        output[i * 2U + 1U] = alphabet[bytes[i] & 0x0fU];
+    }
+    output[length * 2U] = 0;
+}
+
+static int vbmeta_image_size(const UINT8 *image, UINTN image_size, UINTN *verified_size) {
+    UINT64 auth_size;
+    UINT64 aux_size;
+
+    if (!image || !verified_size ||
+        image_size < AVB_VBMETA_HEADER_SIZE ||
+        image[0] != 'A' || image[1] != 'V' || image[2] != 'B' || image[3] != '0') {
+        return 0;
+    }
+
+    auth_size = read_be64(image, 12);
+    aux_size = read_be64(image, 20);
+    if (auth_size > image_size ||
+        aux_size > image_size ||
+        AVB_VBMETA_HEADER_SIZE > image_size - (UINTN)auth_size ||
+        AVB_VBMETA_HEADER_SIZE + (UINTN)auth_size > image_size - (UINTN)aux_size) {
+        return 0;
+    }
+
+    *verified_size = AVB_VBMETA_HEADER_SIZE + (UINTN)auth_size + (UINTN)aux_size;
+    return 1;
+}
+
+static int calculate_vbmeta_digest(
+    const UINT8 *image,
+    UINTN image_size,
+    char output[VBMETA_DIGEST_BUFFER_SIZE]) {
+    UINTN verified_size;
+    UINT8 digest[SHA256_DIGEST_BYTES];
+    SHA256_CONTEXT sha;
+
+    output[0] = 0;
+    if (!vbmeta_image_size(image, image_size, &verified_size)) {
+        return 0;
+    }
+
+    sha256_init(&sha);
+    sha256_update(&sha, image, verified_size);
+    sha256_final(&sha, digest);
+    hex_encode(digest, sizeof(digest), output);
+    return 1;
+}
+
 static int big_cmp(const UINT8 *a, const UINT8 *b, UINTN length) {
     UINTN i;
     for (i = 0; i < length; i++) {
@@ -301,7 +355,7 @@ static int rsa_verify_sha256_pkcs1_v15(
 static int verify_vbmeta_signature(UINT8 *image, UINTN image_size) {
     UINT64 auth_size;
     UINT64 aux_size;
-    UINT64 total_size;
+    UINTN verified_size;
     UINT32 algorithm_type;
     UINT64 hash_offset;
     UINT64 hash_size;
@@ -320,8 +374,7 @@ static int verify_vbmeta_signature(UINT8 *image, UINTN image_size) {
     UINT8 *modulus;
 
     if (HOMEHARBOR_TRUSTED_AVB_PUBLIC_KEY_SIZE == 0U ||
-        image_size < AVB_VBMETA_HEADER_SIZE ||
-        image[0] != 'A' || image[1] != 'V' || image[2] != 'B' || image[3] != '0') {
+        !vbmeta_image_size(image, image_size, &verified_size)) {
         return 0;
     }
 
@@ -335,14 +388,7 @@ static int verify_vbmeta_signature(UINT8 *image, UINTN image_size) {
     public_key_offset = read_be64(image, 64);
     public_key_size = read_be64(image, 72);
 
-    if (auth_size > image_size ||
-        aux_size > image_size ||
-        AVB_VBMETA_HEADER_SIZE > image_size - (UINTN)auth_size ||
-        AVB_VBMETA_HEADER_SIZE + (UINTN)auth_size > image_size - (UINTN)aux_size) {
-        return 0;
-    }
-    total_size = AVB_VBMETA_HEADER_SIZE + auth_size + aux_size;
-    if (total_size > image_size) {
+    if (verified_size != AVB_VBMETA_HEADER_SIZE + (UINTN)auth_size + (UINTN)aux_size) {
         return 0;
     }
 
@@ -494,14 +540,21 @@ static int allow_vbmeta_preflight_bypass(void) {
     print(L"HomeHarborBoot: continuing after vbmeta preflight failure.\r\n");
     return 1;
 }
-void verify_vbmeta_signature_preflight(const CHAR16 *vbmeta_label, int secure_boot_active) {
+int verify_vbmeta_signature_preflight(
+    const CHAR16 *vbmeta_label,
+    int secure_boot_active,
+    char vbmeta_digest[VBMETA_DIGEST_BUFFER_SIZE]) {
     void *buffer = NULL;
     UINTN size = 0;
     EFI_STATUS status;
     int verified = 0;
+    int digest_available = 0;
+
+    vbmeta_digest[0] = 0;
 
     status = read_raw_partition(vbmeta_label, &buffer, &size);
     if (!EFI_ERROR(status) && buffer && size > 0) {
+        digest_available = calculate_vbmeta_digest((UINT8 *)buffer, size, vbmeta_digest);
         verified = verify_vbmeta_signature((UINT8 *)buffer, size);
     }
     if (buffer) {
@@ -509,7 +562,7 @@ void verify_vbmeta_signature_preflight(const CHAR16 *vbmeta_label, int secure_bo
     }
 
     if (verified) {
-        return;
+        return digest_available;
     }
 
     print(L"HomeHarborBoot: vbmeta signature preflight failed\r\n");
@@ -517,4 +570,9 @@ void verify_vbmeta_signature_preflight(const CHAR16 *vbmeta_label, int secure_bo
         halt_boot(L"HomeHarborBoot: refusing to boot with Secure Boot enabled and invalid vbmeta.");
     }
     allow_vbmeta_preflight_bypass();
+    if (!digest_available) {
+        print(L"HomeHarborBoot: refusing to boot without a usable vbmeta digest handoff.\r\n");
+        return 0;
+    }
+    return 1;
 }

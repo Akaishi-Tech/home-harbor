@@ -5,4 +5,17 @@ Wants=homeharbor-api.service
 
 [Service]
 Type=oneshot
+User=homeharbor
+Group=homeharbor
+UMask=0077
 ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent storage-health
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true

@@ -21,7 +21,8 @@ make efi-loader
 make avb-helper
 make init-helper
 make appliance-build
-make system-build
+HOMEHARBOR_RELEASE_SEQUENCE=1234 make system-build
+HOMEHARBOR_RELEASE_SEQUENCE=1234 make iso-build
 make arch-package VERSION=0.1.0-dev
 ```
 
@@ -59,7 +60,8 @@ dotnet test tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj
 ```bash
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0-dev
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-plan system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- release-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- arch-package 0.1.0-dev "$(pwd)"
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-plan system/x86_64/kernel 0.1.0-dev "$(pwd)"
 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-build system/x86_64/kernel 0.1.0-dev generic "$(pwd)"
@@ -97,6 +99,7 @@ HomeHarbor.Agent firstboot
 HomeHarbor.Agent postgres-init
 HomeHarbor.Agent postgres-bootstrap
 HomeHarbor.Agent ensure-caddy-config
+HomeHarbor.Agent display-tls-trust
 HomeHarbor.Agent render-caddyfile
 HomeHarbor.Agent storage-health
 HomeHarbor.Agent ensure-smb-config
@@ -116,6 +119,11 @@ HomeHarbor.Agent super create <mapper-name> <super-device> <logical-partition> [
 HomeHarbor.Agent super remove <mapper-name>
 ```
 
+`ota-apply` expands complete verified partition images in the root-only
+`/homeharbor-data/.homeharbor-ota-work` directory. `--work-dir` may override
+that location for recovery or testing, but the path must be a root-controlled,
+non-symlink directory with enough space for the uncompressed bundle.
+
 ## Recovery
 
 ```bash
@@ -134,6 +142,7 @@ HomeHarbor.Recovery --fastboot-tcp
 | `HOMEHARBOR_RELEASE_PRIVATE_KEY` | Release manifest signing private key |
 | `HOMEHARBOR_RELEASE_PUBLIC_KEY` | Release manifest public key |
 | `HOMEHARBOR_RELEASE_KEY_ID` | Channel-safe release key id |
+| `HOMEHARBOR_RELEASE_SEQUENCE` | Positive, globally increasing release integer; never reset or reuse |
 | `HOMEHARBOR_SECURE_BOOT` | Secure Boot build switch |
 | `HOMEHARBOR_SECURE_BOOT_KEY` | Secure Boot and AVB signing key |
 | `HOMEHARBOR_SECURE_BOOT_CERT` | Secure Boot signing certificate |

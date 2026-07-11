@@ -8,6 +8,7 @@ namespace HomeHarbor.Api.Services;
 
 public sealed partial class ManagedContainerSpecService(IHomeHarborStorageService storage) : IManagedContainerSpecService
 {
+    private const int MaxEnvironmentVariables = 64;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public ContainerDefinition Normalize(Guid familyId, Guid containerId, ContainerDefinitionRequest request)
@@ -52,62 +53,133 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
                 [],
                 []);
 
+    public void EnsurePortsAvailable(
+        ContainerDefinition definition,
+        IEnumerable<ManagedContainerEntity> existingContainers,
+        Guid? excludeContainerId = null)
+    {
+        var requested = definition.Ports
+            .Select(port => (port.HostPort, Protocol: port.Protocol.ToLowerInvariant()))
+            .ToHashSet();
+        if (requested.Count == 0) return;
+
+        foreach (var container in existingContainers)
+        {
+            if (container.DeletedAt is not null || container.Id == excludeContainerId) continue;
+
+            ContainerDefinition existing;
+            try
+            {
+                existing = Deserialize(container.DefinitionJson);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot validate host ports because stored container '{container.Name}' has an invalid definition.",
+                    ex);
+            }
+
+            foreach (var port in existing.Ports)
+            {
+                if (requested.Contains((port.HostPort, port.Protocol.ToLowerInvariant())))
+                {
+                    throw new InvalidOperationException(
+                        $"Host port {port.HostPort}/{port.Protocol.ToLowerInvariant()} is already used by container '{container.Name}'.");
+                }
+            }
+        }
+    }
+
     public string BuildQuadlet(ManagedContainerEntity container)
         => BuildQuadlet(container, Deserialize(container.DefinitionJson));
 
     public string BuildQuadlet(ManagedContainerEntity container, ContainerDefinition definition)
     {
+        var expectedServiceName = "homeharbor-" + container.Id.ToString("N");
+        if (!string.Equals(container.ServiceName, expectedServiceName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Container service identity does not match its id.");
+        }
+
+        var name = NormalizeName(definition.Name);
+        var image = NormalizeImage(definition.Image);
+        var environment = NormalizeEnvironment(definition.Environment);
+        var ports = NormalizePorts(definition.Ports
+            .Select(port => new ContainerPortRequest(port.HostPort, port.TargetPort, port.Protocol))
+            .ToArray());
+        var volumes = NormalizeVolumes(
+            container.FamilyId,
+            container.Id,
+            definition.Volumes
+                .Select(volume => new ContainerVolumeRequest(volume.HostPath, volume.ContainerPath, volume.ReadOnly))
+                .ToArray());
+        var command = NormalizeCommand(definition.Command);
         var familyRoot = NormalizeVolumeHostPath(Path.Combine(storage.DataRoot, "families", container.FamilyId.ToString("N")));
         var appRoot = NormalizeVolumeHostPath(Path.Combine(storage.DataRoot, "apps", container.Id.ToString("N")));
 
         var builder = new StringBuilder();
         _ = builder.AppendLine("[Unit]");
-        _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Description=HomeHarbor container {EscapeSystemdValue(definition.Name)}");
+        _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Description=HomeHarbor container {EscapeSystemdValue(name)}");
         _ = builder.AppendLine("After=network-online.target");
         _ = builder.AppendLine("Wants=network-online.target");
         _ = builder.AppendLine();
         _ = builder.AppendLine("[Container]");
         _ = builder.AppendLine(CultureInfo.InvariantCulture, $"ContainerName={container.ServiceName}");
-        _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Image={definition.Image}");
+        _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Image={image}");
         _ = builder.AppendLine("Pull=missing");
         _ = builder.AppendLine("NoNewPrivileges=true");
+        _ = builder.AppendLine("UserNS=auto");
 
-        foreach (var port in definition.Ports)
+        foreach (var port in ports)
         {
             var suffix = string.Equals(port.Protocol, "udp", StringComparison.OrdinalIgnoreCase) ? "/udp" : string.Empty;
-            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"PublishPort={port.HostPort}:{port.TargetPort}{suffix}");
+            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"PublishPort=127.0.0.1:{port.HostPort}:{port.TargetPort}{suffix}");
         }
 
-        foreach (var item in definition.Environment.OrderBy(p => p.Key, StringComparer.Ordinal))
+        foreach (var item in environment.OrderBy(p => p.Key, StringComparer.Ordinal))
         {
             _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Environment={QuoteSystemd($"{item.Key}={item.Value}")}");
         }
 
-        foreach (var volume in definition.Volumes)
+        foreach (var volume in volumes)
         {
             var hostPath = NormalizeVolumeHostPath(volume.HostPath);
             var containerPath = NormalizeContainerPath(volume.ContainerPath);
             if (!IsInside(hostPath, familyRoot) && !IsInside(hostPath, appRoot))
                 throw new InvalidOperationException("Volume host paths must stay inside this family data root or this container app data root.");
-            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Volume={hostPath}:{containerPath}:{(volume.ReadOnly ? "ro" : "rw")}");
+            if (IsInside(hostPath, familyRoot))
+                throw new InvalidOperationException("Family data volumes are unavailable until per-container read-only filesystem isolation is implemented.");
+            if (!string.Equals(hostPath, appRoot, StringComparison.Ordinal) || volume.ReadOnly)
+                throw new InvalidOperationException("Containers may mount only their private app data root read-write.");
+            _ = builder.AppendLine(
+                CultureInfo.InvariantCulture,
+                $"Volume={QuoteSystemd($"{hostPath}:{containerPath}:{(volume.ReadOnly ? "ro" : "rw,U")}")}");
         }
 
-        if (definition.Command.Count > 0)
+        if (command.Count > 0)
         {
-            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Exec={string.Join(' ', definition.Command.Select(QuoteShellToken))}");
+            _ = builder.AppendLine(CultureInfo.InvariantCulture, $"Exec={string.Join(' ', command.Select(QuoteSystemdArgument))}");
         }
 
         _ = builder.AppendLine();
         _ = builder.AppendLine("[Service]");
         _ = builder.AppendLine("Restart=on-failure");
         _ = builder.AppendLine("RestartSec=5");
+        if (string.Equals(container.DesiredState, "running", StringComparison.Ordinal))
+        {
+            _ = builder.AppendLine();
+            _ = builder.AppendLine("[Install]");
+            _ = builder.AppendLine("WantedBy=default.target");
+        }
         return builder.ToString();
     }
 
     private static string NormalizeName(string? value)
     {
         var name = string.IsNullOrWhiteSpace(value) ? "Custom container" : value.Trim();
-        return name.Length > 96 ? throw new InvalidOperationException("Container name is too long.") : name;
+        if (name.Length > 96) throw new InvalidOperationException("Container name is too long.");
+        if (name.Any(char.IsControl)) throw new InvalidOperationException("Container name cannot contain control characters.");
+        return name;
     }
 
     private static string NormalizeImage(string? value)
@@ -115,26 +187,68 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
         var image = value?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(image)) throw new InvalidOperationException("Image is required.");
         if (image.Length > 512) throw new InvalidOperationException("Image is too long.");
-        if (image.StartsWith('-') || image.Any(char.IsWhiteSpace))
+        if (image.StartsWith('-') || image.Any(char.IsWhiteSpace) || image.Any(char.IsControl))
         {
             throw new InvalidOperationException("Image must be a container reference without whitespace.");
         }
+        if (!ContainerImageDigestRegex().IsMatch(image))
+        {
+            throw new InvalidOperationException(
+                "Image must be an untagged repository reference pinned with @sha256:<64 lowercase hex characters>.");
+        }
+        RefuseTagWithDigest(image);
+        ValidateImageRepository(image[..image.LastIndexOf("@sha256:", StringComparison.Ordinal)]);
 
         return image;
+    }
+
+    private static void ValidateImageRepository(string repository)
+    {
+        if (repository.Length == 0 || repository.StartsWith('/') || repository.EndsWith('/') ||
+            repository.Contains("//", StringComparison.Ordinal) ||
+            repository.Any(character => character is not (>= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '_' or '-' or '/' or ':')))
+        {
+            throw new InvalidOperationException("Image repository contains unsupported characters or path syntax.");
+        }
+
+        var components = repository.Split('/');
+        foreach (var component in components)
+        {
+            var name = component;
+            var colon = component.IndexOf(':');
+            if (colon >= 0)
+            {
+                if (component != components[0] || components.Length < 2 ||
+                    component.LastIndexOf(':') != colon ||
+                    !int.TryParse(component[(colon + 1)..], CultureInfo.InvariantCulture, out var port) ||
+                    port is < 1 or > 65535)
+                {
+                    throw new InvalidOperationException("Image repository may use a numeric registry port only in its first component.");
+                }
+                name = component[..colon];
+            }
+
+            if (name.Length == 0 || !char.IsAsciiLetterOrDigit(name[0]) || !char.IsAsciiLetterOrDigit(name[^1]))
+            {
+                throw new InvalidOperationException("Image repository components must start and end with a lowercase letter or digit.");
+            }
+        }
     }
 
     private static IReadOnlyDictionary<string, string> NormalizeEnvironment(IReadOnlyDictionary<string, string>? environment)
     {
         var result = new SortedDictionary<string, string>(StringComparer.Ordinal);
         if (environment is null) return result;
+        if (environment.Count > MaxEnvironmentVariables)
+            throw new InvalidOperationException($"A container may define at most {MaxEnvironmentVariables} environment variables.");
 
         foreach (var (rawKey, rawValue) in environment)
         {
             var key = rawKey.Trim();
             if (!EnvironmentKeyRegex().IsMatch(key))
                 throw new InvalidOperationException($"Environment variable '{rawKey}' is not allowed.");
-            if (rawValue.Contains('\n', StringComparison.Ordinal) || rawValue.Contains('\r', StringComparison.Ordinal))
-                throw new InvalidOperationException("Environment values cannot contain newlines.");
+            if (rawValue is null || rawValue.Any(char.IsControl))
+                throw new InvalidOperationException("Environment values cannot contain control characters.");
             if (rawValue.Length > 4096) throw new InvalidOperationException("Environment value is too long.");
             result[key] = rawValue;
         }
@@ -170,7 +284,6 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
         IReadOnlyList<ContainerVolumeRequest>? volumes)
     {
         var appRoot = NormalizeVolumeHostPath(Path.Combine(storage.DataRoot, "apps", containerId.ToString("N")));
-        _ = Directory.CreateDirectory(appRoot);
 
         if (volumes is null || volumes.Count == 0)
         {
@@ -192,10 +305,15 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
             var containerPath = NormalizeContainerPath(volume.ContainerPath);
             if (!IsInside(hostPath, familyRoot) && !IsInside(hostPath, appRoot))
                 throw new InvalidOperationException("Volume host paths must stay inside this family data root or this container app data root.");
-            _ = Directory.CreateDirectory(hostPath);
+            if (IsInside(hostPath, familyRoot))
+                throw new InvalidOperationException("Family data volumes are unavailable until per-container read-only filesystem isolation is implemented.");
+            if (!string.Equals(hostPath, appRoot, StringComparison.Ordinal))
+                throw new InvalidOperationException("Containers may mount only their private app data root, not host subdirectories.");
+            if (volume.ReadOnly)
+                throw new InvalidOperationException("The private app data root must be mounted read-write.");
             var createdHostPath = NormalizeVolumeHostPath(hostPath);
-            if (!IsInside(createdHostPath, familyRoot) && !IsInside(createdHostPath, appRoot))
-                throw new InvalidOperationException("Volume host paths must stay inside this family data root or this container app data root.");
+            if (!string.Equals(createdHostPath, appRoot, StringComparison.Ordinal))
+                throw new InvalidOperationException("Container app data root changed while preparing the volume.");
             result.Add(new ContainerVolume(createdHostPath, containerPath, volume.ReadOnly));
         }
 
@@ -211,8 +329,8 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
         foreach (var arg in command)
         {
             if (string.IsNullOrEmpty(arg)) throw new InvalidOperationException("Command arguments cannot be empty.");
-            if (arg.Contains('\n', StringComparison.Ordinal) || arg.Contains('\r', StringComparison.Ordinal))
-                throw new InvalidOperationException("Command arguments cannot contain newlines.");
+            if (arg.Any(char.IsControl))
+                throw new InvalidOperationException("Command arguments cannot contain control characters.");
             if (arg.Length > 512) throw new InvalidOperationException("Command argument is too long.");
             result.Add(arg);
         }
@@ -337,16 +455,38 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
 
 
     private static string EscapeSystemdValue(string value)
-        => value.ReplaceLineEndings(" ").Trim();
+        => value.Replace("%", "%%", StringComparison.Ordinal).Trim();
 
     private static string QuoteSystemd(string value)
-        => "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+        => "\"" + value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("%", "%%", StringComparison.Ordinal) + "\"";
 
-    private static string QuoteShellToken(string value)
-        => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    private static string QuoteSystemdArgument(string value)
+        => "\"" + value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("%", "%%", StringComparison.Ordinal)
+            .Replace("$", "$$", StringComparison.Ordinal) + "\"";
+
+    private static void RefuseTagWithDigest(string image)
+    {
+        var digestSeparator = image.LastIndexOf("@sha256:", StringComparison.Ordinal);
+        var repository = image[..digestSeparator];
+        var lastSlash = repository.LastIndexOf('/');
+        if (repository.LastIndexOf(':') > lastSlash)
+        {
+            throw new InvalidOperationException(
+                "Container image references cannot combine a tag with a digest; use repository@sha256:<digest>.");
+        }
+    }
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentKeyRegex();
+
+    [GeneratedRegex("@sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    private static partial Regex ContainerImageDigestRegex();
 }
 
 public sealed record ContainerDefinition(
