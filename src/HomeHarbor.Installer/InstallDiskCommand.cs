@@ -1358,7 +1358,7 @@ internal sealed partial class InstallDiskExecutor(
 
         ValidateDescriptorForCompletePartitionImage(completeImage, partitionBytes, partitionA, descriptorA);
         ValidateDescriptorForCompletePartitionImage(completeImage, partitionBytes, partitionB, descriptorB);
-        await VerifyCompleteVerityImageAsync(completeImage, label, descriptorA, cancellationToken);
+        await VerifyCompleteVerityImageAsync(completeImage, descriptorA, cancellationToken);
 
         var logicalA = Path.Combine(_work, partitionA + ".logical");
         var logicalB = Path.Combine(_work, partitionB + ".logical");
@@ -1398,7 +1398,6 @@ internal sealed partial class InstallDiskExecutor(
 
     private async Task VerifyCompleteVerityImageAsync(
         string image,
-        string label,
         AvbHashtreeDescriptor descriptor,
         CancellationToken cancellationToken)
     {

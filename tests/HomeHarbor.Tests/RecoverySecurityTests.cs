@@ -1,8 +1,8 @@
 namespace HomeHarbor.Tests;
 
-using HomeHarbor.Tooling;
 using System.Buffers.Binary;
 using System.Text;
+using HomeHarbor.Tooling;
 
 [TestClass]
 [DoNotParallelize]
@@ -258,7 +258,7 @@ public sealed class RecoverySecurityTests
         CollectionAssert.AreEqual(
             Encoding.ASCII.GetBytes("oem auth " + new string('a', 64)),
             output[12..]);
-        await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+        _ = await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
             FastbootAuthenticatedProxy.AuthenticateAsync(
                 new ScriptedDuplexStream(input),
                 Encoding.ASCII.GetBytes(new string('z', 64)),
@@ -318,7 +318,7 @@ public sealed class RecoverySecurityTests
             CancellationToken cancellationToken = default)
         {
             Assert.AreEqual("systemctl", fileName);
-            Arguments = arguments.ToArray();
+            Arguments = [.. arguments];
             return Task.FromResult(new CommandResult(0, string.Empty, string.Empty, fileName));
         }
     }

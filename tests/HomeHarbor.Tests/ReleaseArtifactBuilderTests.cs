@@ -6,7 +6,7 @@ using HomeHarbor.Tooling;
 namespace HomeHarbor.Tests;
 
 [TestClass]
-public sealed class ReleaseArtifactBuilderTests
+public sealed partial class ReleaseArtifactBuilderTests
 {
     [TestMethod]
     public void RequireCompleteLogicalPairArtifact_Accepts_Only_Exact_Identical_AB_Images()
@@ -72,7 +72,7 @@ public sealed class ReleaseArtifactBuilderTests
             "src",
             "HomeHarbor.Tooling",
             "ReleaseArtifactBuilder.cs"));
-        var compact = Regex.Replace(releaseSource, @"\s+", " ");
+        var compact = MyRegex().Replace(releaseSource, " ");
 
         foreach (var (logicalName, payloadName, manifestHash) in new[]
                  {
@@ -129,18 +129,9 @@ public sealed class ReleaseArtifactBuilderTests
             "HomeHarbor.Agent",
             "OtaApplyCommand.cs"));
 
-        Assert.IsTrue(Regex.IsMatch(
-            otaSource,
-            @"WriteCompletePartitionImageAsync\(\s*runner,\s*plan\.RootfsPath,\s*rootDevice,",
-            RegexOptions.CultureInvariant));
-        Assert.IsTrue(Regex.IsMatch(
-            otaSource,
-            @"WriteCompletePartitionImageAsync\(\s*runner,\s*Path\.Combine\(bundleRoot, \""modules\.img\""\),\s*modulesDevice,",
-            RegexOptions.CultureInvariant));
-        Assert.IsTrue(Regex.IsMatch(
-            otaSource,
-            @"WriteCompletePartitionImageAsync\(\s*runner,\s*Path\.Combine\(bundleRoot, \""firmware\.img\""\),\s*firmwareDevice,",
-            RegexOptions.CultureInvariant));
+        Assert.IsTrue(RootPartitionWriteRegex().IsMatch(otaSource));
+        Assert.IsTrue(ModulesPartitionWriteRegex().IsMatch(otaSource));
+        Assert.IsTrue(FirmwarePartitionWriteRegex().IsMatch(otaSource));
         Assert.Contains(
             "new FileInfo(image).Length != deviceSize",
             otaSource);
@@ -269,13 +260,9 @@ public sealed class ReleaseArtifactBuilderTests
     }
 
     [TestMethod]
+    [OSCondition(ConditionMode.Exclude, OperatingSystems.Windows)]
     public async Task DeleteManagedReleaseWorkDirectory_Uses_Constrained_Privileged_Fallback()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var tempDir = CreateTempDirectory();
         try
         {
@@ -313,7 +300,7 @@ public sealed class ReleaseArtifactBuilderTests
             var outside = Path.Combine(tempDir, "outside");
             _ = Directory.CreateDirectory(outside);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _ = await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 ReleaseArtifactBuilder.DeleteManagedReleaseWorkDirectoryAsync(
                     tempDir,
                     outside,
@@ -370,4 +357,22 @@ public sealed class ReleaseArtifactBuilderTests
         }
         throw new DirectoryNotFoundException("Repository root not found.");
     }
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex MyRegex();
+
+    [GeneratedRegex(
+        @"WriteCompletePartitionImageAsync\(\s*runner,\s*plan\.RootfsPath,\s*rootDevice,",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex RootPartitionWriteRegex();
+
+    [GeneratedRegex(
+        @"WriteCompletePartitionImageAsync\(\s*runner,\s*Path\.Combine\(bundleRoot, \""modules\.img\""\),\s*modulesDevice,",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex ModulesPartitionWriteRegex();
+
+    [GeneratedRegex(
+        @"WriteCompletePartitionImageAsync\(\s*runner,\s*Path\.Combine\(bundleRoot, \""firmware\.img\""\),\s*firmwareDevice,",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex FirmwarePartitionWriteRegex();
 }

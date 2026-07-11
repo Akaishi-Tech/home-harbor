@@ -88,13 +88,18 @@ public sealed class BoundedUriFetcherTests
                     allowedFileRoot: root));
 
             var link = Path.Combine(root, "escape.json");
+            string? symlinkUnavailableReason = null;
             try
             {
                 _ = File.CreateSymbolicLink(link, outsidePath);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
             {
-                Assert.Inconclusive("File symlinks are unavailable: " + exception.Message);
+                symlinkUnavailableReason = "File symlinks are unavailable: " + exception.Message;
+            }
+            if (symlinkUnavailableReason is not null)
+            {
+                Assert.Inconclusive(symlinkUnavailableReason);
             }
 
             _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>

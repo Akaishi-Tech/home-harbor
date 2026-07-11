@@ -310,7 +310,7 @@ internal static class RecoveryKernelTreePruner
 
             if (values.Count > 0)
             {
-                dependencies[module] = values.ToArray();
+                dependencies[module] = [.. values];
             }
         }
 

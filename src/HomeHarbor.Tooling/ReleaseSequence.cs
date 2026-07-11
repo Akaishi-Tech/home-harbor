@@ -21,8 +21,8 @@ public static class ReleaseSequence
 
     public static void RequireUpgrade(long target, long current)
     {
-        RequirePositive(target, "target releaseSequence");
-        RequirePositive(current, "current releaseSequence");
+        _ = RequirePositive(target, "target releaseSequence");
+        _ = RequirePositive(current, "current releaseSequence");
         if (target <= current)
         {
             throw new InvalidOperationException(
@@ -32,7 +32,7 @@ public static class ReleaseSequence
 
     public static void RequireComponentUpgrade(long target, long currentComponent, long otherComponent)
     {
-        RequirePositive(target, "target releaseSequence");
+        _ = RequirePositive(target, "target releaseSequence");
         if (currentComponent < 0 || otherComponent < 0)
         {
             throw new InvalidOperationException("trusted current releaseSequence anchors cannot be negative.");
@@ -90,7 +90,7 @@ public static class ReleaseSequence
         long sequence,
         CancellationToken cancellationToken = default)
     {
-        RequirePositive(sequence, "release sequence");
+        _ = RequirePositive(sequence, "release sequence");
         var path = Path.Combine(Path.GetFullPath(rootfs), "usr", "lib", "os-release");
         if (!File.Exists(path) || new FileInfo(path).LinkTarget is not null)
         {

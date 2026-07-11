@@ -33,7 +33,7 @@ public sealed class ReleaseSequenceTests
         try
         {
             var osRelease = Path.Combine(root, "usr", "lib", "os-release");
-            Directory.CreateDirectory(Path.GetDirectoryName(osRelease)!);
+            _ = Directory.CreateDirectory(Path.GetDirectoryName(osRelease)!);
             await File.WriteAllTextAsync(
                 osRelease,
                 "NAME=HomeHarbor\nHOMEHARBOR_RELEASE_SEQUENCE=1\nHOMEHARBOR_RELEASE_SEQUENCE=2\n");
@@ -41,9 +41,8 @@ public sealed class ReleaseSequenceTests
             await ReleaseSequence.StampRootfsOsReleaseAsync(root, 42);
 
             Assert.AreEqual(42, ReleaseSequence.ReadOsRelease(osRelease));
-            Assert.AreEqual(
-                1,
-                File.ReadLines(osRelease).Count(line => line.StartsWith(ReleaseSequence.OsReleaseKey + "=", StringComparison.Ordinal)));
+            _ = Assert.ContainsSingle(
+                line => line.StartsWith(ReleaseSequence.OsReleaseKey + "=", StringComparison.Ordinal), File.ReadLines(osRelease));
         }
         finally
         {
@@ -128,7 +127,7 @@ public sealed class ReleaseSequenceTests
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "homeharbor-release-sequence-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
+        _ = Directory.CreateDirectory(path);
         return path;
     }
 }

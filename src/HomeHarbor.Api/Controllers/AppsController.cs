@@ -207,111 +207,111 @@ public sealed class AppsController(
         await ContainerMutationGate.Instance.WaitAsync(cancellationToken);
         try
         {
-        var now = DateTimeOffset.UtcNow;
-        var app = await db.ManagedApps.FirstOrDefaultAsync(
-            a => a.FamilyId == familyId && a.AppKey == template.AppKey,
-            cancellationToken);
-        if (app is null)
-        {
-            app = new ManagedAppEntity
+            var now = DateTimeOffset.UtcNow;
+            var app = await db.ManagedApps.FirstOrDefaultAsync(
+                a => a.FamilyId == familyId && a.AppKey == template.AppKey,
+                cancellationToken);
+            if (app is null)
             {
-                Id = Guid.NewGuid(),
-                FamilyId = familyId,
-                AppKey = template.AppKey,
-                CreatedAt = now
-            };
-            _ = db.ManagedApps.Add(app);
-        }
-
-        ManagedContainerEntity? container = null;
-        if (app.ContainerId is { } existingContainerId)
-        {
-            container = await db.ManagedContainers.FindAsync([existingContainerId], cancellationToken);
-        }
-
-        if (container is null || container.DeletedAt is not null)
-        {
-            var containerId = Guid.NewGuid();
-            if (template.Manifest.Install is not HomeHarborContainerAppInstall containerInstall)
-            {
-                return BadRequest(new { error = "App manifest does not describe a container install." });
+                app = new ManagedAppEntity
+                {
+                    Id = Guid.NewGuid(),
+                    FamilyId = familyId,
+                    AppKey = template.AppKey,
+                    CreatedAt = now
+                };
+                _ = db.ManagedApps.Add(app);
             }
 
-            var request = new ContainerDefinitionRequest(
-                template.DisplayName,
-                containerInstall.Image,
-                containerInstall.Environment,
-                containerInstall.Ports.Select(port => new ContainerPortRequest(port.HostPort, port.ContainerPort, port.Protocol)).ToArray(),
-                containerInstall.Volumes.Select(volume => new ContainerVolumeRequest(volume.HostPath, volume.ContainerPath, volume.ReadOnly)).ToArray(),
-                containerInstall.Command,
-                null,
-                null,
-                null,
-                null,
-                null);
-            var definition = specs.Normalize(familyId, containerId, request);
-            var activeContainers = await db.ManagedContainers.AsNoTracking()
-                .Where(candidate => candidate.DeletedAt == null)
-                .ToListAsync(cancellationToken);
-            if (activeContainers.Any(candidate => candidate.FamilyId == familyId && candidate.Name == definition.Name))
+            ManagedContainerEntity? container = null;
+            if (app.ContainerId is { } existingContainerId)
             {
-                return Conflict(new { error = "A container with this app name already exists." });
-            }
-            try
-            {
-                specs.EnsurePortsAvailable(definition, activeContainers);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Conflict(new { error = ex.Message });
+                container = await db.ManagedContainers.FindAsync([existingContainerId], cancellationToken);
             }
 
-            container = new ManagedContainerEntity
+            if (container is null || container.DeletedAt is not null)
             {
-                Id = containerId,
-                FamilyId = familyId,
-                Name = definition.Name,
-                Image = definition.Image,
-                DesiredState = "running",
-                RuntimeState = "pending",
-                RequestedAction = "start",
-                ServiceName = $"homeharbor-{containerId:N}",
-                DefinitionJson = specs.Serialize(definition),
-                CreatedAt = now,
-                UpdatedAt = now
-            };
-            _ = db.ManagedContainers.Add(container);
-            app.ContainerId = container.Id;
-        }
-        else
-        {
-            container.DesiredState = "running";
-            container.RuntimeState = "pending";
-            container.RequestedAction = "start";
-            container.LastError = string.Empty;
-            container.UpdatedAt = now;
-        }
+                var containerId = Guid.NewGuid();
+                if (template.Manifest.Install is not HomeHarborContainerAppInstall containerInstall)
+                {
+                    return BadRequest(new { error = "App manifest does not describe a container install." });
+                }
 
-        app.Kind = template.Kind;
-        app.DisplayName = template.DisplayName;
-        app.Image = template.Image;
-        app.DesiredState = "installed";
-        app.RuntimeState = "pending";
-        app.State = app.RuntimeState;
-        app.InstalledVersion = template.Version;
-        app.ActiveVersion = template.Version;
-        app.RequiresReboot = false;
-        app.LastError = string.Empty;
-        app.ManifestJson = JsonSerializer.Serialize(new
-        {
-            hhaf = JsonDocument.Parse(template.ManifestJson).RootElement.Clone(),
-            containerId = container.Id
-        }, JsonOptions);
-        app.UpdatedAt = now;
+                var request = new ContainerDefinitionRequest(
+                    template.DisplayName,
+                    containerInstall.Image,
+                    containerInstall.Environment,
+                    containerInstall.Ports.Select(port => new ContainerPortRequest(port.HostPort, port.ContainerPort, port.Protocol)).ToArray(),
+                    containerInstall.Volumes.Select(volume => new ContainerVolumeRequest(volume.HostPath, volume.ContainerPath, volume.ReadOnly)).ToArray(),
+                    containerInstall.Command,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+                var definition = specs.Normalize(familyId, containerId, request);
+                var activeContainers = await db.ManagedContainers.AsNoTracking()
+                    .Where(candidate => candidate.DeletedAt == null)
+                    .ToListAsync(cancellationToken);
+                if (activeContainers.Any(candidate => candidate.FamilyId == familyId && candidate.Name == definition.Name))
+                {
+                    return Conflict(new { error = "A container with this app name already exists." });
+                }
+                try
+                {
+                    specs.EnsurePortsAvailable(definition, activeContainers);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Conflict(new { error = ex.Message });
+                }
 
-        _ = await db.SaveChangesAsync(cancellationToken);
-        signals.RequestContainerApply();
-        return Ok(AppResponse(app));
+                container = new ManagedContainerEntity
+                {
+                    Id = containerId,
+                    FamilyId = familyId,
+                    Name = definition.Name,
+                    Image = definition.Image,
+                    DesiredState = "running",
+                    RuntimeState = "pending",
+                    RequestedAction = "start",
+                    ServiceName = $"homeharbor-{containerId:N}",
+                    DefinitionJson = specs.Serialize(definition),
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                _ = db.ManagedContainers.Add(container);
+                app.ContainerId = container.Id;
+            }
+            else
+            {
+                container.DesiredState = "running";
+                container.RuntimeState = "pending";
+                container.RequestedAction = "start";
+                container.LastError = string.Empty;
+                container.UpdatedAt = now;
+            }
+
+            app.Kind = template.Kind;
+            app.DisplayName = template.DisplayName;
+            app.Image = template.Image;
+            app.DesiredState = "installed";
+            app.RuntimeState = "pending";
+            app.State = app.RuntimeState;
+            app.InstalledVersion = template.Version;
+            app.ActiveVersion = template.Version;
+            app.RequiresReboot = false;
+            app.LastError = string.Empty;
+            app.ManifestJson = JsonSerializer.Serialize(new
+            {
+                hhaf = JsonDocument.Parse(template.ManifestJson).RootElement.Clone(),
+                containerId = container.Id
+            }, JsonOptions);
+            app.UpdatedAt = now;
+
+            _ = await db.SaveChangesAsync(cancellationToken);
+            signals.RequestContainerApply();
+            return Ok(AppResponse(app));
         }
         finally
         {

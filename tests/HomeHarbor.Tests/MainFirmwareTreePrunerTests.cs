@@ -67,8 +67,8 @@ public sealed class MainFirmwareTreePrunerTests
             Assert.IsFalse(File.Exists(Path.Combine(sourceFirmware, "rtl_bt", "rtl8761bu_fw.bin.zst")));
             Assert.IsFalse(File.Exists(Path.Combine(sourceFirmware, "rtw89", "rtw8852b_fw.bin.zst")));
             Assert.IsFalse(File.Exists(Path.Combine(sourceFirmware, "audio", "dsp.bin.zst")));
-            Assert.IsTrue(result.RemovedEntries > 0);
-            Assert.IsTrue(result.KeptBytes < result.OriginalBytes);
+            Assert.IsGreaterThan(0, result.RemovedEntries);
+            Assert.IsLessThan(result.OriginalBytes, result.KeptBytes);
         }
         finally
         {
@@ -145,7 +145,7 @@ public sealed class MainFirmwareTreePrunerTests
     {
         var path = Path.Combine(firmwareRoot, relativePath);
         _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.CreateSymbolicLink(path, target);
+        _ = File.CreateSymbolicLink(path, target);
     }
 
     private static string CreateTempDirectory()

@@ -73,8 +73,8 @@ public sealed class AgentProgramTests
 
                 Assert.AreEqual(0, exitCode, command);
                 Assert.IsEmpty(runner.Calls, command);
-                Assert.IsTrue(requests[0]?.StartsWith("GET /api/", StringComparison.Ordinal) == true, command);
-                Assert.IsTrue(requests[1]?.StartsWith("GET /api/system/health ", StringComparison.Ordinal) == true, command);
+                Assert.IsTrue(requests[0]?.StartsWith("GET /api/", StringComparison.Ordinal) ?? false, command);
+                Assert.IsTrue(requests[1]?.StartsWith("GET /api/system/health ", StringComparison.Ordinal) ?? false, command);
             }
             finally
             {
@@ -178,7 +178,7 @@ public sealed class AgentProgramTests
         {
             var victim = Directory.CreateDirectory(Path.Combine(tempDir.FullName, "victim"));
             var state = Path.Combine(tempDir.FullName, "samba");
-            Directory.CreateSymbolicLink(state, victim.FullName);
+            _ = Directory.CreateSymbolicLink(state, victim.FullName);
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
                 RootPathGuard.CreateDirectory(Path.Combine(state, "private"), "SMB state directory"));
 
@@ -238,7 +238,7 @@ public sealed class AgentProgramTests
         {
             var victim = Directory.CreateDirectory(Path.Combine(tempDir.FullName, "victim"));
             var workRoot = Path.Combine(tempDir.FullName, "work");
-            Directory.CreateSymbolicLink(workRoot, victim.FullName);
+            _ = Directory.CreateSymbolicLink(workRoot, victim.FullName);
 
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
                 OtaApplyCommand.CreateWorkDirectory(workRoot));
@@ -279,7 +279,7 @@ public sealed class AgentProgramTests
             AgentProgram.EnsureCaddyGroupIsolationAsync(runner, CancellationToken.None));
 
         Assert.Contains(expectedError, error.Message);
-        Assert.IsFalse(runner.Calls.Any(call => call.FileName is "usermod" or "gpasswd"));
+        Assert.DoesNotContain(call => call.FileName is "usermod" or "gpasswd", runner.Calls);
     }
 
     [TestMethod]
@@ -1142,8 +1142,8 @@ public sealed class AgentProgramTests
             var requests = await requestsTask;
 
             Assert.AreEqual(0, exitCode);
-            Assert.IsTrue(requests[0]?.StartsWith("GET /api/smb/reconcile/desired ", StringComparison.Ordinal) == true);
-            Assert.IsTrue(requests[1]?.StartsWith("POST /api/smb/reconcile/result ", StringComparison.Ordinal) == true);
+            Assert.IsTrue(requests[0]?.StartsWith("GET /api/smb/reconcile/desired ", StringComparison.Ordinal) ?? false);
+            Assert.IsTrue(requests[1]?.StartsWith("POST /api/smb/reconcile/result ", StringComparison.Ordinal) ?? false);
             var validations = runner.Calls.Where(call => call.FileName == "testparm").ToArray();
             Assert.HasCount(1, validations);
             var validation = validations.Single();
@@ -1154,7 +1154,7 @@ public sealed class AgentProgramTests
                 validation.Arguments);
             Assert.AreEqual(stateDir, Path.GetDirectoryName(temporaryConfig));
             Assert.IsTrue(Path.GetFileName(temporaryConfig).StartsWith("smb.conf.", StringComparison.Ordinal));
-            Assert.IsFalse(validation.Arguments.Any(argument => argument.StartsWith("--configfile=", StringComparison.Ordinal)));
+            Assert.DoesNotContain(argument => argument.StartsWith("--configfile=", StringComparison.Ordinal), validation.Arguments);
             Assert.IsTrue(File.Exists(conf));
         }
         finally
@@ -1208,8 +1208,8 @@ public sealed class AgentProgramTests
             var requests = await requestsTask;
 
             Assert.AreEqual(HttpStatusCode.InternalServerError, ex.StatusCode);
-            Assert.IsTrue(requests[0]?.StartsWith("GET /api/smb/reconcile/desired ", StringComparison.Ordinal) == true);
-            Assert.IsTrue(requests[1]?.StartsWith("POST /api/smb/reconcile/result ", StringComparison.Ordinal) == true);
+            Assert.IsTrue(requests[0]?.StartsWith("GET /api/smb/reconcile/desired ", StringComparison.Ordinal) ?? false);
+            Assert.IsTrue(requests[1]?.StartsWith("POST /api/smb/reconcile/result ", StringComparison.Ordinal) ?? false);
         }
         finally
         {
@@ -1266,8 +1266,8 @@ public sealed class AgentProgramTests
                     "caddy", "validate", "--config", temporaryConfig
                 },
                 runner.Calls[validationIndex].Arguments);
-            Assert.IsFalse(runner.Calls.Any(call =>
-                call.FileName == "caddy" && call.Arguments.FirstOrDefault() == "validate"));
+            Assert.DoesNotContain(call =>
+                call.FileName == "caddy" && call.Arguments.FirstOrDefault() == "validate", runner.Calls);
             Assert.IsTrue(File.Exists(caddyfile));
         }
         finally
@@ -1703,7 +1703,7 @@ public sealed class AgentProgramTests
             AgentProgram.ValidateSystemAppCommands(tempDir.FullName, ["worker"]);
 
             File.Delete(command);
-            File.CreateSymbolicLink(command, "/bin/sh");
+            _ = File.CreateSymbolicLink(command, "/bin/sh");
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
                 AgentProgram.ValidateSystemAppCommands(tempDir.FullName, ["worker"]));
             Assert.Contains("symbolic link", ex.Message);

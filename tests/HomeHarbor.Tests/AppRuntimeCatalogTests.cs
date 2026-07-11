@@ -1,13 +1,13 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using HomeHarbor.Api.Services;
 using HomeHarbor.Core.Identity;
 using HomeHarbor.Tooling;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace HomeHarbor.Tests;
 
 [TestClass]
-public sealed class AppRuntimeCatalogTests
+public sealed partial class AppRuntimeCatalogTests
 {
     [TestMethod]
     public void List_Does_Not_Include_Zfs_Utils_System_App()
@@ -56,15 +56,12 @@ public sealed class AppRuntimeCatalogTests
     {
         var apps = new AppRuntimeCatalog().List(FamilyRoles.Owner);
 
-        Assert.IsTrue(apps.Count > 0);
+        Assert.IsNotEmpty(apps);
         Assert.IsTrue(apps
             .Where(app => app.Kind == "container")
             .All(app =>
             {
-                if (!System.Text.RegularExpressions.Regex.IsMatch(
-                        app.Image,
-                        "@sha256:[0-9a-f]{64}$",
-                        System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+                if (!MyRegex().IsMatch(app.Image))
                 {
                     return false;
                 }
@@ -104,7 +101,7 @@ public sealed class AppRuntimeCatalogTests
         var exception = Assert.Throws<InvalidOperationException>(
             () => HomeHarborAppManifestVerifier.ParseTrustedAppManifest(document.RootElement));
 
-        StringAssert.Contains(exception.Message, "untagged repository reference");
+        Assert.Contains("untagged repository reference", exception.Message);
     }
 
     [TestMethod]
@@ -267,4 +264,6 @@ public sealed class AppRuntimeCatalogTests
         return JsonDocument.Parse(root.ToJsonString());
     }
 
+    [System.Text.RegularExpressions.GeneratedRegex("@sha256:[0-9a-f]{64}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex MyRegex();
 }

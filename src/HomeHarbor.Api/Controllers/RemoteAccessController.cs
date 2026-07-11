@@ -32,10 +32,13 @@ public sealed class RemoteAccessController(
     [HttpPost("peers")]
     [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult Create([FromBody] CreatePeerRequest request)
-        => StatusCode(StatusCodes.Status501NotImplemented, new
+    {
+        _ = request;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
             error = "WireGuard peer provisioning is unavailable until the appliance server-key and apply pipeline is installed."
         });
+    }
 
     public sealed record CreatePeerRequest(Guid? FamilyId, string? Name, string? Endpoint);
 }

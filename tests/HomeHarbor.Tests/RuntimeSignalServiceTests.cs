@@ -33,7 +33,7 @@ public sealed class RuntimeSignalServiceTests
             Assert.AreEqual("homeharbor-smb001", document.RootElement.GetProperty("unixUser").GetString());
             Assert.IsTrue(document.RootElement.GetProperty("password").GetString()!.StartsWith("password-", StringComparison.Ordinal));
             AssertOwnerOnly(path);
-            Assert.AreEqual(0, Directory.EnumerateFiles(credentials, "*.tmp", SearchOption.TopDirectoryOnly).Count());
+            Assert.IsEmpty(Directory.EnumerateFiles(credentials, "*.tmp", SearchOption.TopDirectoryOnly));
         }
         finally
         {
@@ -96,8 +96,8 @@ public sealed class RuntimeSignalServiceTests
                 AssertOwnerOnly(file);
             }
 
-            Assert.AreEqual(4, Directory.EnumerateFiles(requests, "*.request").Count());
-            Assert.AreEqual(0, Directory.EnumerateFiles(requests, "*.tmp").Count());
+            Assert.HasCount(4, Directory.EnumerateFiles(requests, "*.request"));
+            Assert.IsEmpty(Directory.EnumerateFiles(requests, "*.tmp"));
         }
         finally
         {

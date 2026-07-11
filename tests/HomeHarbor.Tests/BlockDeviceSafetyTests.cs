@@ -154,6 +154,6 @@ public sealed class BlockDeviceSafetyTests
             IEnumerable<string> arguments,
             CommandRunOptions? options = null,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(handler(fileName, arguments.ToArray()));
+            => Task.FromResult(handler(fileName, [.. arguments]));
     }
 }

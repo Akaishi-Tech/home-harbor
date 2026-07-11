@@ -76,8 +76,8 @@ public sealed class SensitiveControllerAuthorizationTests
         var attributes = controller.GetCustomAttributes<AuthorizeAttribute>()
             .Concat(method.GetCustomAttributes<AuthorizeAttribute>());
 
-        Assert.IsTrue(
-            attributes.Any(attribute => attribute.Policy == policy),
+        Assert.Contains(
+            attribute => attribute.Policy == policy, attributes,
             $"{controller.Name}.{action} must require {policy}.");
     }
 }

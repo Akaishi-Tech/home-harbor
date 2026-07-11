@@ -75,10 +75,13 @@ public sealed class BackupsController(HomeHarborDbContext db, IFamilyResolver fa
     [HttpPost("targets/{id:guid}/verify")]
     [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult VerifyTarget(Guid id)
-        => StatusCode(StatusCodes.Status501NotImplemented, new
+    {
+        _ = id;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
             error = "Backup verification is unavailable because no privileged backup runner is installed."
         });
+    }
 
     [HttpGet("jobs")]
     public async Task<IActionResult> Jobs([FromQuery] Guid? familyId, CancellationToken cancellationToken)
@@ -110,18 +113,24 @@ public sealed class BackupsController(HomeHarborDbContext db, IFamilyResolver fa
     [HttpPost("run")]
     [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult Run([FromBody] RunBackupRequest request)
-        => StatusCode(StatusCodes.Status501NotImplemented, new
+    {
+        _ = request;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
             error = "Backup execution is unavailable because no privileged backup runner is installed."
         });
+    }
 
     [HttpPost("one-click")]
     [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult OneClick([FromBody] OneClickBackupRequest request)
-        => StatusCode(StatusCodes.Status501NotImplemented, new
+    {
+        _ = request;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
             error = "One-click backup is unavailable because no privileged backup runner is installed."
         });
+    }
 
     public sealed record CreateBackupTargetRequest(Guid? FamilyId, string? Name, string RepositoryUri);
     public sealed record RunBackupRequest(Guid BackupTargetId);

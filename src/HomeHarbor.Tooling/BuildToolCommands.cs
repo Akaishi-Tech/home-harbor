@@ -266,12 +266,7 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         var matchingRoot = allowedRoots
             .Select(Path.GetFullPath)
             .FirstOrDefault(root => SecurityGuards.IsInsideDirectory(fullPath, root) &&
-                !string.Equals(fullPath, root, StringComparison.Ordinal));
-        if (matchingRoot is null)
-        {
-            throw new InvalidOperationException(label + " must be a child of a managed .work or artifacts directory: " + fullPath);
-        }
-
+                !string.Equals(fullPath, root, StringComparison.Ordinal)) ?? throw new InvalidOperationException(label + " must be a child of a managed .work or artifacts directory: " + fullPath);
         var current = fullPath;
         while (SecurityGuards.IsInsideDirectory(current, matchingRoot))
         {

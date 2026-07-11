@@ -104,9 +104,9 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                     var legacyKernelFields = new List<string>
                     {
                         "bootHash",
-                        "bootMode"
+                        "bootMode",
+                        "bootloaderHash"
                     };
-                    legacyKernelFields.Add("bootloaderHash");
                     legacyKernelFields.AddRange(
                     [
                         "channel",
@@ -140,9 +140,9 @@ public sealed class OtaManifestVerifier(ICommandRunner? runner = null)
                 var oldKernelFields = new List<string>
                 {
                     "bootHash",
-                    "bootMode"
+                    "bootMode",
+                    "bootloaderHash"
                 };
-                oldKernelFields.Add("bootloaderHash");
                 oldKernelFields.AddRange(
                 [
                     "channel",

@@ -2,8 +2,8 @@ using HomeHarbor.Api.Auth;
 using HomeHarbor.Api.Data;
 using HomeHarbor.Api.Services;
 using HomeHarbor.Core.Storage;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace HomeHarbor.Api.Controllers;

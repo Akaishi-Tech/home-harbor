@@ -74,7 +74,7 @@ public sealed class StoragePathPolicyTests
         using var fixture = StorageFixture.Create();
         var outside = Path.Combine(fixture.DataRoot, "outside");
         _ = Directory.CreateDirectory(outside);
-        Directory.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "escape"), outside);
+        _ = Directory.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "escape"), outside);
 
         var exception = Assert.ThrowsExactly<InvalidOperationException>(() =>
             fixture.Storage.Resolve(fixture.FamilyId, StorageArea.Files, "/escape/secret.txt"));
@@ -88,7 +88,7 @@ public sealed class StoragePathPolicyTests
         using var fixture = StorageFixture.Create();
         var outside = Path.Combine(fixture.DataRoot, "outside");
         _ = Directory.CreateDirectory(outside);
-        Directory.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "escape"), outside);
+        _ = Directory.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "escape"), outside);
         await using var input = new MemoryStream("secret"u8.ToArray());
 
         _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => fixture.Storage.WriteFileAsync(
@@ -107,7 +107,7 @@ public sealed class StoragePathPolicyTests
         using var fixture = StorageFixture.Create();
         var outside = Path.Combine(fixture.DataRoot, "outside.txt");
         File.WriteAllText(outside, "keep");
-        File.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "outside.txt"), outside);
+        _ = File.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "outside.txt"), outside);
 
         _ = Assert.ThrowsExactly<InvalidOperationException>(() => fixture.Storage.Delete(
             fixture.FamilyId,
@@ -125,7 +125,7 @@ public sealed class StoragePathPolicyTests
         _ = Directory.CreateDirectory(source);
         var outside = Path.Combine(fixture.DataRoot, "outside.txt");
         File.WriteAllText(outside, "outside");
-        File.CreateSymbolicLink(Path.Combine(source, "linked.txt"), outside);
+        _ = File.CreateSymbolicLink(Path.Combine(source, "linked.txt"), outside);
 
         _ = Assert.ThrowsExactly<InvalidOperationException>(() => fixture.Storage.Copy(
             fixture.FamilyId,
@@ -145,7 +145,7 @@ public sealed class StoragePathPolicyTests
         File.WriteAllText(Path.Combine(fixture.FilesRoot, "regular.txt"), "regular");
         var outside = Path.Combine(fixture.DataRoot, "outside.txt");
         File.WriteAllText(outside, "outside");
-        File.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "linked.txt"), outside);
+        _ = File.CreateSymbolicLink(Path.Combine(fixture.FilesRoot, "linked.txt"), outside);
 
         var files = fixture.Storage.EnumerateFiles(fixture.FamilyId, StorageArea.Files);
 

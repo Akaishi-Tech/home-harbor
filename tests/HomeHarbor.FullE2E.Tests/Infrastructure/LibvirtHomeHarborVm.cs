@@ -21,7 +21,6 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
     private readonly string _connect;
     private readonly bool _keepVm;
     private readonly bool _deleteDiskOnDispose;
-    private readonly Uri _apiBaseUri = new("https://homeharbor.local");
     private X509Certificate2? _rootCa;
 
     private LibvirtHomeHarborVm(
@@ -56,7 +55,7 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
     public string IpAddress { get; private set; } = string.Empty;
     public string SetupBootstrapCode { get; private set; } = string.Empty;
     public string RootCaFingerprint { get; private set; } = string.Empty;
-    public Uri ApiBaseUri => _apiBaseUri;
+    public Uri ApiBaseUri { get; } = new("https://homeharbor.local");
     public Uri ProxyBaseUri => ApiBaseUri;
 
     public static async Task<string> InstallFromIsoAsync(
@@ -592,7 +591,7 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
             using var leaf = X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
             using var chain = new X509Chain();
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
+            _ = chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
             chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
             return chain.Build(leaf);
@@ -616,7 +615,7 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
                     "cat /var/lib/homeharbor/setup/bootstrap-code",
                     TimeSpan.FromSeconds(10),
                     cancellationToken)).Trim();
-                if (Regex.IsMatch(code, "^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$", RegexOptions.CultureInvariant))
+                if (MyRegex().IsMatch(code))
                 {
                     return code;
                 }
@@ -840,4 +839,6 @@ internal sealed partial class LibvirtHomeHarborVm : IAsyncDisposable
 
     [GeneratedRegex(@"(?<ip>(?:\d{1,3}\.){3}\d{1,3})(?:/\d{1,2})?")]
     private static partial Regex Ipv4WithOptionalCidrRegex();
+    [GeneratedRegex("^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$", RegexOptions.CultureInvariant)]
+    private static partial Regex MyRegex();
 }

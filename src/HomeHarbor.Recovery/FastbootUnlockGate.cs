@@ -226,7 +226,6 @@ internal sealed class FastbootUnlockGate(string path, TimeProvider? timeProvider
 
     private bool TryReadCurrentState(bool deleteInvalid, out UnlockState state, out TimeSpan remaining)
     {
-        state = default;
         remaining = TimeSpan.Zero;
         if (!TryReadState(out state))
         {

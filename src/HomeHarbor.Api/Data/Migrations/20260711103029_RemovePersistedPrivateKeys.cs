@@ -1,41 +1,40 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace HomeHarbor.Api.Data.Migrations
+namespace HomeHarbor.Api.Data.Migrations;
+
+/// <inheritdoc />
+public partial class RemovePersistedPrivateKeys : Migration
 {
     /// <inheritdoc />
-    public partial class RemovePersistedPrivateKeys : Migration
+    protected override void Up(MigrationBuilder migrationBuilder)
     {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropColumn(
-                name: "PrivateKey",
-                table: "WireGuardPeers");
+        _ = migrationBuilder.DropColumn(
+            name: "PrivateKey",
+            table: "WireGuardPeers");
 
-            migrationBuilder.DropColumn(
-                name: "PrivateKeyPem",
-                table: "Certificates");
-        }
+        _ = migrationBuilder.DropColumn(
+            name: "PrivateKeyPem",
+            table: "Certificates");
+    }
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.AddColumn<string>(
-                name: "PrivateKey",
-                table: "WireGuardPeers",
-                type: "character varying(128)",
-                maxLength: 128,
-                nullable: false,
-                defaultValue: "");
+    /// <inheritdoc />
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        _ = migrationBuilder.AddColumn<string>(
+            name: "PrivateKey",
+            table: "WireGuardPeers",
+            type: "character varying(128)",
+            maxLength: 128,
+            nullable: false,
+            defaultValue: "");
 
-            migrationBuilder.AddColumn<string>(
-                name: "PrivateKeyPem",
-                table: "Certificates",
-                type: "text",
-                nullable: false,
-                defaultValue: "");
-        }
+        _ = migrationBuilder.AddColumn<string>(
+            name: "PrivateKeyPem",
+            table: "Certificates",
+            type: "text",
+            nullable: false,
+            defaultValue: "");
     }
 }

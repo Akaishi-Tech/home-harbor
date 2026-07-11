@@ -2,8 +2,8 @@ using System.Globalization;
 using HomeHarbor.Api.Auth;
 using HomeHarbor.Api.Data;
 using HomeHarbor.Api.Services;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 

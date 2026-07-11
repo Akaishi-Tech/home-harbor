@@ -40,10 +40,13 @@ public sealed class RecoveryController(HomeHarborDbContext db, IFamilyResolver f
     [HttpPost("drills")]
     [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult Start([FromBody] StartRecoveryDrillRequest request)
-        => StatusCode(StatusCodes.Status501NotImplemented, new
+    {
+        _ = request;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
             error = "Recovery drills are unavailable because no isolated restore runner is installed."
         });
+    }
 
     public sealed record StartRecoveryDrillRequest(Guid? FamilyId, Guid? BackupTargetId);
 }

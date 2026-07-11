@@ -476,7 +476,7 @@ internal sealed class FastbootTcpServer
                 }
                 finally
                 {
-                    SessionGate.Release();
+                    _ = SessionGate.Release();
                 }
             }, CancellationToken.None);
         }

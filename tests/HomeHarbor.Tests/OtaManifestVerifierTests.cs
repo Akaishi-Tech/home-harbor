@@ -81,7 +81,7 @@ public sealed class OtaManifestVerifierTests
         var error = Assert.ThrowsExactly<InvalidOperationException>(
             () => OtaManifestVerifier.CanonicalPayload(doc.RootElement));
 
-        StringAssert.Contains(error.Message, "releaseSequence");
+        Assert.Contains("releaseSequence", error.Message);
     }
 
     [TestMethod]

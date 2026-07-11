@@ -33,10 +33,13 @@ public sealed class NetworkingController(
     [HttpPost("certificates/self-signed")]
     [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]
     public IActionResult CreateSelfSigned([FromBody] CreateCertificateRequest request)
-        => StatusCode(StatusCodes.Status501NotImplemented, new
+    {
+        _ = request;
+        return StatusCode(StatusCodes.Status501NotImplemented, new
         {
             error = "Certificate provisioning is unavailable until private keys can be stored outside the database and activated by the reverse proxy."
         });
+    }
 
     [HttpGet("proxy/routes")]
     [Authorize(Policy = AuthorizationPolicies.FamilyAdmin)]

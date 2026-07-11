@@ -140,7 +140,7 @@ public sealed class OtaBootSelectorTests
             var boot = Directory.CreateDirectory(Path.Combine(esp, "EFI", "BOOT")).FullName;
             var selector = WritePayload(root, "selector.efi", "selector");
             var external = WritePayload(root, "external.efi", "external");
-            File.CreateSymbolicLink(Path.Combine(homeHarbor, "HomeHarborBoot.efi"), external);
+            _ = File.CreateSymbolicLink(Path.Combine(homeHarbor, "HomeHarborBoot.efi"), external);
 
             var symlink = Assert.ThrowsExactly<InvalidOperationException>(() =>
                 OtaEspBootAssetInstaller.ValidateKernelAssets(
@@ -183,7 +183,7 @@ public sealed class OtaBootSelectorTests
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "homeharbor-ota-esp-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
+        _ = Directory.CreateDirectory(path);
         return path;
     }
 
@@ -221,7 +221,7 @@ public sealed class OtaBootSelectorTests
             CommandRunOptions? options = null,
             CancellationToken cancellationToken = default)
         {
-            Calls.Add(new Call(fileName, arguments.ToArray()));
+            Calls.Add(new Call(fileName, [.. arguments]));
             return Task.FromResult(new CommandResult(0, string.Empty, string.Empty, fileName));
         }
     }

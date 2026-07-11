@@ -218,27 +218,27 @@ public sealed class SetupController(
 
             return Ok(new
             {
-            family = new { family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt },
-            device = new { device.Id, device.DisplayName, device.Kind },
-            owner = new { owner.Id, owner.DisplayName, owner.Role },
-            auth = new
-            {
-                accessToken = jwtTokens.IssueUserAccessToken(session, owner, family, tokenId),
-                tokenType = "Bearer",
-                session.ExpiresAt,
-                member = new { owner.Id, owner.DisplayName, owner.Role },
-                family = new { family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt }
-            },
-            recoveryCode,
-            webDav = new { token.Username, token = plaintext, token.Scope },
-            encryption = new
-            {
-                mode = "vault-client-encryption-only",
-                filesAndPhotos = "server-readable; protected by appliance storage encryption at rest",
-                localStorage = "default",
-                atRest = "appliance-data-luks2",
-                keyHint
-            }
+                family = new { family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt },
+                device = new { device.Id, device.DisplayName, device.Kind },
+                owner = new { owner.Id, owner.DisplayName, owner.Role },
+                auth = new
+                {
+                    accessToken = jwtTokens.IssueUserAccessToken(session, owner, family, tokenId),
+                    tokenType = "Bearer",
+                    session.ExpiresAt,
+                    member = new { owner.Id, owner.DisplayName, owner.Role },
+                    family = new { family.Id, family.Name, family.OwnerDisplayName, family.CreatedAt }
+                },
+                recoveryCode,
+                webDav = new { token.Username, token = plaintext, token.Scope },
+                encryption = new
+                {
+                    mode = "vault-client-encryption-only",
+                    filesAndPhotos = "server-readable; protected by appliance storage encryption at rest",
+                    localStorage = "default",
+                    atRest = "appliance-data-luks2",
+                    keyHint
+                }
             });
         }
         finally
@@ -284,8 +284,8 @@ public sealed class SetupController(
             ("ownerDisplayName", request.OwnerDisplayName),
             ("deviceName", request.DeviceName)
         ];
-        var oversized = names.FirstOrDefault(item => item.Value?.Trim().Length > 96);
-        fieldName = oversized.Name ?? string.Empty;
+        var (Name, Value) = names.FirstOrDefault(item => item.Value?.Trim().Length > 96);
+        fieldName = Name ?? string.Empty;
         return fieldName.Length > 0;
     }
 

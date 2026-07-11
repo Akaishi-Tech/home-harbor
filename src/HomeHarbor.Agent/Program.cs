@@ -1314,7 +1314,7 @@ internal static partial class AgentProgram
                 _ = Directory.CreateDirectory(options.StateDir);
                 if (!options.DryRun)
                 {
-                    await OtaCommitAsync(
+                    _ = await OtaCommitAsync(
                         new OtaCommitOptions(options.OtaStateDir, options.Esp, options.BootEnv, options.RunDir),
                         runner,
                         cancellationToken);

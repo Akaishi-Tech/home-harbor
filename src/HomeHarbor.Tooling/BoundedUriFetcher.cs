@@ -191,7 +191,7 @@ public static class BoundedUriFetcher
                 continue;
             }
 
-            response.EnsureSuccessStatusCode();
+            _ = response.EnsureSuccessStatusCode();
             if (response.Content.Headers.ContentLength is { } contentLength &&
                 (contentLength < 0 || contentLength > maxBytes))
             {

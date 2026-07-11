@@ -217,8 +217,7 @@ public sealed class SystemAppPayloadBuilderTests
                 SystemAppPayloadExtractor.ExtractTarGzAsync(archive, destination));
 
             Assert.AreEqual("keep", await File.ReadAllTextAsync(existing));
-            Assert.IsFalse(Directory.EnumerateFileSystemEntries(tempDir)
-                .Any(path => Path.GetFileName(path).Contains(".extract-", StringComparison.Ordinal)));
+            Assert.DoesNotContain(path => Path.GetFileName(path).Contains(".extract-", StringComparison.Ordinal), Directory.EnumerateFileSystemEntries(tempDir));
         }
         finally
         {
