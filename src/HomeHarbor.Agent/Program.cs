@@ -554,6 +554,7 @@ internal static partial class AgentProgram
     private static async Task<int> EnsureSmbConfigAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var state = Env.String("HOMEHARBOR_SMB_STATE_DIR", "/var/lib/homeharbor/samba");
+        var logDir = Env.String("HOMEHARBOR_SMB_LOG_DIR", "/var/log/samba");
         var conf = RootPathGuard.RequireChildPath(
             Env.String("HOMEHARBOR_SMB_CONF", Path.Combine(state, "smb.conf")),
             state,
@@ -564,10 +565,10 @@ internal static partial class AgentProgram
             await EnsureDirAsync(runner, dir, 0750, null, null, cancellationToken);
         }
 
-        await EnsureDirAsync(runner, "/var/log/samba", 0755, null, null, cancellationToken);
+        await EnsureDirAsync(runner, logDir, 0755, null, null, cancellationToken);
         await RestoreconPathsAsync(
             runner,
-            stateDirectories.Concat(["/var/log/samba"]).Concat(SmbSecretPaths(state)),
+            stateDirectories.Concat([logDir]).Concat(SmbSecretPaths(state)),
             cancellationToken);
         if (File.Exists(conf) && new FileInfo(conf).Length > 0)
         {
@@ -583,6 +584,7 @@ internal static partial class AgentProgram
     private static async Task<int> ApplySmbAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var state = Env.String("HOMEHARBOR_SMB_STATE_DIR", "/var/lib/homeharbor/samba");
+        var logDir = Env.String("HOMEHARBOR_SMB_LOG_DIR", "/var/log/samba");
         var conf = RootPathGuard.RequireChildPath(
             Env.String("HOMEHARBOR_SMB_CONF", Path.Combine(state, "smb.conf")),
             state,
@@ -616,11 +618,11 @@ internal static partial class AgentProgram
             }
 
             await EnsureDirAsync(runner, credentialDir, 0700, null, null, cancellationToken);
-            await EnsureDirAsync(runner, "/var/log/samba", 0755, null, null, cancellationToken);
+            await EnsureDirAsync(runner, logDir, 0755, null, null, cancellationToken);
             await RestoreconPathsAsync(
                 runner,
                 stateDirectories
-                    .Concat([credentialDir, "/var/log/samba"])
+                    .Concat([credentialDir, logDir])
                     .Concat(SmbSecretPaths(state)),
                 cancellationToken);
         }

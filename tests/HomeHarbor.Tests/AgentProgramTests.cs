@@ -1165,6 +1165,7 @@ public sealed class AgentProgramTests
         var tempDir = Path.Combine(Path.GetTempPath(), "homeharbor-agent-" + Guid.NewGuid().ToString("N"));
         var stateDir = Path.Combine(tempDir, "samba");
         var credentialDir = Path.Combine(tempDir, "credentials");
+        var logDir = Path.Combine(tempDir, "log", "samba");
         var conf = Path.Combine(stateDir, "smb.conf");
         var desiredFile = Path.Combine(tempDir, "desired-smb.json");
         var dataRoot = Path.Combine(tempDir, "data");
@@ -1197,6 +1198,7 @@ public sealed class AgentProgramTests
                 ("HOMEHARBOR_SMB_STATE_DIR", stateDir),
                 ("HOMEHARBOR_SMB_CONF", conf),
                 ("HOMEHARBOR_SMB_CREDENTIAL_DIR", credentialDir),
+                ("HOMEHARBOR_SMB_LOG_DIR", logDir),
                 ("HOMEHARBOR_SMB_DESIRED_FILE", desiredFile),
                 ("HOMEHARBOR_SMB_DATA_ROOT", dataRoot),
                 ("HOMEHARBOR_API_URL", $"http://127.0.0.1:{endpoint.Port}"),
@@ -1221,6 +1223,10 @@ public sealed class AgentProgramTests
             Assert.IsTrue(Path.GetFileName(temporaryConfig).StartsWith("smb.conf.", StringComparison.Ordinal));
             Assert.DoesNotContain(argument => argument.StartsWith("--configfile=", StringComparison.Ordinal), validation.Arguments);
             Assert.IsTrue(File.Exists(conf));
+            Assert.IsTrue(Directory.Exists(logDir));
+            Assert.DoesNotContain(
+                call => call.Arguments.Contains("/var/log/samba", StringComparer.Ordinal),
+                runner.Calls);
         }
         finally
         {
@@ -1237,6 +1243,7 @@ public sealed class AgentProgramTests
         var tempDir = Directory.CreateTempSubdirectory("homeharbor-smb-result-retry-");
         var stateDir = Path.Combine(tempDir.FullName, "samba");
         var credentialDir = Path.Combine(tempDir.FullName, "credentials");
+        var logDir = Path.Combine(tempDir.FullName, "log", "samba");
         var desiredFile = Path.Combine(tempDir.FullName, "desired-smb.json");
         var dataRoot = Path.Combine(tempDir.FullName, "data");
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -1262,6 +1269,7 @@ public sealed class AgentProgramTests
                 ("HOMEHARBOR_SMB_STATE_DIR", stateDir),
                 ("HOMEHARBOR_SMB_CONF", Path.Combine(stateDir, "smb.conf")),
                 ("HOMEHARBOR_SMB_CREDENTIAL_DIR", credentialDir),
+                ("HOMEHARBOR_SMB_LOG_DIR", logDir),
                 ("HOMEHARBOR_SMB_DESIRED_FILE", desiredFile),
                 ("HOMEHARBOR_SMB_DATA_ROOT", dataRoot),
                 ("HOMEHARBOR_API_URL", $"http://127.0.0.1:{endpoint.Port}"),
