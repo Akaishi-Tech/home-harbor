@@ -12,7 +12,7 @@ internal static partial class ImageBuilderProgram
         command.Arguments.Add(repoRootArgument);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            await new BuildToolCommands(parseResult.GetValue(repoRootArgument)!)
+            _ = await new BuildToolCommands(parseResult.GetValue(repoRootArgument)!)
                 .ArchPackageAsync(parseResult.GetValue(versionArgument)!, cancellationToken);
             return 0;
         });

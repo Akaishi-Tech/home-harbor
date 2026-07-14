@@ -1,10 +1,10 @@
-using HomeHarbor.Tooling;
 using System.Text.RegularExpressions;
+using HomeHarbor.Tooling;
 
 namespace HomeHarbor.Tests;
 
 [TestClass]
-public sealed class SelinuxBuildTests
+public sealed partial class SelinuxBuildTests
 {
     [TestMethod]
     public void Default_Package_Plan_Covers_Every_Maintained_Recipe_Without_A_Binary_Hardened_Repository()
@@ -18,7 +18,7 @@ public sealed class SelinuxBuildTests
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.IsTrue(recipeDirectories.SetEquals(plan.Recipes.Keys));
-        Assert.AreEqual(plan.Recipes.Count, plan.BuildOrder.Distinct(StringComparer.Ordinal).Count());
+        Assert.HasCount(plan.Recipes.Count, plan.BuildOrder.Distinct(StringComparer.Ordinal));
         Assert.AreEqual("e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71", plan.UpstreamRevision);
 
         foreach (var recipe in plan.Recipes.Values)
@@ -55,7 +55,7 @@ public sealed class SelinuxBuildTests
         Assert.Contains("sym_setfilecon_raw(\"/\", HOMEHARBOR_ROOT_CONTEXT)", patch);
         Assert.Contains("sym_getfilecon_raw(\"/\", &verified)", patch);
         Assert.Contains("streq_ptr(verified, HOMEHARBOR_ROOT_CONTEXT)", patch);
-        Assert.IsGreaterThanOrEqualTo(2, Regex.Count(patch, "return -ENOTRECOVERABLE;", RegexOptions.CultureInvariant));
+        Assert.IsGreaterThanOrEqualTo(2, PolicyLoadRollbackFailureRegex().Count(patch));
         Assert.Contains("return log_struct_errno(LOG_EMERG", patch);
         Assert.DoesNotContain("mac_selinux_init()", patch, StringComparison.Ordinal);
         var policyLoadIndex = patch.IndexOf("sym_selinux_init_load_policy", StringComparison.Ordinal);
@@ -363,7 +363,7 @@ public sealed class SelinuxBuildTests
             RootlessBuildExecutor.ClearPacstrapPackageCache(temp.FullName);
 
             Assert.IsTrue(Directory.Exists(cache));
-            Assert.IsFalse(Directory.EnumerateFileSystemEntries(cache).Any());
+            Assert.IsEmpty(Directory.EnumerateFileSystemEntries(cache));
         }
         finally
         {
@@ -539,7 +539,7 @@ public sealed class SelinuxBuildTests
         Assert.Contains(
             "../util-linux/tests/run.sh --show-diff --exclude=fincore/count",
             pkgbuild);
-        Assert.AreEqual(1, Regex.Count(pkgbuild, "--exclude=", RegexOptions.CultureInvariant));
+        Assert.AreEqual(1, UtilLinuxExcludedTestArgumentRegex().Count(pkgbuild));
         Assert.DoesNotContain("--nocheck", pkgbuild, StringComparison.Ordinal);
         Assert.DoesNotContain("|| true", pkgbuild, StringComparison.Ordinal);
     }
@@ -795,28 +795,16 @@ public sealed class SelinuxBuildTests
             "SystemImageBuilder.cs"));
         Assert.AreEqual(
             2,
-            Regex.Count(
-                imageBuilder,
-                "\\\"/usr/lib/systemd/system/homeharbor-selinux-cgroup-relabel\\.service\\\"",
-                RegexOptions.CultureInvariant));
+            SystemImageBuilderCgroupRelabelUnitPathRegex().Count(imageBuilder));
         Assert.AreEqual(
             2,
-            Regex.Count(
-                imageBuilder,
-                "\\\"/usr/lib/systemd/system/sysinit\\.target\\.requires/homeharbor-selinux-cgroup-relabel\\.service\\\"",
-                RegexOptions.CultureInvariant));
+            SystemImageBuilderCgroupRelabelRequirementPathRegex().Count(imageBuilder));
         Assert.AreEqual(
             2,
-            Regex.Count(
-                imageBuilder,
-                "\\\"/usr/lib/systemd/system/homeharbor-selinux-ready\\.target\\\"",
-                RegexOptions.CultureInvariant));
+            SystemImageBuilderSelinuxReadyTargetPathRegex().Count(imageBuilder));
         Assert.AreEqual(
             2,
-            Regex.Count(
-                imageBuilder,
-                "\\\"/usr/lib/systemd/system/sysinit\\.target\\.requires/homeharbor-selinux-ready\\.target\\\"",
-                RegexOptions.CultureInvariant));
+            SystemImageBuilderSelinuxReadyRequirementPathRegex().Count(imageBuilder));
 
         foreach (var serviceName in new[]
         {
@@ -850,7 +838,7 @@ public sealed class SelinuxBuildTests
         Assert.Contains("[\"selinux-relabel\", \"managed\"]", agent);
         Assert.Contains("[\"selinux-relabel\", \"data\"]", agent);
         Assert.Contains("[root, activeRoot, stagedRoot, versionsRoot]", agent);
-        Assert.AreEqual(2, Regex.Count(agent, @"RestoreconTreeAsync\("));
+        Assert.AreEqual(2, RestoreconTreeAsyncCallRegex().Count(agent));
         Assert.Contains("await RestoreconPathsAsync(runner, [directory, path], cancellationToken);", agent);
         Assert.DoesNotContain("RestoreconTreeAsync(runner, \"/var", agent, StringComparison.Ordinal);
         Assert.DoesNotContain("RestoreconTreeAsync(runner, \"/homeharbor-data", agent, StringComparison.Ordinal);
@@ -912,7 +900,7 @@ public sealed class SelinuxBuildTests
                 () => SelinuxRuntimeReadiness.RequireRoot(temp.FullName));
 
             var symlinkTarget = Directory.CreateDirectory(Path.Combine(temp.FullName, "symbolic-target"));
-            Directory.CreateSymbolicLink(requiredPath, symlinkTarget.FullName);
+            _ = Directory.CreateSymbolicLink(requiredPath, symlinkTarget.FullName);
             _ = Assert.ThrowsExactly<InvalidOperationException>(
                 () => SelinuxRuntimeReadiness.RequireRoot(temp.FullName));
         }
@@ -1005,10 +993,7 @@ public sealed class SelinuxBuildTests
             SelinuxRuntimeReadiness.RecoveryDirectories);
 
         var pkgbuild = File.ReadAllText(Path.Combine(root, "packaging", "arch", "PKGBUILD"));
-        var recoveryPackage = Regex.Match(
-            pkgbuild,
-            @"^package_homeharbor-recovery\(\) \{(?<body>.*?)^\}",
-            RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        var recoveryPackage = RecoveryPackageFunctionRegex().Match(pkgbuild);
         Assert.IsTrue(recoveryPackage.Success);
         Assert.Contains("install -dm750 \"${pkgdir}/homeharbor-data\"", recoveryPackage.Groups["body"].Value);
 
@@ -1025,7 +1010,7 @@ public sealed class SelinuxBuildTests
     {
         var root = RepositoryRoot();
         var tmpfiles = File.ReadAllLines(Path.Combine(root, "packaging", "arch", "homeharbor.tmpfiles"));
-        Assert.IsFalse(tmpfiles.Any(line => line.StartsWith("d /homeharbor-data", StringComparison.Ordinal)));
+        Assert.DoesNotContain(line => line.StartsWith("d /homeharbor-data", StringComparison.Ordinal), tmpfiles);
         Assert.Contains(
             "d /var/lib/homeharbor-containers/.cache/containers 0750 homeharbor-containers homeharbor-containers -",
             tmpfiles);
@@ -1387,7 +1372,7 @@ public sealed class SelinuxBuildTests
             Assert.Contains(runtimeDirectory, contexts);
         }
 
-        Assert.AreEqual(4, Regex.Count(contexts, @"/run/homeharbor[^\r\n]*-d gen_context\(system_u:object_r:var_run_t,s0\)"));
+        Assert.AreEqual(4, RuntimeDirectoryGenContextRegex().Count(contexts));
         Assert.Contains("/run/systemd/io\\.systemd\\.Login", contexts);
         Assert.Contains("systemd_logind_runtime_t", contexts);
         Assert.Contains("/sys/fs/cgroup/memory\\.pressure", contexts);
@@ -1460,10 +1445,8 @@ public sealed class SelinuxBuildTests
             policy);
         Assert.Contains("allow staff_systemd_t homeharbor_t:dbus send_msg;", policy);
         Assert.Contains("allow staff_dbusd_t staff_systemd_t:system status;", policy);
-        var staffDbusSystemPermissions = Regex.Matches(
-                policy,
-                @"(?m)^\s*allow\s+staff_dbusd_t\s+staff_systemd_t\s*:\s*system\s+(?<permissions>\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)\s*;",
-                RegexOptions.CultureInvariant)
+        var staffDbusSystemPermissions = StaffDbusSystemPermissionAllowRuleRegex()
+            .Matches(policy)
             .Cast<Match>()
             .SelectMany(match => match.Groups["permissions"].Value
                 .Trim('{', '}')
@@ -1479,20 +1462,14 @@ public sealed class SelinuxBuildTests
             new[] { "allow podman_user_conmon_t podman_user_t:process noatsecure;" },
             policy.Split('\n')
                 .Select(line => line.Trim())
-                .Where(line => Regex.IsMatch(line, @"\bnoatsecure\b", RegexOptions.CultureInvariant))
+                .Where(line => NoAtSecurePermissionRegex().IsMatch(line))
                 .ToArray());
         Assert.Contains("systemd_user_send_systemd_notify(staff, podman_user_t)", policy);
         Assert.DoesNotContain("kernel_request_load_module(podman_user_t)", policy, StringComparison.Ordinal);
         Assert.DoesNotContain("kernel_load_module(podman_user_t)", policy, StringComparison.Ordinal);
         Assert.DoesNotContain("init_dbus_chat(podman_user_t)", policy, StringComparison.Ordinal);
-        Assert.IsFalse(Regex.IsMatch(
-            policy,
-            @"(?m)^\s*allow\s+podman_user_t\s+kernel_t\s*:\s*system\s+(?:\{[^}]*\b(?:module_request|module_load)\b[^}]*\}|(?:module_request|module_load))\s*;",
-            RegexOptions.CultureInvariant));
-        Assert.IsFalse(Regex.IsMatch(
-            policy,
-            @"(?m)^\s*allow\s+podman_user_t\s+init_t\s*:\s*dbus\s+(?:\{[^}]*\bsend_msg\b[^}]*\}|send_msg)\s*;",
-            RegexOptions.CultureInvariant));
+        Assert.IsFalse(PodmanKernelModulePermissionAllowRuleRegex().IsMatch(policy));
+        Assert.IsFalse(PodmanInitDbusSendMessageAllowRuleRegex().IsMatch(policy));
         Assert.Contains("allow staff_systemd_t container_user_runtime_t:dir { getattr search };", policy);
         Assert.Contains("init_reboot_system(homeharbor_t)", policy);
         Assert.DoesNotContain("init_admin(homeharbor_t)", policy, StringComparison.Ordinal);
@@ -1992,7 +1969,7 @@ public sealed class SelinuxBuildTests
         File.Delete(fixture.Paths.PersistentMarker);
         var target = Path.Combine(fixture.Root.FullName, "marker-target");
         File.WriteAllText(target, string.Empty);
-        File.CreateSymbolicLink(fixture.Paths.PersistentMarker, target);
+        _ = File.CreateSymbolicLink(fixture.Paths.PersistentMarker, target);
         var rejected = new SelinuxRelabelRecordingRunner();
         _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             SelinuxRelabelCoordinator.RelabelPersistentAsync(
@@ -2020,8 +1997,8 @@ public sealed class SelinuxBuildTests
                 requireMountPoint: false,
                 CancellationToken.None));
         Assert.IsTrue(File.Exists(fixture.Paths.DataMarker));
-        Assert.IsTrue(failing.Calls.Any(call =>
-            call.Arguments.SequenceEqual([fixture.Paths.DataMarker], StringComparer.Ordinal)));
+        Assert.Contains(call =>
+            call.Arguments.SequenceEqual([fixture.Paths.DataMarker], StringComparer.Ordinal), failing.Calls);
 
         var retry = new SelinuxRelabelRecordingRunner();
         Assert.IsFalse(await SelinuxRelabelCoordinator.RelabelDataAsync(
@@ -2029,9 +2006,9 @@ public sealed class SelinuxBuildTests
             fixture.Paths,
             requireMountPoint: false,
             CancellationToken.None));
-        Assert.IsFalse(retry.Calls.Any(call => call.Arguments.Contains("-Rx", StringComparer.Ordinal)));
-        Assert.IsTrue(retry.Calls.Any(call =>
-            call.Arguments.SequenceEqual([fixture.Paths.DataMarker], StringComparer.Ordinal)));
+        Assert.DoesNotContain(call => call.Arguments.Contains("-Rx", StringComparer.Ordinal), retry.Calls);
+        Assert.Contains(call =>
+            call.Arguments.SequenceEqual([fixture.Paths.DataMarker], StringComparer.Ordinal), retry.Calls);
     }
 
     [TestMethod]
@@ -2056,9 +2033,8 @@ public sealed class SelinuxBuildTests
         Assert.HasCount(2, runner.Calls);
         CollectionAssert.AreEqual(new[] { first }, runner.Calls[0].Arguments);
         CollectionAssert.AreEqual(new[] { second }, runner.Calls[1].Arguments);
-        Assert.IsFalse(runner.Calls
-            .SelectMany(call => call.Arguments)
-            .Any(argument => argument.StartsWith("-R", StringComparison.Ordinal)));
+        Assert.DoesNotContain(argument => argument.StartsWith("-R", StringComparison.Ordinal), runner.Calls
+            .SelectMany(call => call.Arguments));
 
         var missingOptional = Path.Combine(fixture.Root.FullName, "optional-linger");
         var optional = new SelinuxRelabelRecordingRunner();
@@ -2074,7 +2050,7 @@ public sealed class SelinuxBuildTests
         CollectionAssert.AreEqual(new[] { first }, optional.Calls[0].Arguments);
 
         var link = Path.Combine(fixture.Root.FullName, "managed-link");
-        Directory.CreateSymbolicLink(link, first);
+        _ = Directory.CreateSymbolicLink(link, first);
         var rejected = new SelinuxRelabelRecordingRunner();
         _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             SelinuxRelabelCoordinator.RelabelManagedPathsAsync(
@@ -2090,8 +2066,8 @@ public sealed class SelinuxBuildTests
     {
         foreach (var requirement in SelinuxRuntimeReadiness.SystemDirectories)
         {
-            Assert.IsTrue(SelinuxRelabelCoordinator.SystemManagedPaths.Any(path =>
-                path.Required && string.Equals(path.Path, requirement.Path, StringComparison.Ordinal)));
+            Assert.Contains(path =>
+                path.Required && string.Equals(path.Path, requirement.Path, StringComparison.Ordinal), SelinuxRelabelCoordinator.SystemManagedPaths);
         }
 
         foreach (var optional in new[]
@@ -2103,8 +2079,8 @@ public sealed class SelinuxBuildTests
             "/var/lib/systemd/linger/homeharbor-containers"
         })
         {
-            Assert.IsTrue(SelinuxRelabelCoordinator.SystemManagedPaths.Any(path =>
-                !path.Required && string.Equals(path.Path, optional, StringComparison.Ordinal)));
+            Assert.Contains(path =>
+                !path.Required && string.Equals(path.Path, optional, StringComparison.Ordinal), SelinuxRelabelCoordinator.SystemManagedPaths);
         }
     }
 
@@ -2203,10 +2179,7 @@ public sealed class SelinuxBuildTests
             "^package_" + Regex.Escape(packageName) + @"\(\) \{(?<body>.*?)^\}",
             RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.CultureInvariant);
         Assert.IsTrue(function.Success, "package function not found: " + packageName);
-        var depends = Regex.Match(
-            function.Groups["body"].Value,
-            @"^  depends=\((?<items>.*?)^  \)",
-            RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        var depends = PackageDependsArrayRegex().Match(function.Groups["body"].Value);
         Assert.IsTrue(depends.Success, "depends array not found: " + packageName);
         var items = depends.Groups["items"].Value
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -2215,11 +2188,11 @@ public sealed class SelinuxBuildTests
 
         foreach (var dependency in required)
         {
-            Assert.IsTrue(items.Contains(dependency), $"{packageName} must depend on {dependency}");
+            Assert.Contains(dependency, items, $"{packageName} must depend on {dependency}");
         }
         foreach (var dependency in forbidden)
         {
-            Assert.IsFalse(items.Contains(dependency), $"{packageName} must not depend on generic {dependency}");
+            Assert.DoesNotContain(dependency, items, $"{packageName} must not depend on generic {dependency}");
         }
     }
 
@@ -2357,17 +2330,12 @@ public sealed class SelinuxBuildTests
 
     private sealed record SelinuxRelabelCall(string FileName, string[] Arguments);
 
-    private sealed class SelinuxRelabelRecordingRunner : ICommandRunner
+    private sealed class SelinuxRelabelRecordingRunner(
+        Func<string, string[], CommandRunOptions?, Task<CommandResult>>? handler = null) : ICommandRunner
     {
-        private readonly Func<string, string[], CommandRunOptions?, Task<CommandResult>>? _handler;
+        private readonly Func<string, string[], CommandRunOptions?, Task<CommandResult>>? _handler = handler;
         private readonly List<SelinuxRelabelCall> _calls = [];
-        private readonly object _gate = new();
-
-        public SelinuxRelabelRecordingRunner(
-            Func<string, string[], CommandRunOptions?, Task<CommandResult>>? handler = null)
-        {
-            _handler = handler;
-        }
+        private readonly Lock _gate = new();
 
         public IReadOnlyList<SelinuxRelabelCall> Calls
         {
@@ -2413,4 +2381,56 @@ public sealed class SelinuxBuildTests
 
         throw new DirectoryNotFoundException("Repository root not found.");
     }
+
+    [GeneratedRegex("return -ENOTRECOVERABLE;", RegexOptions.CultureInvariant)]
+    private static partial Regex PolicyLoadRollbackFailureRegex();
+
+    [GeneratedRegex("--exclude=", RegexOptions.CultureInvariant)]
+    private static partial Regex UtilLinuxExcludedTestArgumentRegex();
+
+    [GeneratedRegex("\\\"/usr/lib/systemd/system/homeharbor-selinux-cgroup-relabel\\.service\\\"", RegexOptions.CultureInvariant)]
+    private static partial Regex SystemImageBuilderCgroupRelabelUnitPathRegex();
+
+    [GeneratedRegex("\\\"/usr/lib/systemd/system/sysinit\\.target\\.requires/homeharbor-selinux-cgroup-relabel\\.service\\\"", RegexOptions.CultureInvariant)]
+    private static partial Regex SystemImageBuilderCgroupRelabelRequirementPathRegex();
+
+    [GeneratedRegex("\\\"/usr/lib/systemd/system/homeharbor-selinux-ready\\.target\\\"", RegexOptions.CultureInvariant)]
+    private static partial Regex SystemImageBuilderSelinuxReadyTargetPathRegex();
+
+    [GeneratedRegex("\\\"/usr/lib/systemd/system/sysinit\\.target\\.requires/homeharbor-selinux-ready\\.target\\\"", RegexOptions.CultureInvariant)]
+    private static partial Regex SystemImageBuilderSelinuxReadyRequirementPathRegex();
+
+    [GeneratedRegex(@"RestoreconTreeAsync\(")]
+    private static partial Regex RestoreconTreeAsyncCallRegex();
+
+    [GeneratedRegex(
+        @"^package_homeharbor-recovery\(\) \{(?<body>.*?)^\}",
+        RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex RecoveryPackageFunctionRegex();
+
+    [GeneratedRegex(@"/run/homeharbor[^\r\n]*-d gen_context\(system_u:object_r:var_run_t,s0\)")]
+    private static partial Regex RuntimeDirectoryGenContextRegex();
+
+    [GeneratedRegex(
+        @"(?m)^\s*allow\s+staff_dbusd_t\s+staff_systemd_t\s*:\s*system\s+(?<permissions>\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)\s*;",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex StaffDbusSystemPermissionAllowRuleRegex();
+
+    [GeneratedRegex(@"\bnoatsecure\b", RegexOptions.CultureInvariant)]
+    private static partial Regex NoAtSecurePermissionRegex();
+
+    [GeneratedRegex(
+        @"(?m)^\s*allow\s+podman_user_t\s+kernel_t\s*:\s*system\s+(?:\{[^}]*\b(?:module_request|module_load)\b[^}]*\}|(?:module_request|module_load))\s*;",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex PodmanKernelModulePermissionAllowRuleRegex();
+
+    [GeneratedRegex(
+        @"(?m)^\s*allow\s+podman_user_t\s+init_t\s*:\s*dbus\s+(?:\{[^}]*\bsend_msg\b[^}]*\}|send_msg)\s*;",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex PodmanInitDbusSendMessageAllowRuleRegex();
+
+    [GeneratedRegex(
+        @"^  depends=\((?<items>.*?)^  \)",
+        RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex PackageDependsArrayRegex();
 }

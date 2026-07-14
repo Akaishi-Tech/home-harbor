@@ -647,7 +647,7 @@ public static partial class SelinuxRelabelCoordinator
         catch
         {
             handle?.Dispose();
-            processLock.Release();
+            _ = processLock.Release();
             throw;
         }
     }
@@ -929,7 +929,7 @@ public static partial class SelinuxRelabelCoordinator
             _disposed = true;
             _ = NativeMethods.Flock(descriptor, NativeMethods.LockUnlock);
             handle.Dispose();
-            processLock.Release();
+            _ = processLock.Release();
         }
 
         public ValueTask DisposeAsync()
@@ -982,16 +982,16 @@ public static partial class SelinuxRelabelCoordinator
             uint mask,
             nint buffer);
 
-        [DllImport("libc", EntryPoint = "flock", SetLastError = true)]
-        internal static extern int Flock(int descriptor, int operation);
+        [LibraryImport("libc", EntryPoint = "flock", SetLastError = true)]
+        internal static partial int Flock(int descriptor, int operation);
 
-        [DllImport("libc", EntryPoint = "fchmod", SetLastError = true)]
-        internal static extern int Fchmod(int descriptor, uint mode);
+        [LibraryImport("libc", EntryPoint = "fchmod", SetLastError = true)]
+        internal static partial int Fchmod(int descriptor, uint mode);
 
-        [DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
-        internal static extern int Fsync(int descriptor);
+        [LibraryImport("libc", EntryPoint = "fsync", SetLastError = true)]
+        internal static partial int Fsync(int descriptor);
 
-        [DllImport("libc", EntryPoint = "close", SetLastError = true)]
-        internal static extern int Close(int descriptor);
+        [LibraryImport("libc", EntryPoint = "close", SetLastError = true)]
+        internal static partial int Close(int descriptor);
     }
 }

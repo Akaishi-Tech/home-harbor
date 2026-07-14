@@ -54,7 +54,7 @@ public static class SelinuxPolicyStoreSynchronizer
             digestFile,
             UnixFileMode.UserRead | UnixFileMode.UserWrite |
             UnixFileMode.GroupRead | UnixFileMode.OtherRead);
-        RequireValidSeed(destination);
+        _ = RequireValidSeed(destination);
 
         Directory.Delete(source, recursive: true);
         return digest;
@@ -118,7 +118,6 @@ public static class SelinuxPolicyStoreSynchronizer
             if (!replacementPrepared)
             {
                 beforeStoreReplacement?.Invoke(expectedDigest);
-                replacementPrepared = true;
             }
 
             Directory.Move(destination, backup);
@@ -131,7 +130,6 @@ public static class SelinuxPolicyStoreSynchronizer
         else if (!replacementPrepared)
         {
             beforeStoreReplacement?.Invoke(expectedDigest);
-            replacementPrepared = true;
             storeReplaced = true;
         }
 

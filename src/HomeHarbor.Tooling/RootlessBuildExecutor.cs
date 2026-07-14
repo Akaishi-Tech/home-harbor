@@ -253,7 +253,7 @@ public sealed class RootlessBuildExecutor(ICommandRunner runner)
         var temporary = destination + ".homeharbor-" + Guid.NewGuid().ToString("N");
         try
         {
-            File.CreateSymbolicLink(temporary, SystemdResolvedTarget);
+            _ = File.CreateSymbolicLink(temporary, SystemdResolvedTarget);
             File.Move(temporary, destination, overwrite: true);
         }
         finally

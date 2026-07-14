@@ -733,11 +733,11 @@ internal static partial class AgentProgram
     private static async Task<int> ApplyContainersAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
         var dryRun = Env.Flag("HOMEHARBOR_DRY_RUN");
-        var runtime = ResolveContainerRuntimePaths(dryRun);
-        var user = runtime.User;
-        var home = runtime.Home;
-        var quadletDir = runtime.QuadletDirectory;
-        var podmanConfigHome = runtime.PodmanConfigHome;
+        var (User, Home, QuadletDirectory, PodmanConfigHome) = ResolveContainerRuntimePaths(dryRun);
+        var user = User;
+        var home = Home;
+        var quadletDir = QuadletDirectory;
+        var podmanConfigHome = PodmanConfigHome;
         var dataRoot = Env.String("HOMEHARBOR_CONTAINER_DATA_ROOT", "/homeharbor-data");
         RefuseReadOnlyRootfsPath(quadletDir, "Quadlet directory");
 

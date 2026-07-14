@@ -37,14 +37,11 @@ internal static class KernelConfigValidator
 
         var image = await File.ReadAllBytesAsync(kernelImage, cancellationToken);
         var config = ExtractEmbeddedConfig(image);
-        if (config is null)
-        {
-            config = await ExtractFromZstdPayloadAsync(
+        config ??= await ExtractFromZstdPayloadAsync(
                 image,
                 workDirectory,
                 runner,
                 cancellationToken);
-        }
 
         if (config is null)
         {

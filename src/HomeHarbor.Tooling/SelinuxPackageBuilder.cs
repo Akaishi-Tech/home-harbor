@@ -102,7 +102,7 @@ public sealed class SelinuxPackageBuilder(
                     makepkgArguments.Add("--nocheck");
                 }
 
-                await RunMakepkgAsBuilderAsync(
+                _ = await RunMakepkgAsBuilderAsync(
                     buildRoot,
                     recipe,
                     makepkgArguments,

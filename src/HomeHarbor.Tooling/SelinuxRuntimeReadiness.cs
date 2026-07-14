@@ -76,20 +76,13 @@ public static partial class SelinuxRuntimeReadiness
         RequireEnforcing(UnderRoot(fullRoot, EnforcePath));
         var identities = IdentityMaps.Load(fullRoot);
 
-        IReadOnlyList<RequiredDirectory> requirements;
-        if (File.Exists(UnderRoot(fullRoot, "/usr/lib/homeharbor/api/HomeHarbor.Api")))
-        {
-            requirements = SystemDirectories;
-        }
-        else if (File.Exists(UnderRoot(fullRoot, "/usr/lib/homeharbor/recovery/HomeHarbor.Recovery")))
-        {
-            requirements = RecoveryDirectories;
-        }
-        else
-        {
-            throw new InvalidOperationException(
-                "could not identify the HomeHarbor system or recovery SELinux readiness profile");
-        }
+        IReadOnlyList<RequiredDirectory> requirements =
+            File.Exists(UnderRoot(fullRoot, "/usr/lib/homeharbor/api/HomeHarbor.Api"))
+                ? SystemDirectories
+                : File.Exists(UnderRoot(fullRoot, "/usr/lib/homeharbor/recovery/HomeHarbor.Recovery"))
+                    ? RecoveryDirectories
+                    : throw new InvalidOperationException(
+                        "could not identify the HomeHarbor system or recovery SELinux readiness profile");
 
         foreach (var requirement in requirements)
         {

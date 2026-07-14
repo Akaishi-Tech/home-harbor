@@ -65,9 +65,9 @@ public sealed class AgentProgramTests
                 .ToArray();
             Assert.HasCount(1, restoreconCalls);
             CollectionAssert.AreEqual(new[] { parent, data }, restoreconCalls[0].Arguments);
-            Assert.IsFalse(runner.Calls.Any(call =>
-                call.Arguments.Any(argument => argument.StartsWith("-R", StringComparison.Ordinal))));
-            Assert.IsFalse(runner.Calls.Any(call => call.FileName == "setpriv"));
+            Assert.DoesNotContain(call =>
+                call.Arguments.Any(argument => argument.StartsWith("-R", StringComparison.Ordinal)), runner.Calls);
+            Assert.DoesNotContain(call => call.FileName == "setpriv", runner.Calls);
         }
         finally
         {
@@ -1523,11 +1523,11 @@ public sealed class AgentProgramTests
             ("HOMEHARBOR_CONTAINER_HOME", home),
             ("HOMEHARBOR_QUADLET_DIR", quadletDirectory));
 
-        var production = AgentProgram.ResolveContainerRuntimePaths(dryRun: false);
-        Assert.AreEqual("homeharbor-containers", production.User);
-        Assert.AreEqual(ContainerRuntimePaths.DefaultHome, production.Home);
-        Assert.AreEqual(ContainerRuntimePaths.RootManagedQuadletDirectory, production.QuadletDirectory);
-        Assert.AreEqual(ContainerRuntimePaths.PodmanConfigHome, production.PodmanConfigHome);
+        var (User, Home, QuadletDirectory, PodmanConfigHome) = AgentProgram.ResolveContainerRuntimePaths(dryRun: false);
+        Assert.AreEqual("homeharbor-containers", User);
+        Assert.AreEqual(ContainerRuntimePaths.DefaultHome, Home);
+        Assert.AreEqual(ContainerRuntimePaths.RootManagedQuadletDirectory, QuadletDirectory);
+        Assert.AreEqual(ContainerRuntimePaths.PodmanConfigHome, PodmanConfigHome);
 
         var dryRun = AgentProgram.ResolveContainerRuntimePaths(dryRun: true);
         Assert.AreEqual("test-containers", dryRun.User);
