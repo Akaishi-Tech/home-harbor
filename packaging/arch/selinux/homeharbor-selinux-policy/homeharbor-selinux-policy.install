@@ -1,0 +1,27 @@
+_homeharbor_policy_store=refpolicy-arch
+_homeharbor_policy_module=/usr/share/selinux/refpolicy-arch/homeharbor.pp
+
+_homeharbor_install_policy() {
+  if [[ ! -d "/etc/selinux/${_homeharbor_policy_store}" ]]; then
+    echo 'HomeHarbor SELinux policy store is not initialized; module installation deferred.'
+    return 0
+  fi
+
+  /usr/bin/semodule --noreload \
+    -s "${_homeharbor_policy_store}" \
+    -i "${_homeharbor_policy_module}"
+}
+
+post_install() {
+  _homeharbor_install_policy
+}
+
+post_upgrade() {
+  _homeharbor_install_policy
+}
+
+pre_remove() {
+  if [[ -d "/etc/selinux/${_homeharbor_policy_store}" ]]; then
+    /usr/bin/semodule --noreload -s "${_homeharbor_policy_store}" -r homeharbor || true
+  fi
+}

@@ -1,0 +1,49 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71.
+# The Arch policy source is pinned and checksum-verified; no third-party binary package is used.
+
+pkgname=selinux-refpolicy-arch
+_policyname=refpolicy-arch
+_commit=ecab6fc7bb576c45f93520b6f43b589d3730d5ab
+pkgver=20250923
+pkgrel=4
+pkgdesc="Modular SELinux reference policy with Arch Linux adaptations"
+arch=(any)
+url="https://github.com/archlinuxhardened/selinux-policy-arch"
+license=(GPL-2.0-only)
+groups=(selinux)
+makedepends=(checkpolicy python semodule-utils)
+depends=(policycoreutils semodule-utils)
+install=selinux-refpolicy-arch.install
+source=(
+  "selinux-policy-arch-${_commit}.tar.gz::https://github.com/archlinuxhardened/selinux-policy-arch/archive/${_commit}.tar.gz"
+  config
+  seusers
+)
+sha256sums=(
+  5d33d1e94466ca38f3418464a3f48d21f62ba0fed0b6da1c300d34a27658fdcc
+  bfb7aab30ab4c6429be5dce88601a56ef89521712637c55c3cae912a18a45e2c
+  f6455d32f7a813ba72edd47ef5ee44c19b2989e10a55bd91f14b5fcb7184b6dc
+)
+
+prepare() {
+  cd "selinux-policy-arch-${_commit}"
+  sed -i 's/^TYPE = .*/TYPE = mcs/' build.conf
+  install -m0644 "$srcdir/seusers" config/appconfig-mcs/seusers
+}
+
+build() {
+  cd "selinux-policy-arch-${_commit}"
+  make bare
+  make conf
+  make
+}
+
+package() {
+  cd "selinux-policy-arch-${_commit}"
+  make DESTDIR="$pkgdir" install
+  make DESTDIR="$pkgdir" install-headers
+  make DESTDIR="$pkgdir" PKGNAME="${_policyname}" install-docs
+  install -Dm0644 "$srcdir/config" "$pkgdir/etc/selinux/config.${_policyname}"
+  install -Dm0644 "$srcdir/seusers" "$pkgdir/etc/selinux/${_policyname}/seusers"
+}

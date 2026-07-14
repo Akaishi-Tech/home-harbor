@@ -77,6 +77,52 @@ internal static class RecoveryProgram
         root.Options.Add(fastbootTcpOption);
         root.Options.Add(fastbootAuthProxyOption);
         root.Options.Add(applyActionOption);
+        var selinuxStoreSync = new System.CommandLine.Command("selinux-store-sync");
+        selinuxStoreSync.SetAction(_ =>
+        {
+            HomeHarbor.Tooling.SelinuxRuntimeReadiness.RequireEnforcingDefault();
+            var result = HomeHarbor.Tooling.SelinuxPolicyStoreSynchronizer.SynchronizeDefaultDetailed();
+            Console.WriteLine(result.StoreReplaced
+                ? "synchronized the SELinux policy store from the immutable image seed"
+                : "SELinux policy store already matches the immutable image seed");
+            return 0;
+        });
+        root.Subcommands.Add(selinuxStoreSync);
+        var selinuxRelabel = new System.CommandLine.Command("selinux-relabel");
+        var selinuxRelabelPersistent = new System.CommandLine.Command("persistent");
+        selinuxRelabelPersistent.SetAction(async (_, actionCancellationToken) =>
+        {
+            HomeHarbor.Tooling.SelinuxRuntimeReadiness.RequireEnforcingDefault();
+            var changed = await HomeHarbor.Tooling.SelinuxRelabelCoordinator.RelabelPersistentDefaultAsync(
+                new HomeHarbor.Tooling.ProcessCommandRunner(),
+                actionCancellationToken);
+            Console.WriteLine(changed
+                ? "relabelled persistent state for the current SELinux policy epoch"
+                : "persistent state already matches the current SELinux policy epoch");
+            return 0;
+        });
+        selinuxRelabel.Subcommands.Add(selinuxRelabelPersistent);
+        var selinuxRelabelManaged = new System.CommandLine.Command("managed");
+        selinuxRelabelManaged.SetAction(async (_, actionCancellationToken) =>
+        {
+            HomeHarbor.Tooling.SelinuxRuntimeReadiness.RequireEnforcingDefault();
+            await HomeHarbor.Tooling.SelinuxRelabelCoordinator.RelabelManagedPathsDefaultAsync(
+                new HomeHarbor.Tooling.ProcessCommandRunner(),
+                actionCancellationToken);
+            Console.WriteLine("labelled fixed HomeHarbor runtime paths without recursive traversal");
+            return 0;
+        });
+        selinuxRelabel.Subcommands.Add(selinuxRelabelManaged);
+        root.Subcommands.Add(selinuxRelabel);
+        var selinuxReadyCheck = new System.CommandLine.Command("selinux-ready-check");
+        selinuxReadyCheck.SetAction(_ =>
+        {
+            HomeHarbor.Tooling.SelinuxRelabelCoordinator.RequirePersistentCurrentDefault();
+            HomeHarbor.Tooling.SelinuxRuntimeReadiness.RequireDefault();
+            Console.WriteLine("SELinux is enforcing and required HomeHarbor runtime directories are ready");
+            return 0;
+        });
+        root.Subcommands.Add(selinuxReadyCheck);
         root.SetAction(async (parseResult, actionCancellationToken) =>
         {
             var actionPath = parseResult.GetValue(applyActionOption);

@@ -1,0 +1,36 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71.
+
+pkgname=secilc
+pkgver=3.10
+pkgrel=1
+pkgdesc="SELinux Common Intermediate Language compiler"
+arch=(x86_64)
+url="https://github.com/SELinuxProject/cil/wiki"
+license=(GPL-2.0-only)
+groups=(selinux)
+makedepends=(docbook-xml docbook-xsl xmlto)
+checkdepends=(checkpolicy)
+depends=('libsepol>=3.10')
+validpgpkeys=(
+  63191CE94183098689CAB8DB7EF137EC935B0EAF
+  68D21823342A13683AEB3E4EFB4C685B5DC1C13E
+)
+source=("https://github.com/SELinuxProject/selinux/releases/download/${pkgver}/${pkgname}-${pkgver}.tar.gz"{,.asc})
+sha256sums=(
+  6658071d6f1044184d3973062a798187537ae1c3ddb4c31afd417df333316c10
+  SKIP
+)
+
+build() {
+  make -C "${pkgname}-${pkgver}" all
+}
+
+check() {
+  make -C "${pkgname}-${pkgver}" test
+}
+
+package() {
+  make -C "${pkgname}-${pkgver}" DESTDIR="$pkgdir" install
+  install -Dm0644 "${pkgname}-${pkgver}/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

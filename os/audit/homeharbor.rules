@@ -1,0 +1,5 @@
+# HomeHarbor keeps the audit rule input on the immutable system image.
+-D
+-b 8192
+-f 1
+-e 1

@@ -152,6 +152,9 @@ internal static partial class AgentProgram
               ota-commit [--state-dir PATH] [--esp PATH] [--boot-env PATH] [--run-dir PATH]
               storage-apply
               storage-postapply
+              selinux-store-sync
+              selinux-relabel persistent|managed|data
+              selinux-ready-check
               boot-state init|set-default|set-oneshot|set-recovery|clear-next ...
               verify-ota-manifest <manifest> <public-key>
               super table|create|remove ...
@@ -183,16 +186,22 @@ internal static partial class AgentProgram
 
         if ((await runner.RunAsync("id", ["-u", "homeharbor-containers"], cancellationToken: cancellationToken)).ExitCode == 0)
         {
-            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers", 0750, "root", "homeharbor-containers", cancellationToken);
-            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.config", 0750, "root", "homeharbor-containers", cancellationToken);
-            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.config/containers", 0750, "root", "homeharbor-containers", cancellationToken);
-            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.config/containers/systemd", 0750, "root", "homeharbor-containers", cancellationToken);
-            await EnsureDirAsync(runner, "/var/lib/homeharbor-containers/.local/share/containers", 0750, "homeharbor-containers", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome, 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome + "/.config", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome + "/.config/containers", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.RootManagedQuadletDirectory, 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.PodmanConfigHome, 0700, "homeharbor-containers", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome + "/.local", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome + "/.local/share", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome + "/.local/share/containers", 0750, "homeharbor-containers", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome + "/.cache", 0750, "root", "homeharbor-containers", cancellationToken);
+            await EnsureDirAsync(runner, ContainerRuntimePaths.DefaultHome + "/.cache/containers", 0750, "homeharbor-containers", "homeharbor-containers", cancellationToken);
             await EnsureDirAsync(runner, "/var/lib/systemd/linger", 0755, null, null, cancellationToken);
             File.WriteAllText("/var/lib/systemd/linger/homeharbor-containers", string.Empty);
         }
 
-        if (await IsHomeHarborDataMountAsync(runner, cancellationToken))
+        var dataMounted = await IsHomeHarborDataMountAsync(runner, cancellationToken);
+        if (dataMounted)
         {
             await EnsureDirAsync(runner, "/homeharbor-data", 0751, "root", "homeharbor", cancellationToken);
             await EnsureDirAsync(runner, "/homeharbor-data/apps", 0711, "root", "root", cancellationToken);
@@ -210,6 +219,21 @@ internal static partial class AgentProgram
         var setupCodePath = SetupPath("HOMEHARBOR_SETUP_BOOTSTRAP_CODE_PATH", "HomeHarbor__Setup__BootstrapCodePath", SetupBootstrapCode.DefaultCodePath);
         var setupCompletePath = SetupPath("HOMEHARBOR_SETUP_BOOTSTRAP_COMPLETE_PATH", "HomeHarbor__Setup__BootstrapCompletePath", SetupBootstrapCode.DefaultCompletePath);
         await EnsureDirAsync(runner, Path.GetDirectoryName(setupCodePath) ?? "/var/lib/homeharbor/setup", 0750, "root", "homeharbor", cancellationToken);
+        if ((await runner.RunAsync("selinuxenabled", [], cancellationToken: cancellationToken)).ExitCode == 0)
+        {
+            _ = (await runner.RunAsync(
+                "/usr/lib/homeharbor/selinux-store-sync",
+                ["selinux-relabel", "managed"],
+                cancellationToken: cancellationToken)).EnsureSuccess("failed to label HomeHarbor managed paths");
+            if (dataMounted)
+            {
+                _ = (await runner.RunAsync(
+                    "/usr/lib/homeharbor/selinux-store-sync",
+                    ["selinux-relabel", "data"],
+                    cancellationToken: cancellationToken)).EnsureSuccess("failed to label HomeHarbor data paths");
+            }
+        }
+
         var setupConsoles = Env.String("HOMEHARBOR_SETUP_PHYSICAL_CONSOLES", "/dev/console,/dev/tty1,/dev/ttyS0")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         _ = await SetupBootstrapCode.EnsureAndDisplayAsync(runner, setupCodePath, setupCompletePath, setupConsoles, cancellationToken);
@@ -276,16 +300,18 @@ internal static partial class AgentProgram
         var parent = Path.GetDirectoryName(dataDir) ?? "/homeharbor-data/postgresql";
         await EnsureDirAsync(runner, parent, 0710, "root", "postgres", cancellationToken);
         await EnsureDirAsync(runner, dataDir, 0700, "postgres", "postgres", cancellationToken);
+        await RestoreconPathsAsync(runner, [parent, dataDir], cancellationToken);
         if (new FileInfo(Path.Combine(dataDir, "PG_VERSION")).Exists)
         {
             return 0;
         }
 
         var result = await runner.RunAsync(
-            "runuser",
-            ["-u", "postgres", "--", "initdb", "-D", dataDir, "--username=postgres", "--auth-local=peer", "--auth-host=reject", "--no-instructions"],
+            "setpriv",
+            SetPrivArguments("postgres", ["initdb", "-D", dataDir, "--username=postgres", "--auth-local=peer", "--auth-host=reject", "--no-instructions"]),
             cancellationToken: cancellationToken);
         _ = result.EnsureSuccess("initdb failed");
+        await RestoreconTreeAsync(runner, parent, cancellationToken);
         return 0;
     }
 
@@ -302,7 +328,10 @@ internal static partial class AgentProgram
 
             for (var i = 0; i < 60; i++)
             {
-                var ready = await runner.RunAsync("runuser", ["-u", "postgres", "--", "pg_isready", "-h", socketDir, "-p", port, "-d", "postgres"], cancellationToken: cancellationToken);
+                var ready = await runner.RunAsync(
+                    "setpriv",
+                    SetPrivArguments("postgres", ["pg_isready", "-h", socketDir, "-p", port, "-d", "postgres"]),
+                    cancellationToken: cancellationToken);
                 if (ready.ExitCode == 0)
                 {
                     break;
@@ -311,28 +340,31 @@ internal static partial class AgentProgram
                 await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
             }
 
-            _ = (await runner.RunAsync("runuser", ["-u", "postgres", "--", "pg_isready", "-h", socketDir, "-p", port, "-d", "postgres"], cancellationToken: cancellationToken))
+            _ = (await runner.RunAsync(
+                "setpriv",
+                SetPrivArguments("postgres", ["pg_isready", "-h", socketDir, "-p", port, "-d", "postgres"]),
+                cancellationToken: cancellationToken))
                 .EnsureSuccess("postgres did not become ready");
 
-            var roleExists = await runner.RunAsync("runuser",
-                ["-u", "postgres", "--", "psql", "-h", socketDir, "-p", port, "-d", "postgres", "-Atc", $"SELECT 1 FROM pg_roles WHERE rolname = '{SqlString(role)}';"],
+            var roleExists = await runner.RunAsync("setpriv",
+                SetPrivArguments("postgres", ["psql", "-h", socketDir, "-p", port, "-d", "postgres", "-Atc", $"SELECT 1 FROM pg_roles WHERE rolname = '{SqlString(role)}';"]),
                 cancellationToken: cancellationToken);
             _ = roleExists.EnsureSuccess("failed to inspect postgres role");
             if (roleExists.Stdout.Trim() != "1")
             {
-                _ = (await runner.RunAsync("runuser",
-                    ["-u", "postgres", "--", "psql", "-h", socketDir, "-p", port, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", $"CREATE ROLE \"{SqlIdentifier(role)}\" LOGIN;"],
+                _ = (await runner.RunAsync("setpriv",
+                    SetPrivArguments("postgres", ["psql", "-h", socketDir, "-p", port, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", $"CREATE ROLE \"{SqlIdentifier(role)}\" LOGIN;"]),
                     cancellationToken: cancellationToken)).EnsureSuccess("failed to create postgres role");
             }
 
-            var databaseExists = await runner.RunAsync("runuser",
-                ["-u", "postgres", "--", "psql", "-h", socketDir, "-p", port, "-d", "postgres", "-Atc", $"SELECT 1 FROM pg_database WHERE datname = '{SqlString(database)}';"],
+            var databaseExists = await runner.RunAsync("setpriv",
+                SetPrivArguments("postgres", ["psql", "-h", socketDir, "-p", port, "-d", "postgres", "-Atc", $"SELECT 1 FROM pg_database WHERE datname = '{SqlString(database)}';"]),
                 cancellationToken: cancellationToken);
             _ = databaseExists.EnsureSuccess("failed to inspect postgres database");
             if (databaseExists.Stdout.Trim() != "1")
             {
-                _ = (await runner.RunAsync("runuser",
-                    ["-u", "postgres", "--", "createdb", "-h", socketDir, "-p", port, "-O", role, database],
+                _ = (await runner.RunAsync("setpriv",
+                    SetPrivArguments("postgres", ["createdb", "-h", socketDir, "-p", port, "-O", role, database]),
                     cancellationToken: cancellationToken)).EnsureSuccess("failed to create postgres database");
             }
 
@@ -429,8 +461,8 @@ internal static partial class AgentProgram
         await ChownAsync(runner, temp, "root", "caddy", cancellationToken);
         await ChmodAsync(runner, temp, 0640, cancellationToken);
         _ = (await runner.RunAsync(
-            "runuser",
-            ["-u", "caddy", "--", "env", "HOME=/var/lib/caddy", "caddy", "validate", "--config", temp],
+            "setpriv",
+            SetPrivArguments("caddy", ["env", "HOME=/var/lib/caddy", "caddy", "validate", "--config", temp]),
             cancellationToken: cancellationToken))
             .EnsureSuccess("rendered Caddyfile validation failed");
         var backup = caddyfile + ".previous." + Guid.NewGuid().ToString("N");
@@ -526,18 +558,25 @@ internal static partial class AgentProgram
             Env.String("HOMEHARBOR_SMB_CONF", Path.Combine(state, "smb.conf")),
             state,
             "SMB config");
-        foreach (var dir in new[] { state, Path.Combine(state, "private"), Path.Combine(state, "state"), Path.Combine(state, "cache"), Path.Combine(state, "lock") })
+        var stateDirectories = SmbStateDirectories(state);
+        foreach (var dir in stateDirectories)
         {
             await EnsureDirAsync(runner, dir, 0750, null, null, cancellationToken);
         }
 
         await EnsureDirAsync(runner, "/var/log/samba", 0755, null, null, cancellationToken);
+        await RestoreconPathsAsync(
+            runner,
+            stateDirectories.Concat(["/var/log/samba"]).Concat(SmbSecretPaths(state)),
+            cancellationToken);
         if (File.Exists(conf) && new FileInfo(conf).Length > 0)
         {
+            await RestoreconPathsAsync(runner, [conf], cancellationToken);
             return 0;
         }
 
         await FileWrites.AtomicWriteTextAsync(conf, DefaultSmbConf(), 0640, cancellationToken);
+        await RestoreconPathsAsync(runner, [conf], cancellationToken);
         return 0;
     }
 
@@ -570,13 +609,20 @@ internal static partial class AgentProgram
 
         if (!dryRun)
         {
-            foreach (var dir in new[] { state, Path.Combine(state, "private"), Path.Combine(state, "state"), Path.Combine(state, "cache"), Path.Combine(state, "lock") })
+            var stateDirectories = SmbStateDirectories(state);
+            foreach (var dir in stateDirectories)
             {
                 await EnsureDirAsync(runner, dir, 0750, null, null, cancellationToken);
             }
 
             await EnsureDirAsync(runner, credentialDir, 0700, null, null, cancellationToken);
             await EnsureDirAsync(runner, "/var/log/samba", 0755, null, null, cancellationToken);
+            await RestoreconPathsAsync(
+                runner,
+                stateDirectories
+                    .Concat([credentialDir, "/var/log/samba"])
+                    .Concat(SmbSecretPaths(state)),
+                cancellationToken);
         }
 
         var config = BuildValidatedSmbConfig(
@@ -604,12 +650,14 @@ internal static partial class AgentProgram
                 }
 
                 File.Move(temp, conf, overwrite: true);
+                await RestoreconPathsAsync(runner, [conf], cancellationToken);
                 var restart = await runner.RunAsync("systemctl", ["restart", "homeharbor-smbd.service", "homeharbor-nmbd.service"], cancellationToken: cancellationToken);
                 if (restart.ExitCode != 0)
                 {
                     if (hadExisting)
                     {
                         File.Move(backup, conf, overwrite: true);
+                        await RestoreconPathsAsync(runner, [conf], cancellationToken);
                         _ = await runner.RunAsync("systemctl", ["restart", "homeharbor-smbd.service", "homeharbor-nmbd.service"], cancellationToken: cancellationToken);
                     }
                     else if (File.Exists(conf))
@@ -675,6 +723,7 @@ internal static partial class AgentProgram
 
         if (!dryRun)
         {
+            await RestoreconPathsAsync(runner, SmbSecretPaths(state), cancellationToken);
             await ReconcileSmbResultAsync(cancellationToken);
         }
 
@@ -683,11 +732,13 @@ internal static partial class AgentProgram
 
     private static async Task<int> ApplyContainersAsync(ICommandRunner runner, CancellationToken cancellationToken)
     {
-        var user = Env.String("HOMEHARBOR_CONTAINER_USER", "homeharbor-containers");
-        var home = Env.String("HOMEHARBOR_CONTAINER_HOME", "/var/lib/homeharbor-containers");
-        var quadletDir = Env.String("HOMEHARBOR_QUADLET_DIR", Path.Combine(home, ".config/containers/systemd"));
-        var dataRoot = Env.String("HOMEHARBOR_CONTAINER_DATA_ROOT", "/homeharbor-data");
         var dryRun = Env.Flag("HOMEHARBOR_DRY_RUN");
+        var runtime = ResolveContainerRuntimePaths(dryRun);
+        var user = runtime.User;
+        var home = runtime.Home;
+        var quadletDir = runtime.QuadletDirectory;
+        var podmanConfigHome = runtime.PodmanConfigHome;
+        var dataRoot = Env.String("HOMEHARBOR_CONTAINER_DATA_ROOT", "/homeharbor-data");
         RefuseReadOnlyRootfsPath(quadletDir, "Quadlet directory");
 
         var desiredOverride = Env.Optional("HOMEHARBOR_CONTAINER_DESIRED_FILE");
@@ -716,7 +767,26 @@ internal static partial class AgentProgram
             await EnsureDirAsync(runner, home, 0750, "root", gid, cancellationToken);
             await EnsureDirAsync(runner, Path.Combine(home, ".config"), 0750, "root", gid, cancellationToken);
             await EnsureDirAsync(runner, Path.Combine(home, ".config", "containers"), 0750, "root", gid, cancellationToken);
+            await EnsureDirAsync(runner, podmanConfigHome, 0700, uid, gid, cancellationToken);
+            await EnsureDirAsync(runner, Path.Combine(home, ".local"), 0750, "root", gid, cancellationToken);
+            await EnsureDirAsync(runner, Path.Combine(home, ".local", "share"), 0750, "root", gid, cancellationToken);
             await EnsureDirAsync(runner, Path.Combine(home, ".local", "share", "containers"), 0750, uid, gid, cancellationToken);
+            await EnsureDirAsync(runner, Path.Combine(home, ".cache"), 0750, "root", gid, cancellationToken);
+            await EnsureDirAsync(runner, Path.Combine(home, ".cache", "containers"), 0750, uid, gid, cancellationToken);
+            await RestoreconPathsAsync(
+                runner,
+                [
+                    home,
+                    Path.Combine(home, ".config"),
+                    Path.Combine(home, ".config", "containers"),
+                    podmanConfigHome,
+                    Path.Combine(home, ".local"),
+                    Path.Combine(home, ".local", "share"),
+                    Path.Combine(home, ".local", "share", "containers"),
+                    Path.Combine(home, ".cache"),
+                    Path.Combine(home, ".cache", "containers")
+                ],
+                cancellationToken);
         }
 
         if (!dryRun)
@@ -842,6 +912,30 @@ internal static partial class AgentProgram
         return 0;
     }
 
+    internal static (string User, string Home, string QuadletDirectory, string PodmanConfigHome)
+        ResolveContainerRuntimePaths(bool dryRun)
+    {
+        if (!dryRun)
+        {
+            return (
+                "homeharbor-containers",
+                ContainerRuntimePaths.DefaultHome,
+                ContainerRuntimePaths.RootManagedQuadletDirectory,
+                ContainerRuntimePaths.PodmanConfigHome);
+        }
+
+        var user = Env.String("HOMEHARBOR_CONTAINER_USER", "homeharbor-containers");
+        var home = Env.String("HOMEHARBOR_CONTAINER_HOME", ContainerRuntimePaths.DefaultHome);
+        var quadletDirectory = Env.String(
+            "HOMEHARBOR_QUADLET_DIR",
+            Path.Combine(home, ".config/containers/systemd"));
+        return (
+            user,
+            home,
+            quadletDirectory,
+            Path.Combine(home, ".config", "containers", "runtime"));
+    }
+
     internal static bool ContainerQuadletNeedsUpdate(string path, string expected)
         => !File.Exists(path) ||
            !string.Equals(File.ReadAllText(path), expected, StringComparison.Ordinal);
@@ -868,6 +962,10 @@ internal static partial class AgentProgram
         await EnsureDirAsync(runner, activeRoot, 0750, "root", "root", cancellationToken);
         await EnsureDirAsync(runner, stagedRoot, 0700, "root", "root", cancellationToken);
         await EnsureDirAsync(runner, versionsRoot, 0750, "root", "root", cancellationToken);
+        await RestoreconPathsAsync(
+            runner,
+            [root, activeRoot, stagedRoot, versionsRoot],
+            cancellationToken);
         DeletePath(wrapperRoot);
         await EnsureDirAsync(runner, wrapperRoot, 0755, "root", "root", cancellationToken);
 
@@ -1550,6 +1648,15 @@ internal static partial class AgentProgram
             return 0;
         }
 
+        var selinux = await runner.RunAsync("selinuxenabled", [], cancellationToken: cancellationToken);
+        if (selinux.ExitCode == 0)
+        {
+            _ = (await runner.RunAsync(
+                "/usr/lib/homeharbor/selinux-store-sync",
+                ["selinux-relabel", "data"],
+                cancellationToken: cancellationToken)).EnsureSuccess("failed to label the HomeHarbor data filesystem");
+        }
+
         _ = (await runner.RunAsync(
             "systemctl",
             ["--no-block", "start", "homeharbor-postgresql-bootstrap.service"],
@@ -1562,8 +1669,8 @@ internal static partial class AgentProgram
         var apiDll = Env.String("HOMEHARBOR_API_DLL", "/usr/lib/homeharbor/api/HomeHarbor.Api.dll");
         var apiDirectory = Path.GetDirectoryName(apiDll) ?? "/usr/lib/homeharbor/api";
         _ = (await runner.RunAsync(
-            "runuser",
-            ["-u", "homeharbor", "--", "dotnet", apiDll, "database-migrate"],
+            "setpriv",
+            SetPrivArguments("homeharbor", ["dotnet", apiDll, "database-migrate"]),
             new CommandRunOptions(
                 WorkingDirectory: apiDirectory,
                 Timeout: TimeSpan.FromMinutes(5),
@@ -1714,7 +1821,7 @@ internal static partial class AgentProgram
                 appliedDevices,
                 DateTimeOffset.UtcNow);
             await FileWrites.AtomicWriteTextAsync(appliedPlan, JsonSerializer.Serialize(applied, JsonOptions), 0640, cancellationToken);
-            await WriteDataUnlockMetadataAsync(unlockMode, cancellationToken);
+            await WriteDataUnlockMetadataAsync(runner, unlockMode, cancellationToken);
             await WriteBootUnlockEnvAsync(applied, cancellationToken);
             await WriteDataUnlockModeEfiVariableAsync(runner, unlockMode, cancellationToken);
 
@@ -2015,10 +2122,15 @@ internal static partial class AgentProgram
         return path;
     }
 
-    private static async Task WriteDataUnlockMetadataAsync(string unlockMode, CancellationToken cancellationToken)
+    private static async Task WriteDataUnlockMetadataAsync(
+        ICommandRunner runner,
+        string unlockMode,
+        CancellationToken cancellationToken)
     {
         var path = Env.String("HOMEHARBOR_DATA_UNLOCK_METADATA", "/var/lib/homeharbor/security/data-unlock.json");
-        _ = RootPathGuard.CreateDirectory(Path.GetDirectoryName(path) ?? ".", "data unlock metadata directory");
+        var directory = RootPathGuard.CreateDirectory(
+            Path.GetDirectoryName(path) ?? ".",
+            "data unlock metadata directory");
         _ = RootPathGuard.RequireNoSymlinkComponents(path, "data unlock metadata file");
         var payload = JsonSerializer.Serialize(new
         {
@@ -2026,6 +2138,7 @@ internal static partial class AgentProgram
             unlockMode
         }, JsonOptions);
         await FileWrites.AtomicWriteTextAsync(path, payload, 0640, cancellationToken);
+        await RestoreconPathsAsync(runner, [directory, path], cancellationToken);
     }
 
     private static async Task WriteBootUnlockEnvAsync(AppliedStoragePlan applied, CancellationToken cancellationToken)
@@ -2266,6 +2379,32 @@ internal static partial class AgentProgram
     private static async Task ChmodAsync(ICommandRunner runner, string path, int mode, CancellationToken cancellationToken)
         => (await runner.RunAsync("chmod", [mode.ToString("0000", CultureInfo.InvariantCulture), path], cancellationToken: cancellationToken))
             .EnsureSuccess("chmod failed");
+
+    private static async Task RestoreconPathsAsync(
+        ICommandRunner runner,
+        IEnumerable<string> paths,
+        CancellationToken cancellationToken)
+    {
+        var existing = paths
+            .Select(Path.GetFullPath)
+            .Where(path => File.Exists(path) || Directory.Exists(path))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (existing.Length == 0)
+        {
+            return;
+        }
+
+        _ = (await runner.RunAsync("restorecon", existing, cancellationToken: cancellationToken))
+            .EnsureSuccess("SELinux path relabel failed");
+    }
+
+    private static async Task RestoreconTreeAsync(
+        ICommandRunner runner,
+        string path,
+        CancellationToken cancellationToken)
+        => (await runner.RunAsync("restorecon", ["-Rx", path], cancellationToken: cancellationToken))
+            .EnsureSuccess("SELinux tree relabel failed");
 
     private static async Task NormalizeRootReadableFileAsync(ICommandRunner runner, string path, int mode, CancellationToken cancellationToken)
     {
@@ -2517,6 +2656,9 @@ internal static partial class AgentProgram
             .EnsureSuccess("chown failed");
     }
 
+    private static IReadOnlyList<string> SetPrivArguments(string user, IReadOnlyList<string> command)
+        => ["--reuid", user, "--regid", user, "--init-groups", "--", .. command];
+
     private static async Task SystemctlUserAsync(
         ICommandRunner runner,
         string user,
@@ -2533,8 +2675,8 @@ internal static partial class AgentProgram
         }
 
         var result = await runner.RunAsync(
-            "runuser",
-            ["-u", user, "--", "env", "XDG_RUNTIME_DIR=/run/user/" + uid, "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + uid + "/bus", "systemctl", "--user", .. args],
+            "setpriv",
+            SetPrivArguments(user, ["env", "XDG_RUNTIME_DIR=/run/user/" + uid, "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + uid + "/bus", "systemctl", "--user", .. args]),
             cancellationToken: cancellationToken);
         if (!ignoreFailure)
         {
@@ -2561,6 +2703,25 @@ internal static partial class AgentProgram
                 }
             }
             """.Replace("            ", string.Empty, StringComparison.Ordinal);
+
+    private static string[] SmbStateDirectories(string state)
+        =>
+        [
+            state,
+            Path.Combine(state, "private"),
+            Path.Combine(state, "state"),
+            Path.Combine(state, "cache"),
+            Path.Combine(state, "lock")
+        ];
+
+    private static string[] SmbSecretPaths(string state)
+        =>
+        [
+            Path.Combine(state, "private", "passdb.tdb"),
+            Path.Combine(state, "private", "secrets.tdb"),
+            Path.Combine(state, "private", "smbpasswd"),
+            Path.Combine(state, "private", "MACHINE.SID")
+        ];
 
     private static string DefaultSmbConf()
         => """

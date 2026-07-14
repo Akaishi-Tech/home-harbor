@@ -34,6 +34,14 @@ public sealed class SystemImageBuilder(
         "/etc/fstab",
         "/etc/hostname",
         "/etc/mkinitcpio.conf",
+        "/etc/resolv.conf",
+        "/etc/selinux/config",
+        "/etc/selinux/semanage.conf",
+        "/etc/selinux/refpolicy-arch/contexts/files/file_contexts",
+        "/etc/tmpfiles.d/audit.conf",
+        "/etc/audit/homeharbor.rules",
+        "/usr/lib/homeharbor/selinux-store/refpolicy-arch/.homeharbor-store-sha256",
+        "/usr/lib/homeharbor/selinux-store/refpolicy-arch/active/modules",
         "/boot/init/homeharbor-verity",
         "/usr/lib/systemd/system/homeharbor-api.service",
         "/usr/lib/systemd/system/homeharbor-postgresql.service",
@@ -41,7 +49,17 @@ public sealed class SystemImageBuilder(
         "/usr/lib/systemd/system/homeharbor-postgresql-bootstrap.service",
         "/usr/lib/systemd/system/homeharbor-storage-apply.service",
         "/usr/lib/systemd/system/homeharbor-storage-apply.path",
+        "/usr/lib/systemd/system/homeharbor-selinux-relabel.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-relabel-late.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-cgroup-relabel.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-store-sync.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-ready.target",
+        "/usr/lib/systemd/system/sysinit.target.requires/homeharbor-selinux-cgroup-relabel.service",
+        "/usr/lib/systemd/system/sysinit.target.requires/homeharbor-selinux-ready.target",
+        "/usr/lib/systemd/system/audit-rules.service.d/homeharbor.conf",
+        "/usr/lib/homeharbor/selinux-store-sync",
         "/homeharbor-data",
+        "/usr/lib/homeharbor/api/HomeHarbor.Api",
         "/usr/lib/homeharbor/api/HomeHarbor.Api.dll",
         "/usr/lib/homeharbor/api/HomeHarbor.Tooling.dll",
         "/usr/lib/homeharbor/api/wwwroot/index.html",
@@ -56,6 +74,7 @@ public sealed class SystemImageBuilder(
         "/usr/bin/curl",
         "/usr/bin/jq",
         "/usr/bin/podman",
+        "/usr/lib/modules-load.d/homeharbor-containers.conf",
         "/usr/bin/postgres",
         "/usr/bin/smbd",
         "/usr/bin/lpdump",
@@ -95,6 +114,14 @@ public sealed class SystemImageBuilder(
         "/etc",
         "/etc/fstab",
         "/etc/hostname",
+        "/etc/resolv.conf",
+        "/etc/selinux/config",
+        "/etc/selinux/semanage.conf",
+        "/etc/selinux/refpolicy-arch/contexts/files/file_contexts",
+        "/etc/tmpfiles.d/audit.conf",
+        "/etc/audit/homeharbor.rules",
+        "/usr/lib/homeharbor/selinux-store/refpolicy-arch/.homeharbor-store-sha256",
+        "/usr/lib/homeharbor/selinux-store/refpolicy-arch/active/modules",
         "/proc",
         "/run",
         "/sys",
@@ -114,6 +141,15 @@ public sealed class SystemImageBuilder(
         "/usr/lib/firmware",
         "/usr/lib/systemd/systemd",
         "/usr/lib/systemd/system/homeharbor-fastbootd.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-relabel.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-relabel-late.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-cgroup-relabel.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-store-sync.service",
+        "/usr/lib/systemd/system/homeharbor-selinux-ready.target",
+        "/usr/lib/systemd/system/sysinit.target.requires/homeharbor-selinux-cgroup-relabel.service",
+        "/usr/lib/systemd/system/sysinit.target.requires/homeharbor-selinux-ready.target",
+        "/usr/lib/systemd/system/audit-rules.service.d/homeharbor.conf",
+        "/usr/lib/homeharbor/selinux-store-sync",
         "/usr/lib/systemd/system/homeharbor-recovery-action.path",
         "/usr/lib/systemd/system/homeharbor-recovery-action.service",
         "/var"
@@ -157,13 +193,24 @@ public sealed class SystemImageBuilder(
         {
             (shimSource, mokManagerSource) = await PrepareShimSourcesAsync(cancellationToken);
 
-            var (ControlPackages, RecoveryPackages) = await BuildPackagesAsync(channel, packageOutput, cancellationToken);
-            await BuildRootfsAsync(rootfs, ControlPackages, cancellationToken);
-            await BuildRecoveryRootfsBaseAsync(recoveryRootfs, RecoveryPackages, cancellationToken);
+            var packageRepository = await BuildPackagesAsync(channel, packageOutput, cancellationToken);
+            await BuildRootfsAsync(rootfs, packageRepository, cancellationToken);
+            await BuildRecoveryRootfsBaseAsync(recoveryRootfs, packageRepository, cancellationToken);
+            await SelinuxPolicyValidator.ValidateAsync(rootfs, "system rootfs", _rootless, cancellationToken);
+            await SelinuxPolicyValidator.ValidateAsync(recoveryRootfs, "recovery rootfs", _rootless, cancellationToken);
+            _ = SelinuxPolicyStoreSynchronizer.PrepareImmutableSeed(rootfs);
+            _ = SelinuxPolicyStoreSynchronizer.PrepareImmutableSeed(recoveryRootfs);
             await ReleaseSequence.StampRootfsOsReleaseAsync(rootfs, releaseSequence, cancellationToken);
             await ReleaseSequence.StampRootfsOsReleaseAsync(recoveryRootfs, releaseSequence, cancellationToken);
 
-            await BuildImagesAsync(rootfs, recoveryRootfs, shimSource, mokManagerSource, releaseSequence, cancellationToken);
+            await BuildImagesAsync(
+                rootfs,
+                recoveryRootfs,
+                packageRepository,
+                shimSource,
+                mokManagerSource,
+                releaseSequence,
+                cancellationToken);
             await FileWrites.AtomicWriteTextAsync(plan.Artifacts.Plan.Path, JsonSerializer.Serialize(plan, JsonOptions) + "\n", 0644, cancellationToken);
         }
         finally
@@ -177,6 +224,7 @@ public sealed class SystemImageBuilder(
     private async Task BuildImagesAsync(
         string rootfs,
         string recoveryRootfs,
+        ArchLocalPackageRepository packageRepository,
         string? shimSource,
         string? mokManagerSource,
         long releaseSequence,
@@ -189,6 +237,11 @@ public sealed class SystemImageBuilder(
         var vmlinuz = Path.Combine(_work, "vmlinuz-linux");
         var initramfs = Path.Combine(_work, "initramfs-linux.img");
         InstallFile(Path.Combine(rootfs, "boot", "vmlinuz-linux"), vmlinuz, 0644);
+        await KernelConfigValidator.ValidateAsync(
+            vmlinuz,
+            Path.Combine(_work, "kernel-config"),
+            _runner,
+            cancellationToken);
         InstallFile(Path.Combine(rootfs, "boot", "initramfs-linux.img"), initramfs, 0644);
         InstallArtifact(vmlinuz, plan.Artifacts.Vmlinuz);
         InstallArtifact(initramfs, plan.Artifacts.Initramfs);
@@ -221,10 +274,18 @@ public sealed class SystemImageBuilder(
             cancellationToken);
         InstallFile(recoveryBoot, Path.Combine(recoveryRootfs, "boot", "recovery_boot.efi"), 0644);
 
+        var erofs = await SelinuxErofsTool.CreateAsync(
+            packageRepository.PackageDirectory,
+            Path.Combine(_work, "selinux-erofs-tool"),
+            _runner,
+            cancellationToken);
+        var rootFileContexts = SelinuxErofsTool.RequireFileContexts(rootfs);
+        var recoveryFileContexts = SelinuxErofsTool.RequireFileContexts(recoveryRootfs);
+
         var modulesImage = Path.Combine(_work, "modules_a.img");
         var firmwareImage = Path.Combine(_work, "firmware_a.img");
-        await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", modulesImage, modulesRoot], cancellationToken);
-        await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", firmwareImage, firmwareRoot], cancellationToken);
+        await erofs.BuildAsync(modulesImage, modulesRoot, rootFileContexts, "/usr/lib/modules", ["-zlz4hc,12"], cancellationToken);
+        await erofs.BuildAsync(firmwareImage, firmwareRoot, rootFileContexts, "/usr/lib/firmware", ["-zlz4hc,12"], cancellationToken);
         await RunAsync("dump.erofs", ["-s", modulesImage], cancellationToken);
         await RunAsync("dump.erofs", ["-s", firmwareImage], cancellationToken);
         InstallArtifact(modulesImage, plan.Artifacts.Modules);
@@ -232,7 +293,7 @@ public sealed class SystemImageBuilder(
 
         ValidateRootfsTree(rootfs, FullRootfsRequiredPaths, ForbiddenRootfsPaths, "full rootfs");
         var rootImage = Path.Combine(_work, "root_a.img");
-        await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", rootImage, rootfs], cancellationToken);
+        await erofs.BuildAsync(rootImage, rootfs, rootFileContexts, "/", ["-zlz4hc,12"], cancellationToken);
         await ValidateErofsRootfsAsync(rootImage, FullRootfsRequiredPaths, ForbiddenRootfsPaths, "full EROFS rootfs", null, cancellationToken);
         InstallArtifact(rootImage, plan.Artifacts.Rootfs);
 
@@ -240,7 +301,13 @@ public sealed class SystemImageBuilder(
         var recoveryHints = Path.Combine(_work, "recovery-compress-hints");
         await File.WriteAllTextAsync(recoveryHints, "0 boot/recovery_boot[.]efi\n", cancellationToken);
         var recoveryImage = Path.Combine(_work, "recovery.img");
-        await RunMappedRootAsync("mkfs.erofs", ["-E^inline_data", "-zlz4hc,12", "--compress-hints=" + recoveryHints, recoveryImage, recoveryRootfs], cancellationToken);
+        await erofs.BuildAsync(
+            recoveryImage,
+            recoveryRootfs,
+            recoveryFileContexts,
+            "/",
+            ["-E^inline_data", "-zlz4hc,12", "--compress-hints=" + recoveryHints],
+            cancellationToken);
         await ValidateErofsRootfsAsync(recoveryImage, RecoveryRootfsRequiredPaths, ForbiddenRootfsPaths, "recovery EROFS rootfs", null, cancellationToken);
         await ValidateRecoveryBootErofsAsync(recoveryImage, null, cancellationToken);
         var extractedRecoveryBoot = Path.Combine(_work, "recovery_boot.extracted.efi");
@@ -426,12 +493,11 @@ public sealed class SystemImageBuilder(
 
     private async Task BuildRootfsAsync(
         string rootfs,
-        IReadOnlyList<string> controlPackages,
+        ArchLocalPackageRepository packageRepository,
         CancellationToken cancellationToken)
     {
-        await RunPacstrapAsync(rootfs, plan.Packages.Rootfs, cancellationToken);
+        await RunPacstrapAsync(rootfs, plan.Packages.Rootfs, cancellationToken, pacmanConfig: packageRepository.PacmanConfigPath);
         PrepareWritableRootfs(rootfs);
-        await RunMappedRootAsync("pacman", ["--root", rootfs, "--noconfirm", "-U", .. controlPackages], cancellationToken);
         InstallPlanDirectories(plan.Rootfs, rootfs);
         var releasePublicKey = Environment.GetEnvironmentVariable("HOMEHARBOR_RELEASE_PUBLIC_KEY");
         if (!string.IsNullOrWhiteSpace(releasePublicKey))
@@ -468,14 +534,14 @@ public sealed class SystemImageBuilder(
 
     private async Task BuildRecoveryRootfsBaseAsync(
         string recoveryRootfs,
-        IReadOnlyList<string> recoveryPackages,
+        ArchLocalPackageRepository packageRepository,
         CancellationToken cancellationToken)
     {
         _ = Directory.CreateDirectory(recoveryRootfs);
-        await RunPacstrapAsync(recoveryRootfs, plan.Packages.Recovery, cancellationToken);
+        await RunPacstrapAsync(recoveryRootfs, plan.Packages.Recovery, cancellationToken, pacmanConfig: packageRepository.PacmanConfigPath);
         PrepareWritableRootfs(recoveryRootfs);
-        await RunMappedRootAsync("pacman", ["--root", recoveryRootfs, "--noconfirm", "-U", .. recoveryPackages], cancellationToken);
         InstallPlanDirectories(plan.Recovery, recoveryRootfs);
+        EnsureDirectory(Path.Combine(recoveryRootfs, "homeharbor-data"), 0750);
         await WritePlanFstabAsync(plan.Recovery, recoveryRootfs, cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(recoveryRootfs, "etc", "hostname"), plan.Recovery.Hostname + "\n", cancellationToken);
         ApplyPlanShells(plan.Recovery, recoveryRootfs);
@@ -487,7 +553,7 @@ public sealed class SystemImageBuilder(
         await EnablePlanUnitsAsync(plan.Recovery, recoveryRootfs, cancellationToken);
     }
 
-    private async Task<(IReadOnlyList<string> ControlPackages, IReadOnlyList<string> RecoveryPackages)> BuildPackagesAsync(
+    private async Task<ArchLocalPackageRepository> BuildPackagesAsync(
         string channel,
         string packageOutput,
         CancellationToken cancellationToken)
@@ -506,7 +572,7 @@ public sealed class SystemImageBuilder(
                 Environment.SetEnvironmentVariable(key, value);
             }
 
-            await new BuildToolCommands(_root, _runner).ArchPackageAsync(version, cancellationToken);
+            return await new BuildToolCommands(_root, _runner).ArchPackageAsync(version, cancellationToken);
         }
         finally
         {
@@ -515,39 +581,6 @@ public sealed class SystemImageBuilder(
                 Environment.SetEnvironmentVariable(key, value);
             }
         }
-        var packages = Directory.GetFiles(packageOutput, "*.pkg.tar.*", SearchOption.TopDirectoryOnly)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        if (packages.Length == 0)
-        {
-            throw new InvalidOperationException($"no HomeHarbor packages were produced in {packageOutput}");
-        }
-
-        var controlPackages = new List<string>();
-        var recoveryPackages = new List<string>();
-        foreach (var package in packages)
-        {
-            var name = Path.GetFileName(package);
-            if (name.StartsWith("dotnet-", StringComparison.Ordinal))
-            {
-                controlPackages.Add(package);
-                recoveryPackages.Add(package);
-            }
-            else if (name.StartsWith("homeharbor-recovery-", StringComparison.Ordinal))
-            {
-                recoveryPackages.Add(package);
-            }
-            else if (!name.StartsWith("homeharbor-installer-", StringComparison.Ordinal))
-            {
-                controlPackages.Add(package);
-            }
-        }
-
-        return controlPackages.Count == 0
-            ? throw new InvalidOperationException($"no HomeHarbor control packages were produced in {packageOutput}")
-            : !recoveryPackages.Any(package => Path.GetFileName(package).StartsWith("homeharbor-recovery-", StringComparison.Ordinal))
-            ? throw new InvalidOperationException("expected one HomeHarbor recovery package, found none")
-            : ((IReadOnlyList<string> ControlPackages, IReadOnlyList<string> RecoveryPackages))(controlPackages, recoveryPackages);
     }
 
     private void ValidateReleaseInputs(string channel)
@@ -708,7 +741,7 @@ public sealed class SystemImageBuilder(
 
     private async Task RequireToolsAsync(CancellationToken cancellationToken)
     {
-        foreach (var tool in new[] { "avbtool", "makepkg", "pacman", "pnpm", "mkfs.erofs", "dump.erofs", "lpmake", "lpdump", "modinfo", "veritysetup", "cc" })
+        foreach (var tool in new[] { "avbtool", "bsdtar", "makepkg", "pacman", "pnpm", "dump.erofs", "lpmake", "lpdump", "modinfo", "veritysetup", "cc", "zstd" })
         {
             await NeedAsync(tool, cancellationToken);
         }
@@ -762,12 +795,14 @@ public sealed class SystemImageBuilder(
         string rootfs,
         IEnumerable<string> packages,
         CancellationToken cancellationToken,
-        string? standardInput = null)
+        string? standardInput = null,
+        string? pacmanConfig = null)
     {
         var result = await _rootless.RunPacstrapAsync(
             rootfs,
             packages,
             new CommandRunOptions(StandardInput: standardInput, StreamOutput: true, StreamError: true),
+            pacmanConfig,
             cancellationToken);
         _ = result.EnsureSuccess();
     }
@@ -1668,6 +1703,7 @@ public sealed class SystemImageBuilder(
     private static void PrepareWritableRootfs(string rootfs)
     {
         SetMode(rootfs, 0755);
+        RootlessBuildExecutor.ConfigureSystemdResolved(rootfs);
     }
 
     private static void Truncate(string path, long length)

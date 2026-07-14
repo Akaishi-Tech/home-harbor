@@ -1,12 +1,15 @@
 [Unit]
 Description=Apply pending HomeHarbor storage OOBE plan
+Requires=homeharbor-selinux-ready.target
 RequiresMountsFor=/var/lib/homeharbor /var/lib/homeharbor/secrets
+After=homeharbor-selinux-ready.target
 Before=homeharbor-postgresql-init.service homeharbor-postgresql.service homeharbor-api.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=6h
 ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent storage-apply
-ExecStartPost=-/usr/lib/homeharbor/agent/HomeHarbor.Agent storage-postapply
+ExecStartPost=/usr/lib/homeharbor/agent/HomeHarbor.Agent storage-postapply
 
 [Install]
 WantedBy=multi-user.target

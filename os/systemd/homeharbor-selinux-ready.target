@@ -1,0 +1,11 @@
+[Unit]
+Description=HomeHarbor SELinux policy and persistent labels are ready
+DefaultDependencies=no
+AssertSecurity=selinux
+Requires=homeharbor-selinux-relabel-late.service homeharbor-selinux-cgroup-relabel.service
+After=homeharbor-selinux-relabel-late.service homeharbor-selinux-cgroup-relabel.service
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Install]
+RequiredBy=sysinit.target

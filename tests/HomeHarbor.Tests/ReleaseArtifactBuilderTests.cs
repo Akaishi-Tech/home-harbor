@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -8,6 +9,198 @@ namespace HomeHarbor.Tests;
 [TestClass]
 public sealed partial class ReleaseArtifactBuilderTests
 {
+    [TestMethod]
+    public void Live_Installer_Erofs_Options_Avoid_The_Unsafe_Ztailpacking_Path()
+    {
+        var contexts = Path.Combine("relative", "file_contexts");
+        var options = ReleaseArtifactBuilder.LiveInstallerErofsOptions(contexts);
+
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "-zlzma,109",
+                "--mount-point=/",
+                "--file-contexts=" + Path.GetFullPath(contexts)
+            },
+            options.ToArray());
+        Assert.DoesNotContain("-E", options);
+        Assert.DoesNotContain("ztailpacking", options);
+    }
+
+    [TestMethod]
+    public void Live_Installer_Policy_Validation_Uses_Exact_System_And_Live_Erofs_Paths()
+    {
+        Assert.AreEqual(
+            "/usr/lib/homeharbor/selinux-store/refpolicy-arch",
+            ReleaseArtifactBuilder.SystemPolicyStoreErofsPath);
+        Assert.AreEqual(
+            "/var/lib/selinux/refpolicy-arch/active/modules",
+            ReleaseArtifactBuilder.LiveInstallerPolicyModulesErofsPath);
+        Assert.AreEqual(
+            "/opt/homeharbor-installer/payloads",
+            ReleaseArtifactBuilder.LiveInstallerPayloadErofsDirectory);
+    }
+
+    [TestMethod]
+    public async Task Live_Installer_Erofs_Validation_Rejects_Changed_Policy_Store_Content()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var expected = Directory.CreateDirectory(Path.Combine(tempDir, "expected"));
+            var actual = Directory.CreateDirectory(Path.Combine(tempDir, "actual"));
+            _ = Directory.CreateDirectory(Path.Combine(expected.FullName, "400", "base"));
+            _ = Directory.CreateDirectory(Path.Combine(actual.FullName, "400", "base"));
+            await File.WriteAllTextAsync(Path.Combine(expected.FullName, "400", "base", "cil"), "BZh-good");
+            await File.WriteAllTextAsync(Path.Combine(actual.FullName, "400", "base", "cil"), "BZh-good");
+
+            await ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                expected.FullName,
+                actual.FullName,
+                "test policy store");
+
+            await File.WriteAllTextAsync(Path.Combine(actual.FullName, "400", "base", "cil"), "\0BZh-bad");
+            var changed = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                    expected.FullName,
+                    actual.FullName,
+                    "test policy store"));
+            Assert.Contains("400/base/cil", changed.Message);
+
+            await File.WriteAllTextAsync(Path.Combine(actual.FullName, "400", "base", "cil"), "BZh-good");
+            await File.WriteAllTextAsync(Path.Combine(actual.FullName, "400", "base", "unexpected"), "extra");
+            var fileSet = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                    expected.FullName,
+                    actual.FullName,
+                    "test policy store"));
+            Assert.Contains("unexpected=[400/base/unexpected]", fileSet.Message);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Live_Installer_Erofs_Validation_Rejects_Metadata_And_Entry_Type_Changes()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var expected = Directory.CreateDirectory(Path.Combine(tempDir, "expected"));
+            var actual = Directory.CreateDirectory(Path.Combine(tempDir, "actual"));
+            File.SetUnixFileMode(expected.FullName, (UnixFileMode)Convert.ToInt32("700", 8));
+            File.SetUnixFileMode(actual.FullName, (UnixFileMode)Convert.ToInt32("700", 8));
+
+            var expectedEmpty = Directory.CreateDirectory(Path.Combine(expected.FullName, "disabled"));
+            File.SetUnixFileMode(expectedEmpty.FullName, (UnixFileMode)Convert.ToInt32("700", 8));
+            var missingDirectory = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                    expected.FullName,
+                    actual.FullName,
+                    "test policy store"));
+            Assert.Contains("missing=[disabled]", missingDirectory.Message);
+
+            var actualEmpty = Directory.CreateDirectory(Path.Combine(actual.FullName, "disabled"));
+            File.SetUnixFileMode(actualEmpty.FullName, (UnixFileMode)Convert.ToInt32("700", 8));
+            await ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                expected.FullName,
+                actual.FullName,
+                "test policy store");
+
+            Directory.Delete(actualEmpty.FullName);
+            await File.WriteAllTextAsync(actualEmpty.FullName, string.Empty);
+            File.SetUnixFileMode(actualEmpty.FullName, (UnixFileMode)Convert.ToInt32("700", 8));
+            var changedType = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                    expected.FullName,
+                    actual.FullName,
+                    "test policy store"));
+            Assert.Contains("entry changed inside EROFS: disabled", changedType.Message);
+
+            File.Delete(actualEmpty.FullName);
+            actualEmpty = Directory.CreateDirectory(actualEmpty.FullName);
+            File.SetUnixFileMode(actualEmpty.FullName, (UnixFileMode)Convert.ToInt32("755", 8));
+            var changedMode = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                    expected.FullName,
+                    actual.FullName,
+                    "test policy store"));
+            Assert.Contains("entry changed inside EROFS: disabled", changedMode.Message);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Live_Installer_Erofs_Validation_Rejects_Changed_Symbolic_Link_Target_Without_Traversal()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var expected = Directory.CreateDirectory(Path.Combine(tempDir, "expected"));
+            var actual = Directory.CreateDirectory(Path.Combine(tempDir, "actual"));
+            foreach (var root in new[] { expected.FullName, actual.FullName })
+            {
+                _ = Directory.CreateDirectory(Path.Combine(root, "target-a"));
+                _ = Directory.CreateDirectory(Path.Combine(root, "target-b"));
+            }
+
+            _ = Directory.CreateSymbolicLink(Path.Combine(expected.FullName, "selected"), "target-a");
+            _ = Directory.CreateSymbolicLink(Path.Combine(actual.FullName, "selected"), "target-b");
+            var changedLink = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                    expected.FullName,
+                    actual.FullName,
+                    "test policy store"));
+            Assert.Contains("entry changed inside EROFS: selected", changedLink.Message);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Live_Installer_Erofs_Validation_Rejects_Fifo_Without_Blocking()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var expected = Directory.CreateDirectory(Path.Combine(tempDir, "expected"));
+            var actual = Directory.CreateDirectory(Path.Combine(tempDir, "actual"));
+            await File.WriteAllTextAsync(Path.Combine(expected.FullName, "cil"), "regular");
+            var fifo = Path.Combine(actual.FullName, "cil");
+            var startInfo = new ProcessStartInfo("/usr/bin/mkfifo")
+            {
+                UseShellExecute = false
+            };
+            startInfo.ArgumentList.Add(fifo);
+            using (var process = Process.Start(startInfo)
+                                 ?? throw new InvalidOperationException("could not start mkfifo"))
+            {
+                await process.WaitForExitAsync();
+                Assert.AreEqual(0, process.ExitCode);
+            }
+
+            var validation = Task.Run(() => ReleaseArtifactBuilder.ValidateFileTreeContentAsync(
+                expected.FullName,
+                actual.FullName,
+                "test policy store"));
+            var completed = await Task.WhenAny(validation, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.AreSame(validation, completed, "FIFO validation blocked instead of rejecting the inode type");
+            var unsupported = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => validation);
+            Assert.Contains("unsupported file tree entry type Fifo", unsupported.Message);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     [TestMethod]
     public void RequireCompleteLogicalPairArtifact_Accepts_Only_Exact_Identical_AB_Images()
     {
@@ -117,6 +310,21 @@ public sealed partial class ReleaseArtifactBuilderTests
             compact);
         Assert.DoesNotContain(
             "Sha256HexAsync(plan.Artifacts.Firmware.Path",
+            compact);
+        Assert.Contains(
+            "var expectedSystemRootfs = RequireCompleteLogicalPairArtifact(_imageWork, \"root\", rootPartitionBytes)",
+            compact);
+        Assert.Contains(
+            "ExtractSystemOtaRootfsAsync( embeddedSystemOta, embeddedSystemRootfs, rootPartitionBytes",
+            compact);
+        Assert.Contains(
+            "RequireSameFileContentAsync( expectedSystemRootfs, embeddedSystemRootfs",
+            compact);
+        Assert.Contains(
+            "\"--path=\" + SystemPolicyStoreErofsPath, embeddedSystemRootfs",
+            compact);
+        Assert.DoesNotContain(
+            "SystemPolicyStoreErofsPath, plan.Artifacts.Rootfs.Path",
             compact);
     }
 
@@ -252,6 +460,193 @@ public sealed partial class ReleaseArtifactBuilderTests
                     UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead,
                     File.GetUnixFileMode(installed) & (UnixFileMode)0x1FF);
             }
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void LiveInstaller_Package_List_Uses_SELinux_Variants_With_Upstream_Archiso_Tooling()
+    {
+        var recoveryPackages = SystemImageBuildDescriptor
+            .LoadDefaultPlan(RepositoryRoot(), "1.0.0")
+            .Packages
+            .Recovery;
+        var baselinePackages = new[]
+        {
+            "base",
+            "cloud-init",
+            "hyperv",
+            "linux",
+            "mkinitcpio",
+            "mkinitcpio-archiso",
+            "open-vm-tools",
+            "openssh",
+            "pv",
+            "qemu-guest-agent",
+            "syslinux",
+            "virtualbox-guest-utils-nox"
+        };
+
+        var packages = ReleaseArtifactBuilder.BuildLiveInstallerPackageList(
+            baselinePackages,
+            recoveryPackages);
+
+        CollectionAssert.AreEquivalent(
+            new[]
+            {
+                "android-tools",
+                "audit",
+                "base",
+                "checkpolicy",
+                "cloud-init",
+                "coreutils-selinux",
+                "dbus-broker-selinux",
+                "dbus-broker-units",
+                "dbus-selinux",
+                "device-mapper-selinux",
+                "dosfstools",
+                "dotnet-runtime",
+                "erofs-utils-selinux",
+                "findutils-selinux",
+                "gpm",
+                "gptfdisk",
+                "homeharbor-installer",
+                "homeharbor-selinux-policy",
+                "hyperv",
+                "iproute2-selinux",
+                "jq",
+                "libnm-selinux",
+                "libselinux",
+                "libsemanage",
+                "libsepol",
+                "linux",
+                "mkinitcpio",
+                "mkinitcpio-archiso",
+                "networkmanager-selinux",
+                "open-vm-tools",
+                "openssh-selinux",
+                "openssl",
+                "pam-selinux",
+                "pambase-selinux",
+                "policycoreutils",
+                "psmisc-selinux",
+                "pv",
+                "qemu-guest-agent",
+                "secilc",
+                "selinux-refpolicy-arch",
+                "semodule-utils",
+                "shadow-selinux",
+                "sudo-selinux",
+                "syslinux",
+                "systemd-libs-selinux",
+                "systemd-resolvconf-selinux",
+                "systemd-selinux",
+                "systemd-sysvcompat-selinux",
+                "util-linux-libs-selinux",
+                "util-linux-selinux",
+                "virtualbox-guest-utils-nox"
+            },
+            packages.ToArray());
+        ReleaseArtifactBuilder.ValidateLiveInstallerPackageList(
+            string.Join('\n', packages.Select(package => package + " 1-1")));
+
+        _ = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            ReleaseArtifactBuilder.ValidateLiveInstallerPackageList(
+                string.Join('\n', packages.Select(package => package + " 1-1")) + "\nsystemd 261.1-1\n"));
+        _ = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            ReleaseArtifactBuilder.ValidateLiveInstallerPackageList(
+                string.Join(
+                    '\n',
+                    packages
+                        .Where(package => package != "homeharbor-selinux-policy")
+                        .Select(package => package + " 1-1"))));
+    }
+
+    [TestMethod]
+    public void LiveInstaller_Boot_Configurations_Enable_SELinux_Without_Changing_Memtest()
+    {
+        const string grub = """
+            menuentry 'HomeHarbor' {
+                linux /hh/boot/x86_64/vmlinuz-linux archisobasedir=hh
+            }
+            menuentry 'Memtest' {
+                linux /boot/memtest86+/memtest.efi
+            }
+            """;
+        var configuredGrub = ReleaseArtifactBuilder.AddLiveInstallerSelinuxKernelArguments(grub);
+        Assert.Contains(
+            "linux /hh/boot/x86_64/vmlinuz-linux archisobasedir=hh " + SecureBootAssets.SelinuxArgs,
+            configuredGrub);
+        Assert.DoesNotContain(
+            "linux /boot/memtest86+/memtest.efi " + SecureBootAssets.SelinuxArgs,
+            configuredGrub);
+        Assert.AreEqual(
+            configuredGrub,
+            ReleaseArtifactBuilder.AddLiveInstallerSelinuxKernelArguments(configuredGrub));
+        ReleaseArtifactBuilder.ValidateLiveInstallerBootConfiguration("grub.cfg", configuredGrub);
+
+        var conflictingGrub = configuredGrub.Replace(
+            "enforcing=1",
+            "enforcing=1 enforcing=0",
+            StringComparison.Ordinal);
+        _ = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            ReleaseArtifactBuilder.ValidateLiveInstallerBootConfiguration("grub.cfg", conflictingGrub));
+        var normalizedGrub = ReleaseArtifactBuilder.AddLiveInstallerSelinuxKernelArguments(conflictingGrub);
+        Assert.DoesNotContain("enforcing=0", normalizedGrub, StringComparison.Ordinal);
+        ReleaseArtifactBuilder.ValidateLiveInstallerBootConfiguration("grub.cfg", normalizedGrub);
+
+        const string syslinux = """
+            LABEL homeharbor
+            LINUX /hh/boot/x86_64/vmlinuz-linux
+            INITRD /hh/boot/x86_64/initramfs-linux.img
+            APPEND archisobasedir=hh
+            """;
+        var configuredSyslinux = ReleaseArtifactBuilder.AddLiveInstallerSelinuxKernelArguments(syslinux);
+        Assert.Contains("APPEND archisobasedir=hh " + SecureBootAssets.SelinuxArgs, configuredSyslinux);
+        ReleaseArtifactBuilder.ValidateLiveInstallerBootConfiguration("syslinux-linux.cfg", configuredSyslinux);
+
+        _ = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            ReleaseArtifactBuilder.ValidateLiveInstallerBootConfiguration("grub.cfg", grub));
+    }
+
+    [TestMethod]
+    public async Task Release_Copies_Only_A_Verified_Local_Package_Set_With_Its_Provenance()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var recipe = Path.Combine(tempDir, "packaging", "arch", "selinux", "policy");
+            _ = Directory.CreateDirectory(recipe);
+            await File.WriteAllTextAsync(Path.Combine(recipe, "PKGBUILD"), "pkgname=policy\n");
+            var source = Path.Combine(tempDir, "source");
+            var destination = Path.Combine(tempDir, "destination");
+            _ = Directory.CreateDirectory(source);
+            var archive = Path.Combine(source, "policy-1-1-any.pkg.tar.zst");
+            await File.WriteAllTextAsync(archive, "locally built package");
+            await ArchPackageSetProvenance.WriteAsync(tempDir, "1.0.0", source);
+
+            await ReleaseArtifactBuilder.CopyVerifiedPackageSetAsync(
+                tempDir,
+                "1.0.0",
+                source,
+                destination,
+                CancellationToken.None);
+
+            Assert.IsTrue(File.Exists(Path.Combine(destination, Path.GetFileName(archive))));
+            Assert.IsTrue(File.Exists(Path.Combine(destination, ArchPackageSetProvenance.FileName)));
+            await ArchPackageSetProvenance.VerifyAsync(tempDir, "1.0.0", destination);
+
+            await File.AppendAllTextAsync(archive, "tampered");
+            _ = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                ReleaseArtifactBuilder.CopyVerifiedPackageSetAsync(
+                    tempDir,
+                    "1.0.0",
+                    source,
+                    Path.Combine(tempDir, "rejected"),
+                    CancellationToken.None));
         }
         finally
         {

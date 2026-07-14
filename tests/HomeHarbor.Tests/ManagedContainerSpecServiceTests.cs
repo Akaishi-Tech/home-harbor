@@ -286,7 +286,8 @@ public sealed class ManagedContainerSpecServiceTests
         var quadlet = fixture.Service.BuildQuadlet(fixture.Container, definition);
 
         Assert.Contains("UserNS=auto\n", quadlet);
-        Assert.Contains($"Volume=\"{appRoot}:/data:rw,U\"\n", quadlet);
+        Assert.Contains($"Volume=\"{appRoot}:/data:rw,U,Z\"\n", quadlet);
+        Assert.Contains("[Service]\nEnvironment=XDG_CONFIG_HOME=%h/.config/containers/runtime\n", quadlet);
         Assert.DoesNotContain("keep-groups", quadlet);
     }
 

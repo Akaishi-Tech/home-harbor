@@ -1,0 +1,5 @@
+# HomeHarbor Linux-to-SELinux user mappings for the MCS policy.
+root:root:s0-mcs_systemhigh
+homeharbor-containers:staff_u:s0
+recovery:unconfined_u:s0
+__default__:user_u:s0

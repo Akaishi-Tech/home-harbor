@@ -16,6 +16,66 @@ namespace HomeHarbor.Tests;
 public sealed class AgentProgramTests
 {
     [TestMethod]
+    public async Task Postgres_Init_Labels_Existing_Directories_And_Recurses_Only_After_Initdb()
+    {
+        var temp = Directory.CreateTempSubdirectory("homeharbor-postgres-init-");
+        try
+        {
+            var data = Path.Combine(temp.FullName, "postgresql", "data");
+            var parent = Path.GetDirectoryName(data)!;
+            using var environment = new TemporaryEnvironment(("HOMEHARBOR_POSTGRES_DATA_DIR", data));
+            var runner = new RecordingCommandRunner();
+
+            Assert.AreEqual(0, await AgentProgram.RunAsync(["postgres-init"], runner, CancellationToken.None));
+
+            var restoreconCalls = runner.Calls
+                .Where(call => call.FileName == "restorecon")
+                .ToArray();
+            Assert.HasCount(2, restoreconCalls);
+            CollectionAssert.AreEqual(new[] { parent, data }, restoreconCalls[0].Arguments);
+            CollectionAssert.AreEqual(new[] { "-Rx", parent }, restoreconCalls[1].Arguments);
+            var initdbIndex = runner.Calls.FindIndex(call =>
+                call.FileName == "setpriv" && call.Arguments.Contains("initdb", StringComparer.Ordinal));
+            Assert.IsGreaterThan(runner.Calls.IndexOf(restoreconCalls[0]), initdbIndex);
+            Assert.IsGreaterThan(initdbIndex, runner.Calls.IndexOf(restoreconCalls[1]));
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Postgres_Init_Does_Not_Recursively_Scan_An_Existing_Database()
+    {
+        var temp = Directory.CreateTempSubdirectory("homeharbor-postgres-existing-");
+        try
+        {
+            var data = Path.Combine(temp.FullName, "postgresql", "data");
+            var parent = Path.GetDirectoryName(data)!;
+            _ = Directory.CreateDirectory(data);
+            File.WriteAllText(Path.Combine(data, "PG_VERSION"), "18\n");
+            using var environment = new TemporaryEnvironment(("HOMEHARBOR_POSTGRES_DATA_DIR", data));
+            var runner = new RecordingCommandRunner();
+
+            Assert.AreEqual(0, await AgentProgram.RunAsync(["postgres-init"], runner, CancellationToken.None));
+
+            var restoreconCalls = runner.Calls
+                .Where(call => call.FileName == "restorecon")
+                .ToArray();
+            Assert.HasCount(1, restoreconCalls);
+            CollectionAssert.AreEqual(new[] { parent, data }, restoreconCalls[0].Arguments);
+            Assert.IsFalse(runner.Calls.Any(call =>
+                call.Arguments.Any(argument => argument.StartsWith("-R", StringComparison.Ordinal))));
+            Assert.IsFalse(runner.Calls.Any(call => call.FileName == "setpriv"));
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void StorageHealth_Defers_Only_Expected_PreOobe_Statuses()
     {
         Assert.IsTrue(AgentProgram.IsExpectedPreOobeDeferral(HttpStatusCode.Conflict));
@@ -1009,9 +1069,14 @@ public sealed class AgentProgramTests
                 ], runner, CancellationToken.None));
 
             Assert.Contains("exceeds maximum size", ex.Message);
-            Assert.HasCount(1, runner.Calls);
-            Assert.AreEqual("verify-ota-manifest", runner.Calls[0].FileName);
-            Assert.AreEqual(publicKey, runner.Calls[0].Arguments[1]);
+            Assert.HasCount(2, runner.Calls);
+            Assert.AreEqual("restorecon", runner.Calls[0].FileName);
+            CollectionAssert.AreEqual(
+                new[] { workRoot, runner.Calls[0].Arguments[1] },
+                runner.Calls[0].Arguments);
+            Assert.AreEqual(workRoot, Path.GetDirectoryName(runner.Calls[0].Arguments[1]));
+            Assert.AreEqual("verify-ota-manifest", runner.Calls[1].FileName);
+            Assert.AreEqual(publicKey, runner.Calls[1].Arguments[1]);
             Assert.IsTrue(verifiedManifestWasReadable);
             Assert.Contains("\"channel\":\"dev\"", verifiedManifestText ?? string.Empty);
             Assert.IsTrue(Directory.Exists(workRoot));
@@ -1248,7 +1313,7 @@ public sealed class AgentProgramTests
             Assert.AreEqual(0, exitCode);
             Assert.AreEqual("GET /api/networking/proxy/caddyfile HTTP/1.1", requestLine);
             var validationIndex = runner.Calls.FindIndex(call =>
-                call.FileName == "runuser" && call.Arguments.Contains("validate", StringComparer.Ordinal));
+                call.FileName == "setpriv" && call.Arguments.Contains("validate", StringComparer.Ordinal));
             Assert.IsGreaterThanOrEqualTo(2, validationIndex);
             var temporaryConfig = caddyfile + ".new";
             CollectionAssert.AreEqual(
@@ -1262,7 +1327,8 @@ public sealed class AgentProgramTests
             CollectionAssert.AreEqual(
                 new[]
                 {
-                    "-u", "caddy", "--", "env", "HOME=/var/lib/caddy",
+                    "--reuid", "caddy", "--regid", "caddy", "--init-groups", "--",
+                    "env", "HOME=/var/lib/caddy",
                     "caddy", "validate", "--config", temporaryConfig
                 },
                 runner.Calls[validationIndex].Arguments);
@@ -1357,9 +1423,10 @@ public sealed class AgentProgramTests
             Pull=missing
             NoNewPrivileges=true
             UserNS=auto
-            Volume="{{appRoot}}:/data:rw,U"
+            Volume="{{appRoot}}:/data:rw,U,Z"
 
             [Service]
+            Environment=XDG_CONFIG_HOME=%h/.config/containers/runtime
             Restart=on-failure
             RestartSec=5
 
@@ -1444,6 +1511,29 @@ public sealed class AgentProgramTests
                 Directory.Delete(tempDir, recursive: true);
             }
         }
+    }
+
+    [TestMethod]
+    public void ResolveContainerRuntimePaths_Allows_Overrides_Only_For_DryRun()
+    {
+        var home = Path.Combine(Path.GetTempPath(), "homeharbor-container-runtime-test");
+        var quadletDirectory = Path.Combine(home, "quadlets");
+        using var environment = new TemporaryEnvironment(
+            ("HOMEHARBOR_CONTAINER_USER", "test-containers"),
+            ("HOMEHARBOR_CONTAINER_HOME", home),
+            ("HOMEHARBOR_QUADLET_DIR", quadletDirectory));
+
+        var production = AgentProgram.ResolveContainerRuntimePaths(dryRun: false);
+        Assert.AreEqual("homeharbor-containers", production.User);
+        Assert.AreEqual(ContainerRuntimePaths.DefaultHome, production.Home);
+        Assert.AreEqual(ContainerRuntimePaths.RootManagedQuadletDirectory, production.QuadletDirectory);
+        Assert.AreEqual(ContainerRuntimePaths.PodmanConfigHome, production.PodmanConfigHome);
+
+        var dryRun = AgentProgram.ResolveContainerRuntimePaths(dryRun: true);
+        Assert.AreEqual("test-containers", dryRun.User);
+        Assert.AreEqual(home, dryRun.Home);
+        Assert.AreEqual(quadletDirectory, dryRun.QuadletDirectory);
+        Assert.AreEqual(Path.Combine(home, ".config", "containers", "runtime"), dryRun.PodmanConfigHome);
     }
 
     [TestMethod]
@@ -1603,7 +1693,8 @@ public sealed class AgentProgramTests
             var quadlet = AgentProgram.BuildValidatedContainerQuadlet(document.RootElement, dataRoot);
 
             Assert.Contains("UserNS=auto\n", quadlet);
-            Assert.Contains(":/data:rw,U\"\n", quadlet);
+            Assert.Contains(":/data:rw,U,Z\"\n", quadlet);
+            Assert.Contains("[Service]\nEnvironment=XDG_CONFIG_HOME=%h/.config/containers/runtime\n", quadlet);
             Assert.DoesNotContain("keep-groups", quadlet);
         }
         finally
@@ -1678,11 +1769,11 @@ public sealed class AgentProgramTests
 
             Assert.IsTrue(AgentProgram.ContainerQuadletNeedsUpdate(
                 tempFile,
-                "[Container]\nUserNS=auto\nVolume=/new:/data:rw,U\n"));
-            File.WriteAllText(tempFile, "[Container]\nUserNS=auto\nVolume=/new:/data:rw,U\n");
+                "[Container]\nUserNS=auto\nVolume=/new:/data:rw,U,Z\n"));
+            File.WriteAllText(tempFile, "[Container]\nUserNS=auto\nVolume=/new:/data:rw,U,Z\n");
             Assert.IsFalse(AgentProgram.ContainerQuadletNeedsUpdate(
                 tempFile,
-                "[Container]\nUserNS=auto\nVolume=/new:/data:rw,U\n"));
+                "[Container]\nUserNS=auto\nVolume=/new:/data:rw,U,Z\n"));
         }
         finally
         {
@@ -1752,7 +1843,7 @@ public sealed class AgentProgramTests
     }
 
     [TestMethod]
-    public async Task StoragePostApply_Queues_Full_Service_Path_Without_Blocking()
+    public async Task StoragePostApply_Uses_Epoch_Gated_Data_Relabel_And_Queues_Service_Path()
     {
         var runner = new RecordingCommandRunner((fileName, args, _) =>
             fileName == "findmnt"
@@ -1763,11 +1854,14 @@ public sealed class AgentProgramTests
         var exitCode = await AgentProgram.RunAsync(["storage-postapply"], runner, CancellationToken.None);
 
         Assert.AreEqual(0, exitCode);
-        Assert.HasCount(2, runner.Calls);
+        Assert.HasCount(4, runner.Calls);
         Assert.AreEqual("findmnt", runner.Calls[0].FileName);
         CollectionAssert.AreEqual(new[] { "-n", "-o", "FSTYPE", "--mountpoint", "/homeharbor-data" }, runner.Calls[0].Arguments);
-        Assert.AreEqual("systemctl", runner.Calls[1].FileName);
-        CollectionAssert.AreEqual(new[] { "--no-block", "start", "homeharbor-postgresql-bootstrap.service" }, runner.Calls[1].Arguments);
+        Assert.AreEqual("selinuxenabled", runner.Calls[1].FileName);
+        Assert.AreEqual("/usr/lib/homeharbor/selinux-store-sync", runner.Calls[2].FileName);
+        CollectionAssert.AreEqual(new[] { "selinux-relabel", "data" }, runner.Calls[2].Arguments);
+        Assert.AreEqual("systemctl", runner.Calls[3].FileName);
+        CollectionAssert.AreEqual(new[] { "--no-block", "start", "homeharbor-postgresql-bootstrap.service" }, runner.Calls[3].Arguments);
     }
 
     [TestMethod]
@@ -1797,14 +1891,14 @@ public sealed class AgentProgramTests
 
         Assert.AreEqual(0, exitCode);
         Assert.Contains(call =>
-            call.FileName == "runuser"
-            && call.Arguments.SequenceEqual(["-u", "postgres", "--", "psql", "-h", "/run/postgresql", "-p", "5432", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE \"homeharbor\" LOGIN;"]), runner.Calls);
+            call.FileName == "setpriv"
+            && call.Arguments.SequenceEqual(["--reuid", "postgres", "--regid", "postgres", "--init-groups", "--", "psql", "-h", "/run/postgresql", "-p", "5432", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE \"homeharbor\" LOGIN;"]), runner.Calls);
         Assert.Contains(call =>
-            call.FileName == "runuser"
-            && call.Arguments.SequenceEqual(["-u", "postgres", "--", "createdb", "-h", "/run/postgresql", "-p", "5432", "-O", "homeharbor", "homeharbor"]), runner.Calls);
+            call.FileName == "setpriv"
+            && call.Arguments.SequenceEqual(["--reuid", "postgres", "--regid", "postgres", "--init-groups", "--", "createdb", "-h", "/run/postgresql", "-p", "5432", "-O", "homeharbor", "homeharbor"]), runner.Calls);
         var migrate = runner.Calls.Single(call =>
-            call.FileName == "runuser"
-            && call.Arguments.SequenceEqual(["-u", "homeharbor", "--", "dotnet", apiDll, "database-migrate"]));
+            call.FileName == "setpriv"
+            && call.Arguments.SequenceEqual(["--reuid", "homeharbor", "--regid", "homeharbor", "--init-groups", "--", "dotnet", apiDll, "database-migrate"]));
         Assert.AreEqual(Path.GetDirectoryName(apiDll), migrate.Options?.WorkingDirectory);
         Assert.AreEqual(TimeSpan.FromMinutes(5), migrate.Options?.Timeout);
         Assert.Contains(call =>
@@ -1907,9 +2001,10 @@ public sealed class AgentProgramTests
             "Pull=missing",
             "NoNewPrivileges=true",
             "UserNS=auto",
-            "Volume=\"" + appRoot + ":/data:rw,U\"",
+            "Volume=\"" + appRoot + ":/data:rw,U,Z\"",
             "",
             "[Service]",
+            "Environment=XDG_CONFIG_HOME=%h/.config/containers/runtime",
             "Restart=on-failure",
             "RestartSec=5",
             "",

@@ -25,7 +25,7 @@ public sealed class ApplianceUnitSecurityTests
         Assert.DoesNotContain("homeharbor-apps", manifest);
         Assert.Contains("name: homeharbor-containers\n      start: 200000\n      count: 65536", manifest);
         Assert.Contains("d /run/homeharbor-api 2750 homeharbor homeharbor-api", tmpfiles);
-        Assert.Contains("d /homeharbor-data/apps 0711 root root", tmpfiles);
+        Assert.DoesNotContain("d /homeharbor-data", tmpfiles);
     }
 
     [TestMethod]
@@ -76,8 +76,8 @@ public sealed class ApplianceUnitSecurityTests
         var package = File.ReadAllText(Path.Combine(root, "packaging", "arch", "PKGBUILD"));
         var manifest = File.ReadAllText(Path.Combine(root, "system", "x86_64", "system", "manifest.yml"));
 
-        Assert.Contains("Requires=caddy.service", service);
-        Assert.Contains("After=caddy.service", service);
+        Assert.Contains("Requires=homeharbor-selinux-ready.target caddy.service", service);
+        Assert.Contains("After=homeharbor-selinux-ready.target caddy.service", service);
         Assert.Contains("ExecStart=/usr/lib/homeharbor/agent/HomeHarbor.Agent display-tls-trust", service);
         Assert.Contains("Restart=on-failure", service);
         Assert.Contains("StartLimitBurst=12", service);

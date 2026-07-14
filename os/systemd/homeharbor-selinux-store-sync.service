@@ -1,0 +1,18 @@
+[Unit]
+Description=Synchronize the HomeHarbor SELinux policy module store
+DefaultDependencies=no
+AssertSecurity=selinux
+AssertPathIsSymbolicLink=!/var/lib
+AssertPathIsSymbolicLink=!/var/lib/selinux
+AssertPathIsSymbolicLink=!/var/lib/selinux/.homeharbor-store-sync
+RequiresMountsFor=/var
+Conflicts=shutdown.target
+After=local-fs.target
+Before=homeharbor-selinux-relabel.service systemd-tmpfiles-setup.service sysinit.target shutdown.target
+
+[Service]
+Type=oneshot
+StateDirectory=selinux/.homeharbor-store-sync
+StateDirectoryMode=0700
+ExecStart=/usr/lib/homeharbor/selinux-store-sync selinux-store-sync
+RemainAfterExit=yes

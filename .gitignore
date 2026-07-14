@@ -84,6 +84,9 @@ src/HomeHarbor.Api/wwwroot/
 
 # HomeHarbor local secrets, signing material, and generated appliance media
 /keys
+/packaging/arch/selinux/*/src/
+/packaging/arch/selinux/*/pkg/
+/packaging/arch/selinux/systemd-selinux/systemd/
 *.pem
 *.key
 *.crt

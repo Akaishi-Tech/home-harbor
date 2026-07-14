@@ -1,0 +1,46 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71;
+# maintained here and built only into the HomeHarbor repository.
+
+pkgname=libselinux
+pkgver=3.10
+pkgrel=1
+pkgdesc="SELinux library and simple utilities"
+arch=(x86_64)
+url="https://github.com/SELinuxProject/selinux"
+license=(LicenseRef-libselinux-1.0)
+groups=(selinux)
+makedepends=(pkgconf)
+depends=('libsepol>=3.10' pcre2)
+conflicts=(selinux-usr-libselinux)
+provides=("selinux-usr-libselinux=${pkgver}-${pkgrel}")
+validpgpkeys=(
+  63191CE94183098689CAB8DB7EF137EC935B0EAF
+  68D21823342A13683AEB3E4EFB4C685B5DC1C13E
+)
+source=(
+  "https://github.com/SELinuxProject/selinux/releases/download/${pkgver}/${pkgname}-${pkgver}.tar.gz"{,.asc}
+  libselinux.tmpfiles
+)
+sha256sums=(
+  1ef216c5b56fb7e0a51cd2909787a175a17ee391e0467894807873539ebe766b
+  SKIP
+  afe23890fb2e12e6756e5d81bad3c3da33f38a95d072731c0422fbeb0b1fa1fc
+)
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  export DISABLE_RPM=y
+  export USE_PCRE2=y
+  export CFLAGS="${CFLAGS} -fno-semantic-interposition"
+  make all
+}
+
+package() {
+  provides+=(libselinux.so)
+  cd "${pkgname}-${pkgver}"
+  export DISABLE_RPM=y
+  make DESTDIR="$pkgdir" SBINDIR=/usr/bin SHLIBDIR=/usr/lib install
+  install -Dm0644 "$srcdir/libselinux.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/libselinux.conf"
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

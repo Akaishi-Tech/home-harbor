@@ -1,0 +1,56 @@
+# Maintainer: Tobias Powalowski <tpowa@archlinux.org>
+# SELinux Maintainer: Nicolas Iooss (nicolas <dot> iooss <at> m4x <dot> org)
+# SELinux Contributor: Timothée Ravier <tim@siosm.fr>
+# SELinux Contributor: Nicky726 <Nicky726@gmail.com>
+#
+# HomeHarbor provenance:
+# - Arch Linux packaging baseline: archlinux/packaging/packages/findutils
+#   commit 494e6eca038c3ed8bbe72eeeb4aa702f45ac39bf (2025-07-26).
+# - SELinux delta rebased from archlinuxhardened/selinux
+#   commit e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71 (2026-03-12).
+# - Source archive: GNU findutils 4.10.0 official signed release tarball.
+# - This recipe builds from source; no archlinuxhardened binary package is used.
+
+pkgname=findutils-selinux
+_pkgname=${pkgname%-selinux}
+pkgver=4.10.0
+pkgrel=4
+pkgdesc="GNU utilities to locate files with SELinux support"
+arch=('x86_64')
+license=('GPL-3.0-or-later')
+groups=('selinux')
+depends=('glibc' 'libselinux' 'libselinux.so')
+makedepends=('python')
+conflicts=("${_pkgname}" "selinux-${_pkgname}")
+provides=("${_pkgname}=${pkgver}-${pkgrel}"
+          "selinux-${_pkgname}=${pkgver}-${pkgrel}")
+url='https://www.gnu.org/software/findutils/'
+source=("https://ftp.gnu.org/gnu/${_pkgname}/${_pkgname}-${pkgver}.tar.xz"
+        "https://ftp.gnu.org/gnu/${_pkgname}/${_pkgname}-${pkgver}.tar.xz.sig")
+validpgpkeys=('A5189DB69C1164D33002936646502EF796917195') # Bernhard Voelker <mail@bernhard-voelker.de>
+b2sums=('2eebdcb425c04170d17afb80e7270ba095bd691660d961dcfa731141633d3bb597d0b47d69ed17e891ef884a36d4c232885097e45b41d3d3ac79dbeae6ee2282'
+        'SKIP')
+
+build() {
+  cd "${_pkgname}-${pkgver}"
+
+  # Don't build or install locate because we use mlocate,
+  # which is a secure version of locate.
+  sed -e '/^SUBDIRS/s/locate//' -e 's/frcode locate updatedb//' -i Makefile.in
+
+  # configure auto-detects libselinux and enables SELinux predicates/actions.
+  ./configure --prefix=/usr
+  # don't build locate, but the docs want a file in there.
+  make -C locate dblocation.texi
+  make
+}
+
+check() {
+  cd "${_pkgname}-${pkgver}"
+  make check
+}
+
+package() {
+  cd "${_pkgname}-${pkgver}"
+  make DESTDIR="${pkgdir}" install
+}

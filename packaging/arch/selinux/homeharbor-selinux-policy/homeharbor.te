@@ -1,0 +1,416 @@
+policy_module(homeharbor, 1.0.40)
+
+type homeharbor_t;
+type homeharbor_exec_t;
+init_daemon_domain(homeharbor_t, homeharbor_exec_t)
+
+# The first enforcing release gives HomeHarbor its own auditable domain while
+# retaining the access it had before SELinux was enabled.  Tightening this
+# domain is intentionally deferred until VM AVC evidence covers every storage,
+# OTA, recovery, and container workflow.
+unconfined_domain(homeharbor_t)
+
+# The live installer is started from an interactive console rather than a
+# systemd unit.  Keep both the upstream unconfined login mapping and Arch's
+# sysadm login mapping able to enter the same HomeHarbor domain.
+unconfined_run_to(homeharbor_t, homeharbor_exec_t)
+
+gen_require(`
+	type sysadm_t;
+	role sysadm_r;
+')
+
+domtrans_pattern(sysadm_t, homeharbor_exec_t, homeharbor_t)
+role sysadm_r types homeharbor_t;
+
+type homeharbor_data_t;
+files_type(homeharbor_data_t)
+
+gen_require(`
+	attribute systemd_user_session_type;
+	type NetworkManager_exec_t;
+	type NetworkManager_t;
+	type NetworkManager_var_lib_t;
+	type auditd_log_t;
+	type bpf_t;
+	type bootloader_t;
+	type container_conf_home_t;
+	type container_cache_home_t;
+	type container_config_t;
+	type container_data_home_t;
+	type container_engine_t;
+	type container_engine_exec_t;
+	type container_file_t;
+	type container_ro_file_t;
+	type container_user_runtime_t;
+	type container_var_lib_t;
+	type cgroup_t;
+	type init_t;
+	type lvm_t;
+	type postgresql_db_t;
+	type samba_etc_t;
+	type samba_log_t;
+	type samba_runtime_t;
+	type samba_secrets_t;
+	type samba_share_t;
+	type samba_var_t;
+	type smbd_t;
+	type staff_t;
+	type staff_dbusd_t;
+	type staff_systemd_t;
+	type systemd_generator_exec_t;
+	type systemd_logind_var_lib_t;
+	type init_runtime_t;
+	type init_var_lib_t;
+	type kernel_t;
+	type getty_t;
+	type home_root_t;
+	type iso9660_t;
+	type lastlog_t;
+	type loadkeys_t;
+	type local_login_t;
+	type memory_pressure_t;
+	type ntpd_t;
+	type security_t;
+	type selinux_config_t;
+	type syslogd_t;
+	type syslogd_runtime_t;
+	type syslogd_tmp_t;
+	type system_dbusd_t;
+	type systemd_generator_t;
+	type systemd_hostnamed_t;
+	type systemd_journal_t;
+	type systemd_tmpfiles_t;
+	type systemd_journal_init_t;
+	type systemd_logind_t;
+	type systemd_logind_runtime_t;
+	type systemd_log_t;
+	type systemd_machine_id_setup_t;
+	type systemd_modules_load_t;
+	type systemd_networkd_t;
+	type systemd_networkd_var_lib_t;
+	type systemd_nsresourced_t;
+	type systemd_nspawn_t;
+	type systemd_pcrphase_t;
+	type systemd_resolved_t;
+	type systemd_sysusers_t;
+	type systemd_userdbd_t;
+	type systemd_user_runtime_notify_t;
+	type systemd_user_runtime_dir_t;
+	type sysadm_systemd_t;
+	type podman_user_t;
+	type podman_user_conmon_t;
+	type policykit_t;
+	type root_t;
+	type ssh_home_t;
+	type uuidd_var_lib_t;
+	type var_lib_t;
+	type var_run_t;
+	type var_spool_t;
+	type var_t;
+	type tmpfs_t;
+	type udev_t;
+	type virtio_device_t;
+')
+
+# The live Archiso root is an overlay created before policy initialization.
+# systemd fixes only that root directory after loading policy and before PID 1
+# enters init_t.  Grant the loading kernel_t domain only the two relabel
+# permissions needed for tmpfs_t -> root_t; file_type already carries the
+# required filesystem association permissions.
+allow kernel_t tmpfs_t:dir relabelfrom;
+allow kernel_t root_t:dir relabelto;
+
+# The rootless Podman systemd generator runs in staff_systemd_t.  Its Home is
+# intentionally under /var/lib rather than /home, so allow both the nonstandard
+# parent traversal and reads of the generated Quadlet configuration.
+files_search_var_lib(staff_systemd_t)
+files_search_var_lib(podman_user_t)
+files_search_var_lib(podman_user_conmon_t)
+container_read_config(staff_systemd_t)
+container_read_home_config(staff_systemd_t)
+allow staff_systemd_t container_conf_home_t:dir list_dir_perms;
+# Quadlet checks the transient rootless search path even though HomeHarbor
+# keeps its persistent definitions in the root-managed directory above.
+allow staff_systemd_t container_user_runtime_t:dir { getattr search };
+
+# tmpfiles creates these paths on the fresh writable /var filesystem before
+# any HomeHarbor service starts. Grant only creation and maintenance for the
+# concrete types named by HomeHarbor and upstream package tmpfiles rules.
+files_search_var(systemd_tmpfiles_t)
+files_search_var_lib(systemd_tmpfiles_t)
+logging_search_logs(systemd_tmpfiles_t)
+systemd_tmpfilesd_managed(homeharbor_data_t)
+systemd_tmpfilesd_managed(auditd_log_t)
+systemd_tmpfilesd_managed(samba_var_t)
+systemd_tmpfilesd_managed(samba_secrets_t)
+systemd_tmpfilesd_managed(samba_log_t)
+systemd_tmpfilesd_managed(container_conf_home_t)
+systemd_tmpfilesd_managed(container_cache_home_t)
+systemd_tmpfilesd_managed(container_data_home_t)
+systemd_tmpfilesd_managed(postgresql_db_t)
+systemd_tmpfilesd_managed(NetworkManager_var_lib_t)
+systemd_tmpfilesd_managed(container_var_lib_t)
+systemd_tmpfilesd_managed(systemd_logind_var_lib_t)
+systemd_tmpfilesd_managed(systemd_networkd_var_lib_t)
+systemd_tmpfilesd_managed(init_var_lib_t)
+systemd_tmpfilesd_managed(uuidd_var_lib_t)
+systemd_tmpfilesd_managed(var_spool_t)
+systemd_tmpfilesd_managed(lastlog_t)
+allow systemd_tmpfiles_t ssh_home_t:dir getattr;
+
+# pam_lastlog2 stores its database below /var/lib/lastlog rather than in the
+# legacy /var/log/lastlog file.  Keep that writable surface on the dedicated
+# login-history type instead of granting the login domain generic /var/lib.
+allow local_login_t lastlog_t:dir manage_dir_perms;
+allow local_login_t lastlog_t:file manage_file_perms;
+
+# systemd 261 exposes its manager I/O socket below /run/systemd.  Recursive
+# tmpfiles cleanup stats that socket while walking /run; it does not connect to
+# or modify it.
+allow systemd_tmpfiles_t init_runtime_t:sock_file getattr;
+
+# systemd 261 and its companion packages use several interfaces that postdate
+# the pinned Arch refpolicy snapshot. Keep the compatibility surface tied to
+# the exact domains and object classes observed on an enforcing appliance.
+# This avoids enabling refpolicy's systemd_tmpfiles_manage_all escape hatch.
+allow systemd_generator_t selinux_config_t:lnk_file read;
+
+fs_list_tmpfs(systemd_networkd_t)
+fs_search_tmpfs(syslogd_t)
+fs_getattr_nsfs_files(systemd_pcrphase_t)
+fs_list_cgroup_dirs(systemd_networkd_t)
+# Loading the maintained overlay module makes systemd-modules-load use
+# libsystemd's CPU-count helper. Its read_one_line_file path opens and reads
+# cpuset.cpus.effective, then uses fstat and TCGETS2 while checking whether the
+# descriptor is a terminal. Grant exactly the four observed file permissions,
+# and constrain ioctl to that single command, instead of using the broader
+# cgroup interface that also permits lock, map, write, and symlink reads.
+allow systemd_modules_load_t cgroup_t:file { getattr ioctl open read };
+allowxperm systemd_modules_load_t cgroup_t:file ioctl 0x542a;
+mount_read_runtime_files(systemd_networkd_t)
+systemd_stream_connect_networkd(systemd_resolved_t)
+
+# PID 1 creates some cgroup v2 pressure files before policy load, while system
+# and user managers (and nspawn) create later service cgroups dynamically. The
+# mandatory early relabel unit corrects the former and the maintained systemd
+# package labels the latter at creation.  Give only systemd's cgroup creators
+# the exact relabel pair. User managers retain the SELinux user of the login
+# session while cgroupfs objects are system_u, so the standard refpolicy object
+# identity exemption is also required for that cross-user relabel. Existing AV
+# rules remain the gate on which object types and classes may be relabelled.
+domain_obj_id_change_exemption(systemd_user_session_type)
+allow { init_t systemd_user_session_type systemd_nspawn_t } cgroup_t:file relabelfrom;
+allow { init_t systemd_user_session_type systemd_nspawn_t } memory_pressure_t:file relabelto;
+seutil_read_file_contexts(systemd_user_session_type)
+selinux_use_status_page(systemd_user_session_type)
+seutil_read_config(systemd_nspawn_t)
+seutil_read_file_contexts(systemd_nspawn_t)
+selinux_use_status_page(systemd_nspawn_t)
+fs_watch_memory_pressure(systemd_networkd_t)
+fs_watch_memory_pressure(systemd_resolved_t)
+fs_watch_memory_pressure(systemd_userdbd_t)
+fs_watch_memory_pressure(systemd_logind_t)
+fs_watch_memory_pressure(systemd_nsresourced_t)
+fs_watch_memory_pressure(syslogd_t)
+fs_getattr_memory_pressure(ntpd_t)
+
+# systemd-nsresourced's unit deliberately retains SYS_ADMIN and PERFMON for
+# namespace resource accounting. pidfs is reported as fs_t by this pinned
+# refpolicy snapshot.
+allow systemd_nsresourced_t self:capability sys_admin;
+allow systemd_nsresourced_t self:capability2 perfmon;
+fs_getattr_xattr_fs(systemd_nsresourced_t)
+
+# systemd-machine-id-setup probes pidfs and namespace descriptors while
+# establishing the runtime machine ID.
+allow systemd_machine_id_setup_t self:process getcap;
+fs_getattr_xattr_fs(systemd_machine_id_setup_t)
+fs_getattr_nsfs(systemd_machine_id_setup_t)
+
+# systemd-logind 261 creates its Varlink API socket directly instead of
+# relying on PID 1 socket activation.  Constrain its fallback path to the
+# single socket name and the bind/unlink permissions observed upstream.
+type_transition systemd_logind_t init_runtime_t:sock_file systemd_logind_runtime_t "io.systemd.Login";
+allow systemd_logind_t init_runtime_t:dir { search write add_name remove_name };
+allow systemd_logind_t systemd_logind_runtime_t:sock_file { create unlink };
+
+# NetworkManager 1.56 uses eBPF for address-conflict detection and advertises
+# CAP_BPF in its unit. Its helper is separately labelled in homeharbor.fc.
+allow NetworkManager_t self:capability2 bpf;
+allow NetworkManager_t self:bpf { map_create map_read map_write prog_load prog_run };
+networkmanager_status(system_dbusd_t)
+
+# systemd 261 adds audit records and runtime Varlink connections that are not
+# represented by the pinned Arch refpolicy interfaces yet.
+logging_send_audit_msgs(systemd_sysusers_t)
+files_read_etc_runtime_files(systemd_user_runtime_dir_t)
+# systemctl --user checks whether it is running in the initial PID namespace.
+# The staff login domain only needs metadata for that one nsfs descriptor; it
+# does not read or enter namespaces.
+fs_getattr_nsfs_files(staff_t)
+# Quadlet's podman-user-wait-network-online helper runs in this dedicated
+# rootless-container user domain and polls the system network-online target.
+# It needs read-only generic unit status, never service-control permissions.
+init_get_generic_units_status(staff_t)
+# systemd 261 removes a stale per-user notify socket before recreating it on a
+# manager restart.  The role template already grants the parent remove_name and
+# new socket creation; add only the missing cleanup operation on that one type.
+allow staff_systemd_t systemd_user_runtime_notify_t:sock_file unlink;
+allow local_login_t systemd_logind_runtime_t:sock_file write;
+allow local_login_t systemd_logind_t:unix_stream_socket connectto;
+fs_rw_tmpfs_files(systemd_networkd_t)
+dontaudit systemd_networkd_t self:bpf prog_load;
+dontaudit systemd_networkd_t self:capability sys_admin;
+dontaudit systemd_networkd_t self:capability2 bpf;
+
+# The root user manager performs privileged BPF/device probes that have safe
+# fallback paths. Its Quadlet generator still needs the shared Podman
+# configuration, but do not grant the user manager those system-wide powers.
+container_search_config(sysadm_systemd_t)
+dontaudit sysadm_systemd_t self:capability { mknod sys_admin };
+dontaudit sysadm_systemd_t self:capability2 bpf;
+dontaudit sysadm_systemd_t bpf_t:dir read;
+dontaudit sysadm_systemd_t virtio_device_t:chr_file getattr;
+
+# The staff user manager performs the same harmless virtio-port enumeration.
+# Keep the QGA/console devices inaccessible instead of granting the broad
+# term_use_virtio_console interface merely to satisfy a metadata probe.
+dontaudit staff_systemd_t virtio_device_t:chr_file getattr;
+
+# loadkeys writes decompressed keymaps to sealed memfds. The PCR helper owns
+# /run/systemd/nvpcr, mirrors its encrypted NvPCR anchor below the ESP's
+# /loader/credentials directory, consults udev's TPM properties, and records
+# the systemd 261 userspace measurement log below /run/log/systemd. The exact
+# directory transitions keep that log on the existing logging types even when
+# the PCR helper runs before journald has created /run/log. FAT cannot carry
+# per-path SELinux labels, so the DOS filesystem interfaces are necessarily
+# scoped by the trusted PCR domain.
+fs_rw_tmpfs_files(loadkeys_t)
+allow systemd_pcrphase_t var_run_t:dir { add_name search write };
+type_transition systemd_pcrphase_t var_run_t:dir syslogd_tmp_t "log";
+allow systemd_pcrphase_t syslogd_tmp_t:dir { add_name create getattr open read search setattr write };
+type_transition systemd_pcrphase_t syslogd_tmp_t:dir systemd_log_t "systemd";
+allow systemd_pcrphase_t systemd_log_t:dir { add_name create getattr open read search setattr write };
+allow systemd_pcrphase_t systemd_log_t:file manage_file_perms;
+init_create_runtime_dirs(systemd_pcrphase_t)
+auth_use_nsswitch(systemd_pcrphase_t)
+dev_write_urand(systemd_pcrphase_t)
+dev_getattr_sysfs(systemd_pcrphase_t)
+create_dirs_pattern(systemd_pcrphase_t, init_var_lib_t, init_var_lib_t)
+files_list_boot(systemd_pcrphase_t)
+fs_getattr_dos_fs(systemd_pcrphase_t)
+fs_list_dos(systemd_pcrphase_t)
+storage_raw_read_fixed_disk(systemd_pcrphase_t)
+fs_manage_dos_dirs(systemd_pcrphase_t)
+fs_manage_dos_files(systemd_pcrphase_t)
+udev_read_runtime_files(systemd_pcrphase_t)
+
+# systemd-user-runtime-dir performs NSS lookups while constructing the user
+# manager runtime tree; the nsswitch attribute grants only the userdb socket
+# lookup path and ordinary account database reads.
+auth_use_nsswitch(systemd_user_runtime_dir_t)
+
+# bootctl creates /efi/loader before writing its random seed. tmpfiles must
+# populate mkinitcpio's /run/initramfs files and apply immutable package rules
+# to shadow metadata and securityfs without reading password contents.
+fs_manage_dos_dirs(bootloader_t)
+fs_manage_tmpfs_dirs(systemd_tmpfiles_t)
+fs_manage_tmpfs_files(systemd_tmpfiles_t)
+auth_getattr_shadow(systemd_tmpfiles_t)
+allow systemd_tmpfiles_t security_t:file setattr;
+allow systemd_tmpfiles_t { samba_runtime_t syslogd_runtime_t }:sock_file getattr;
+allow systemd_tmpfiles_t root_t:dir setattr;
+logging_dontaudit_search_audit_config(systemd_tmpfiles_t)
+
+# udev cannot usefully inspect the Archiso backing file through the loop
+# device event; suppress only that read-only media getattr probe.
+dontaudit udev_t iso9660_t:file getattr;
+
+# dbus-broker subscribes to systemd and PolicyKit unit status. It does not
+# receive start, stop, reload, enable, or other unit-management permissions.
+init_get_system_status(system_dbusd_t)
+policykit_get_unit_status(system_dbusd_t)
+policykit_dbus_chat(systemd_hostnamed_t)
+systemd_status_networkd(policykit_t)
+
+# Getty probes the generic /run tmpfs while initializing both the physical and
+# serial consoles.  Listing that one directory is sufficient and avoids a
+# denial on every enforcing boot.
+fs_list_tmpfs(getty_t)
+
+# The immutable-root journal catalog helper still traverses the writable
+# /var/log mount, reads the runtime machine ID, resolves account metadata for
+# rendered journal fields, and maps journal files for indexed lookup. crun
+# inspects VM sysctls while preparing containers. Grant only those required
+# discovery operations without journal relabeling.
+logging_search_logs(systemd_journal_init_t)
+files_read_etc_runtime_files(systemd_journal_init_t)
+auth_use_nsswitch(systemd_journal_init_t)
+allow systemd_journal_init_t systemd_journal_t:file map;
+kernel_read_vm_sysctls(container_engine_t)
+# The pinned Podman policy omits the random-device read used while rootless
+# storage and container IDs are initialized.  Keep this to the concrete
+# rootless Podman domain and do not grant random-device writes.
+dev_read_urand(podman_user_t)
+# crun reads the VM sysctl directory while preparing both rootful and rootless
+# containers. The upstream policy covers only the former engine domain.
+kernel_read_vm_sysctls(podman_user_t)
+# crun checks whether bpffs is available before installing a device filter.
+# It only needs filesystem metadata and never mounts or modifies bpffs.
+fs_getattr_bpf(podman_user_t)
+# Rootless crun must create its scope through this dedicated staff user's
+# session bus.  Keep the connection scoped to that SELinux role instead of
+# allowing Podman to fall back to the system bus and PID 1.
+dbus_spec_session_bus_client(staff, podman_user_t)
+# conmon transitions back into podman_user_t when it execs crun. Without this
+# narrowly scoped transition permission, the kernel marks crun AT_SECURE;
+# libsystemd then ignores XDG_RUNTIME_DIR and crun falls back to the system
+# bus. Both domains belong to the same dedicated rootless container account,
+# and preserving its environment keeps cgroup creation on that account's user
+# manager instead of granting Podman access to PID 1.
+allow podman_user_conmon_t podman_user_t:process noatsecure;
+# Quadlet uses Podman's conmon sdnotify mode. Podman sends the conmon PID to
+# this one staff user manager before the monitor takes over readiness.
+systemd_user_send_systemd_notify(staff, podman_user_t)
+# The dedicated staff user's dbus-broker subscribes to its own user manager's
+# status notifications.  It does not need start, stop, reload, or unit-control
+# permissions.
+allow staff_dbusd_t staff_systemd_t:system status;
+
+# cryptsetup creates a device-mapper udev synchronization semaphore in the
+# caller's domain. dmsetup transitions to lvm_t and must read, signal, and
+# finally associate with that same semaphore to release the waiting caller.
+allow lvm_t homeharbor_t:sem { associate read write unix_read unix_write };
+
+# Samba stores its TDB secrets in files that are read/written through shared
+# mappings. Keep the files restricted to samba_secrets_t while permitting only
+# the daemon's missing mapping operation.
+allow smbd_t samba_secrets_t:file map;
+
+# The agent intentionally owns a narrow service-control surface: appliance
+# services, the rootless user manager and its generated Quadlet units, and an
+# explicit reboot request. systemd maps start/restart/try-restart to start and
+# also checks unit status while resolving those operations. systemd 261 checks
+# user-manager D-Bus requests against the manager's system class in addition to
+# the upstream unit service class, so keep those permissions on the one
+# dedicated staff user manager used for rootless containers.
+init_start_generic_units(homeharbor_t)
+init_get_generic_units_status(homeharbor_t)
+systemd_start_user_manager_units(homeharbor_t)
+systemd_get_user_manager_units_status(homeharbor_t)
+systemd_start_user_runtime_units(homeharbor_t)
+systemd_stop_user_runtime_units(homeharbor_t)
+systemd_get_user_runtime_units_status(homeharbor_t)
+allow homeharbor_t staff_systemd_t:system { start stop status reload };
+# A synchronous systemctl/systemd-run client waits for job completion on the
+# user-manager D-Bus connection. Permit only the dedicated staff user manager
+# to return those method replies and completion signals to the appliance
+# domain; requests remain governed by the unit and system-class rules above.
+allow staff_systemd_t homeharbor_t:dbus send_msg;
+# systemd 261 reads /proc/PID/stat before attaching a D-Bus client to a user
+# manager job.  The client remains in homeharbor_t after setpriv changes only
+# its UID, so let this one dedicated user manager read that process metadata.
+# Ordinary proc DAC still protects non-public process files.
+ps_process_pattern(staff_systemd_t, homeharbor_t)
+init_reboot_system(homeharbor_t)

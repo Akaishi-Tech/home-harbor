@@ -1,0 +1,127 @@
+From 2f317f40a7a8e892cc095865d078ce7264bb36d3 Mon Sep 17 00:00:00 2001
+From: HomeHarbor Maintainers <maintainers@homeharbor.local>
+Date: Mon, 13 Jul 2026 18:00:00 +0800
+Subject: [PATCH] cgroup: label dynamically created memory.pressure files
+
+cgroupfs creates memory.pressure as a side effect of creating a cgroup
+directory.  Consequently, the SELinux named file transition for init_t
+does not apply to the kernel-created file and it inherits cgroup_t.
+
+Reconcile memory.pressure with the active SELinux file-context database
+before returning from cg_create().  Walk back to the cgroup root because
+mkdir_parents() can create more than one cgroup in the same call.  The
+operation is idempotent for existing cgroups, tolerates kernels without
+memory.pressure, and propagates other labeling failures so enforcing mode
+does not silently start a service with a generically labeled pressure
+file.  Initialize the SELinux labeling database lazily in the shared helper
+so non-manager callers such as systemd-nspawn cannot silently skip relabeling.
+---
+ src/shared/cgroup-setup.c | 59 ++++++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 56 insertions(+), 3 deletions(-)
+
+diff --git a/src/shared/cgroup-setup.c b/src/shared/cgroup-setup.c
+index 65b0e8b8f4..e2d510fcb1 100644
+--- a/src/shared/cgroup-setup.c
++++ b/src/shared/cgroup-setup.c
+@@ -10,6 +10,7 @@
+ #include "fileio.h"
+ #include "format-util.h"
+ #include "fs-util.h"
++#include "label-util.h"
+ #include "log.h"
+ #include "mkdir.h"
+ #include "parse-util.h"
+@@ -16,6 +17,7 @@
+ #include "path-util.h"
+ #include "process-util.h"
+ #include "recurse-dir.h"
++#include "selinux-util.h"
+ #include "set.h"
+ #include "stat-util.h"
+ #include "stdio-util.h"
+@@ -108,28 +110,79 @@ int cg_trim(const char *path, bool delete_root) {
+         return r;
+ }
+ 
++static int cg_fix_memory_pressure_labels(const char *path) {
++        static const char cgroup_root[] = "/sys/fs/cgroup";
++        _cleanup_free_ char *current = NULL;
++        int r;
++
++        assert(path);
++
++        if (!path_startswith(path, cgroup_root))
++                return -EINVAL;
++
++        r = mac_selinux_init_lazy();
++        if (r < 0)
++                return r;
++
++        current = strdup(path);
++        if (!current)
++                return -ENOMEM;
++
++        for (;;) {
++                _cleanup_free_ char *pressure = NULL;
++                char *slash;
++
++                pressure = path_join(current, "memory.pressure");
++                if (!pressure)
++                        return -ENOMEM;
++
++                r = label_fix(pressure, LABEL_IGNORE_ENOENT);
++                if (r < 0)
++                        return r;
++
++                if (path_equal(current, cgroup_root))
++                        return 0;
++
++                slash = strrchr(current, '/');
++                if (!slash)
++                        return -EINVAL;
++
++                *slash = '\0';
++        }
++}
++
+ /* Create a cgroup in the hierarchy of controller.
+  * Returns 0 if the group already existed, 1 on success, negative otherwise.
+  */
+ int cg_create(const char *path) {
+         _cleanup_free_ char *fs = NULL;
+-        int r;
++        int created, r;
+ 
+         r = cg_get_path(path, /* suffix= */ NULL, &fs);
+         if (r < 0)
+                 return r;
+ 
++        /* cgroupfs creates memory.pressure itself when each directory is
++         * created, so SELinux cannot apply init_t's named file transition.
++         * Fix every level mkdir_parents() may have created before exposing
++         * the new cgroup to callers. */
+         r = mkdir_parents(fs, 0755);
+         if (r < 0)
+                 return r;
+ 
+         r = RET_NERRNO(mkdir(fs, 0755));
+         if (r == -EEXIST)
+-                return 0;
+-        if (r < 0)
++                created = 0;
++        else if (r < 0)
+                 return r;
++        else
++                created = 1;
++
++        r = cg_fix_memory_pressure_labels(fs);
++        if (r < 0)
++                return r;
+ 
+-        return 1;
++        return created;
+ }
+ 
+ int cg_attach(const char *path, pid_t pid) {
+-- 
+2.50.1

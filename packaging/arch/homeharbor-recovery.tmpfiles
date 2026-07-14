@@ -1,4 +1,5 @@
 d /var/lib/homeharbor 0711 root root -
 d /var/lib/homeharbor/recovery 0750 recovery recovery -
+d /var/log/audit 0700 root root -
 d /run/homeharbor-recovery 0755 recovery recovery -
 d /homeharbor-data 0750 root root -

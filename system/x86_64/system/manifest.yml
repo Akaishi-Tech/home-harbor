@@ -5,30 +5,56 @@ bootMode: UEFI
 packages:
   rootfs:
     - base
+    - audit
+    - coreutils-selinux
+    - findutils-selinux
+    - iproute2-selinux
+    - pambase-selinux
+    - pam-selinux
+    - psmisc-selinux
+    - shadow-selinux
+    - util-linux-selinux
+    - util-linux-libs-selinux
+    - systemd-selinux
+    - systemd-libs-selinux
+    - systemd-resolvconf-selinux
+    - systemd-sysvcompat-selinux
+    - dbus-selinux
+    - dbus-broker-selinux
+    - dbus-broker-units
+    - libsepol
+    - libselinux
+    - libsemanage
+    - checkpolicy
+    - secilc
+    - semodule-utils
+    - policycoreutils
+    - selinux-refpolicy-arch
+    - homeharbor-selinux-policy
     - linux
     - linux-firmware-broadcom
     - linux-firmware-intel
     - linux-firmware-realtek
     - linux-firmware-other
     - linux-firmware-whence
-    - systemd
-    - systemd-resolvconf
     - tpm2-tss
-    - networkmanager
+    - networkmanager-selinux
+    - libnm-selinux
     - qemu-guest-agent
-    - openssh
-    - sudo
+    - openssh-selinux
+    - sudo-selinux
     - arch-install-scripts
     - android-tools
-    - erofs-utils
+    - erofs-utils-selinux
     - cryptsetup
-    - device-mapper
+    - device-mapper-selinux
     - mdadm
     - btrfs-progs
     - xfsprogs
     - dosfstools
     - gptfdisk
     - smartmontools
+    - crun-selinux
     - podman
     - samba
     - caddy
@@ -43,18 +69,44 @@ packages:
     - nss-mdns
     - aspnet-runtime
     - dotnet-runtime
+    - homeharbor-control
   recovery:
     - base
-    - systemd
-    - systemd-resolvconf
+    - audit
+    - coreutils-selinux
+    - findutils-selinux
+    - iproute2-selinux
+    - pambase-selinux
+    - pam-selinux
+    - psmisc-selinux
+    - shadow-selinux
+    - util-linux-selinux
+    - util-linux-libs-selinux
+    - systemd-selinux
+    - systemd-libs-selinux
+    - systemd-resolvconf-selinux
+    - systemd-sysvcompat-selinux
+    - dbus-selinux
+    - dbus-broker-selinux
+    - dbus-broker-units
+    - libsepol
+    - libselinux
+    - libsemanage
+    - checkpolicy
+    - secilc
+    - semodule-utils
+    - policycoreutils
+    - selinux-refpolicy-arch
+    - homeharbor-selinux-policy
     - dotnet-runtime
     - android-tools
-    - device-mapper
-    - erofs-utils
+    - device-mapper-selinux
+    - erofs-utils-selinux
     - gptfdisk
     - dosfstools
     - jq
     - openssl
+    - homeharbor-recovery
 rootfs:
   hostname: homeharbor
   directories:
@@ -166,11 +218,13 @@ rootfs:
   lingerUsers:
     - homeharbor-containers
   systemdUnits:
+    - auditd
     - systemd-networkd
     - systemd-networkd-wait-online
     - systemd-resolved
     - qemu-guest-agent
     - caddy
+    - homeharbor-selinux-ready.target
     - homeharbor-storage-apply
     - homeharbor-storage-apply.path
     - homeharbor-postgresql
@@ -221,9 +275,11 @@ recovery:
       createHome: true
       shell: /usr/lib/homeharbor/recovery/HomeHarbor.Recovery
   systemdUnits:
+    - auditd
     - systemd-networkd
     - systemd-networkd-wait-online
     - systemd-resolved
+    - homeharbor-selinux-ready.target
     - homeharbor-fastbootd
     - homeharbor-recovery-action.path
     - serial-getty@ttyS0
@@ -335,6 +391,11 @@ super:
 kernelArgs:
   - console=tty0
   - console=ttyS0,115200n8
+  - lsm=landlock,lockdown,yama,integrity,selinux,bpf
+  - selinux=1
+  - enforcing=1
+  - audit=1
+  - audit_backlog_limit=8192
   - rd.homeharbor.verity=1
   - homeharbor.super=/dev/disk/by-partlabel/super
   - homeharbor.recovery=1

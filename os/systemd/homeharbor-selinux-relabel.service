@@ -1,0 +1,22 @@
+[Unit]
+Description=Relabel HomeHarbor persistent storage for SELinux
+DefaultDependencies=no
+AssertSecurity=selinux
+AssertPathExists=/usr/bin/restorecon
+AssertPathIsDirectory=/var
+AssertPathIsDirectory=/homeharbor-data
+Requires=homeharbor-selinux-store-sync.service
+RequiresMountsFor=/var
+Conflicts=shutdown.target
+After=local-fs.target homeharbor-selinux-store-sync.service
+Before=systemd-tmpfiles-setup.service sysinit.target shutdown.target
+Before=systemd-tpm2-setup-early.service systemd-tpm2-setup.service systemd-pcrproduct.service
+Before=homeharbor-boot-attempt.service homeharbor-storage-apply.service
+Before=homeharbor-firstboot.service homeharbor-postgresql-init.service homeharbor-postgresql.service
+Before=homeharbor-api.service homeharbor-fastbootd.service homeharbor-recovery-action.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=6h
+ExecStart=/usr/lib/homeharbor/selinux-store-sync selinux-relabel persistent
+RemainAfterExit=yes

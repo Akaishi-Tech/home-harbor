@@ -1,6 +1,7 @@
 [Unit]
 Description=Mark HomeHarbor boot successful after control plane health is ready
-After=multi-user.target homeharbor-api.service network-online.target
+Requires=homeharbor-selinux-ready.target homeharbor-api.service
+After=homeharbor-selinux-ready.target multi-user.target homeharbor-api.service network-online.target
 Wants=network-online.target
 ConditionPathExists=/usr/lib/homeharbor/agent/HomeHarbor.Agent
 

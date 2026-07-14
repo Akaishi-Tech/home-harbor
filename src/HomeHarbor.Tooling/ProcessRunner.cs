@@ -37,6 +37,11 @@ public sealed class ProcessCommandRunner : ICommandRunner
             WorkingDirectory = options.WorkingDirectory ?? string.Empty
         };
 
+        if (options.ClearEnvironment)
+        {
+            start.Environment.Clear();
+        }
+
         foreach (var (key, value) in options.Environment)
         {
             start.Environment[key] = value;
@@ -136,7 +141,8 @@ public sealed record CommandRunOptions(
     bool StreamOutput = false,
     bool StreamError = false,
     bool ThrowOnStartFailure = false,
-    IReadOnlyDictionary<string, string>? EnvironmentOverride = null)
+    IReadOnlyDictionary<string, string>? EnvironmentOverride = null,
+    bool ClearEnvironment = false)
 {
     public static CommandRunOptions Default { get; } = new();
 

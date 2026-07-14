@@ -131,6 +131,32 @@ public sealed class BootChainSecurityTests
     }
 
     [TestMethod]
+    public void Every_Boot_Path_Enables_SELinux_In_Enforcing_Mode()
+    {
+        var environment = new HomeHarborBootEnvironment(
+            "A", "A", "root_a", "6.18", "modules_a", "firmware_a", "vbmeta_a",
+            new string('a', 64), new string('b', 64), new string('c', 64), new string('d', 64), "1.0.0");
+
+        Assert.Contains(SecureBootAssets.SelinuxArgs, SecureBootAssets.GenericBootCmdline("6.18", "1.0.0", 1));
+        Assert.Contains(SecureBootAssets.SelinuxArgs, SecureBootAssets.SlotCmdline(environment));
+        Assert.Contains(SecureBootAssets.SelinuxArgs, SecureBootAssets.RecoveryCmdline());
+
+        var temp = Directory.CreateTempSubdirectory("homeharbor-loader-selinux-");
+        try
+        {
+            SecureBootAssets.WriteLoaderEntries(temp.FullName, "raw");
+            foreach (var entry in Directory.GetFiles(Path.Combine(temp.FullName, "loader", "entries"), "*.conf"))
+            {
+                Assert.Contains(SecureBootAssets.SelinuxArgs, File.ReadAllText(entry));
+            }
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void Generic_Boot_Binds_Selected_Root_Vbmeta_Digest_Into_Initramfs()
     {
         var root = RepositoryRoot();

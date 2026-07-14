@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using HomeHarbor.Tooling;
 
 internal static partial class AgentProgram
 {
@@ -57,7 +58,7 @@ internal static partial class AgentProgram
         foreach (var volume in volumes)
         {
             _ = builder.AppendLine(
-                "Volume=" + QuoteQuadlet(volume.HostPath + ":" + volume.ContainerPath + ":" + (volume.ReadOnly ? "ro" : "rw,U")));
+                "Volume=" + QuoteQuadlet(volume.HostPath + ":" + volume.ContainerPath + ":" + (volume.ReadOnly ? "ro,Z" : "rw,U,Z")));
         }
         if (command.Count > 0)
         {
@@ -65,6 +66,7 @@ internal static partial class AgentProgram
         }
         _ = builder.AppendLine();
         _ = builder.AppendLine("[Service]");
+        _ = builder.AppendLine("Environment=" + ContainerRuntimePaths.QuadletPodmanConfigEnvironment);
         _ = builder.AppendLine("Restart=on-failure");
         _ = builder.AppendLine("RestartSec=5");
         if (string.Equals(JsonString(item, "desiredState"), "running", StringComparison.Ordinal))

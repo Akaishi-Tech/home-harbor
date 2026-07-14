@@ -1,6 +1,8 @@
 [Unit]
 Description=Apply a physical HomeHarbor recovery console action
 ConditionPathExists=/run/homeharbor-recovery/action.request
+Requires=homeharbor-selinux-ready.target
+After=homeharbor-selinux-ready.target
 
 [Service]
 Type=oneshot

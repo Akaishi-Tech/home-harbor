@@ -1,0 +1,50 @@
+# Maintainer: Eric Bélanger <eric@archlinux.org>
+# SELinux Maintainer: Nicolas Iooss (nicolas <dot> iooss <at> m4x <dot> org)
+# SELinux Contributor: Timothée Ravier <tim@siosm.fr>
+# SELinux Contributor: Nicky726 <Nicky726@gmail.com>
+#
+# HomeHarbor provenance:
+# - Arch Linux packaging baseline: archlinux/packaging/packages/psmisc
+#   commit 208fb42d7343c97ee5e6e7fc5f238778886c399e (2026-06-01).
+# - SELinux delta rebased from archlinuxhardened/selinux
+#   commit e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71 (2026-03-12).
+# - This recipe builds from source; no archlinuxhardened binary package is used.
+
+pkgname=psmisc-selinux
+_pkgname=${pkgname%-selinux}
+pkgver=23.7
+pkgrel=2
+pkgdesc='Miscellaneous procfs tools with SELinux support'
+arch=('x86_64')
+url='https://gitlab.com/psmisc/psmisc'
+license=('GPL')
+groups=('selinux')
+depends=('ncurses' 'libselinux' 'libselinux.so')
+makedepends=('git' 'po4a')
+conflicts=("${_pkgname}" "selinux-${_pkgname}")
+provides=("${_pkgname}=${pkgver}-${pkgrel}"
+          "selinux-${_pkgname}=${pkgver}-${pkgrel}")
+validpgpkeys=('5D2FB320B825D93904D205193938F96BDF50FEA5') # Craig Small <csmall@debian.org>
+source=("git+https://gitlab.com/psmisc/psmisc.git?signed#tag=v${pkgver}")
+sha256sums=('80ae6e626ba83232b7af1c02f3f528834ebdd96325367b701f69125d3e196f2f')
+
+prepare() {
+  cd ${_pkgname}
+
+  ./autogen.sh
+}
+
+build() {
+  cd ${_pkgname}
+
+  ./configure \
+    --prefix=/usr \
+    --enable-selinux
+  make
+}
+
+package() {
+  cd ${_pkgname}
+
+  make DESTDIR="${pkgdir}" install
+}

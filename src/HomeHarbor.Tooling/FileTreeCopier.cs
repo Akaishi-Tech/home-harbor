@@ -3,6 +3,9 @@ namespace HomeHarbor.Tooling;
 internal static class FileTreeCopier
 {
     public static void CopyDirectory(string source, string destination)
+        => CopyDirectory(source, destination, _ => true);
+
+    public static void CopyDirectory(string source, string destination, Func<string, bool> include)
     {
         if (!Directory.Exists(source))
         {
@@ -14,11 +17,14 @@ internal static class FileTreeCopier
 
         foreach (var entry in Directory.EnumerateFileSystemEntries(source))
         {
-            CopyEntry(entry, Path.Combine(destination, Path.GetFileName(entry)));
+            if (include(entry))
+            {
+                CopyEntry(entry, Path.Combine(destination, Path.GetFileName(entry)), include);
+            }
         }
     }
 
-    private static void CopyEntry(string source, string destination)
+    private static void CopyEntry(string source, string destination, Func<string, bool> include)
     {
         var attributes = File.GetAttributes(source);
         if ((attributes & FileAttributes.ReparsePoint) != 0)
@@ -29,7 +35,7 @@ internal static class FileTreeCopier
 
         if ((attributes & FileAttributes.Directory) != 0)
         {
-            CopyDirectory(source, destination);
+            CopyDirectory(source, destination, include);
             return;
         }
 
@@ -40,9 +46,7 @@ internal static class FileTreeCopier
 
     private static void CopySymbolicLink(string source, string destination, bool directory)
     {
-        var linkTarget = directory
-            ? new DirectoryInfo(source).LinkTarget
-            : new FileInfo(source).LinkTarget;
+        var linkTarget = ReadSymbolicLink(source, directory);
         if (string.IsNullOrWhiteSpace(linkTarget))
         {
             throw new IOException("could not read symbolic link target for " + source);
@@ -51,6 +55,14 @@ internal static class FileTreeCopier
         _ = Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         DeleteExisting(destination);
         _ = directory ? Directory.CreateSymbolicLink(destination, linkTarget) : File.CreateSymbolicLink(destination, linkTarget);
+    }
+
+    internal static string? ReadSymbolicLink(string path, bool? directory = null)
+    {
+        var isDirectory = directory ?? (File.GetAttributes(path) & FileAttributes.Directory) != 0;
+        return isDirectory
+            ? new DirectoryInfo(path).LinkTarget ?? new FileInfo(path).LinkTarget
+            : new FileInfo(path).LinkTarget ?? new DirectoryInfo(path).LinkTarget;
     }
 
     private static void DeleteExisting(string path)

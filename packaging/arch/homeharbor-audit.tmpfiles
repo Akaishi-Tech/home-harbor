@@ -1,0 +1,4 @@
+# /etc is immutable, so replace audit's factory-copy rules with only the
+# writable audit log directory required on each fresh state filesystem.
+d /var/log/audit 0700 root root -
+z /var/log/audit 0700 root root -

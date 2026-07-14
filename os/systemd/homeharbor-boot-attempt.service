@@ -1,7 +1,8 @@
 [Unit]
 Description=Record HomeHarbor boot attempt and enter recovery after boot loops
 DefaultDependencies=no
-After=local-fs.target
+Requires=homeharbor-selinux-ready.target
+After=homeharbor-selinux-ready.target local-fs.target
 Before=multi-user.target
 ConditionPathExists=/usr/lib/homeharbor/agent/HomeHarbor.Agent
 

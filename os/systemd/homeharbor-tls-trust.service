@@ -1,7 +1,7 @@
 [Unit]
 Description=Display HomeHarbor TLS CA trust fingerprint
-Requires=caddy.service
-After=caddy.service
+Requires=homeharbor-selinux-ready.target caddy.service
+After=homeharbor-selinux-ready.target caddy.service
 StartLimitIntervalSec=120
 StartLimitBurst=12
 

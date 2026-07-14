@@ -1,0 +1,109 @@
+# Maintainer: Morten Linderud <foxboron@archlinux.org>
+# Contributor: hexchian <i at hexchain dot org>
+#
+# HomeHarbor provenance:
+# - Arch Linux packaging baseline: archlinux/packaging/packages/crun
+#   commit f73924726bb7113bbbefacd69a47c4fc89045cda (2026-05-27).
+# - crun 1.28 has no SELinux configure switch or libselinux auto-detection:
+#   upstream builds its SELinux process/mount-label support unconditionally
+#   through procfs and security.selinux xattrs and reports it as +SELINUX.
+# - HomeHarbor keeps libselinux explicit in the build/runtime dependency graph
+#   and verifies the built runtime advertises +SELINUX.
+# - This recipe builds from the signed upstream tag; no third-party binary
+#   package or repository is used.
+
+pkgbase=crun-selinux
+_pkgname=${pkgbase%-selinux}
+pkgname=(crun-selinux krun-selinux)
+pkgver=1.28
+pkgrel=1
+pkgdesc="A fast and lightweight OCI runtime with SELinux support"
+url="https://github.com/containers/crun"
+license=('LGPL-2.1-or-later')
+arch=('x86_64')
+groups=('selinux')
+provides=('oci-runtime')
+makedepends=(
+  'criu'
+  'git'
+  'go-md2man'
+  'json-c'
+  'libblake3'
+  'libcap'
+  'libkrun'
+  'libseccomp'
+  'libselinux'
+  'libtool'
+  'python'
+  'systemd-selinux'
+)
+source=(
+  "git+https://github.com/containers/crun.git#tag=$pkgver?signed"
+  0001-fix-missing-json-c-symbols-in-build.patch
+)
+validpgpkeys=('AC404C1C0BF735C63FF4D562263D6DF2E163E1EA')
+sha256sums=('0d01636b19653202e5de7fe94beacdb7099e333a41d7bb6dec63c127364422f1'
+            '8d487cb316b802961d53620eac4b2c8742e14b68cee04511d36a070227635510')
+
+prepare() {
+    cd "$_pkgname"
+    patch -Np1 < ../0001-fix-missing-json-c-symbols-in-build.patch
+}
+
+build() {
+    cd "$_pkgname"
+    ./autogen.sh
+    ./configure \
+        --prefix=/usr \
+        --enable-shared \
+        --enable-dynamic \
+        --with-python-bindings \
+        --with-libkrun
+    make
+}
+
+check() {
+    cd "$_pkgname"
+
+    # The official Arch recipe has no check() function: upstream's complete
+    # suite needs static libc plus root/container integration facilities. Keep
+    # this build-safe feature assertion here; runtime coverage belongs in a VM.
+    ./crun --version | grep -Fq -- '+SELINUX'
+}
+
+package_crun-selinux() {
+    depends=(
+      'criu'
+      'json-c'
+      'libblake3'
+      'libcap'
+      'libseccomp'
+      'libselinux'
+      'systemd-libs-selinux'
+    )
+    provides+=("crun=${pkgver}-${pkgrel}")
+    conflicts=('crun')
+
+    make -C "$_pkgname" DESTDIR="$pkgdir" install
+    rm -v "$pkgdir/usr/bin/krun"
+
+    mkdir -vp "krun/"
+    mv -v "$pkgdir/usr/share/man/man1"/krun.1* "krun/"
+}
+
+package_krun-selinux() {
+    pkgdesc="SELinux-enabled crun OCI runtime using libkrun for isolated KVM environments"
+    depends=(
+      "crun-selinux=${pkgver}-${pkgrel}"
+      'libkrun'
+    )
+    provides+=("krun=${pkgver}-${pkgrel}")
+    conflicts=('krun')
+
+    mkdir -pv "$pkgdir/usr/bin"
+    ln -sv crun "$pkgdir/usr/bin/krun"
+
+    cd "$_pkgname"
+    mkdir -pv "$pkgdir/usr/share/man/man1/"
+    mv -v krun.1* "$pkgdir/usr/share/man/man1/"
+}

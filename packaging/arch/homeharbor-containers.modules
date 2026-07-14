@@ -1,0 +1,5 @@
+# Native overlay storage must be available before the dedicated rootless
+# Podman account performs its first storage probe. Loading it here keeps
+# module loading in the trusted systemd-modules-load domain instead of
+# granting the container engine permission to request arbitrary modules.
+overlay

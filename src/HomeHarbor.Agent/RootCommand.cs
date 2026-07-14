@@ -30,6 +30,9 @@ internal static partial class AgentProgram
         root.Subcommands.Add(CreateOtaCommitCommand(runner));
         root.Subcommands.Add(CreateStorageApplyCommand(runner));
         root.Subcommands.Add(CreateStoragePostApplyCommand(runner));
+        root.Subcommands.Add(CreateSelinuxStoreSyncCommand(runner));
+        root.Subcommands.Add(CreateSelinuxRelabelCommand(runner));
+        root.Subcommands.Add(CreateSelinuxReadyCheckCommand(runner));
         root.Subcommands.Add(CreateBootStateCommand(runner));
         root.Subcommands.Add(CreateVerifyOtaManifestCommand(runner));
         root.Subcommands.Add(CreateSuperCommand(runner));

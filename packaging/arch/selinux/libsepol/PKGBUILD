@@ -1,0 +1,38 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71;
+# maintained here and built only into the HomeHarbor repository.
+
+pkgname=libsepol
+pkgver=3.10
+pkgrel=1
+pkgdesc="SELinux binary policy manipulation library"
+arch=(x86_64)
+url="https://github.com/SELinuxProject/selinux"
+license=(LGPL-2.1-or-later)
+groups=(selinux)
+makedepends=(flex)
+depends=(glibc)
+options=(staticlibs '!lto')
+conflicts=(selinux-usr-libsepol)
+provides=("selinux-usr-libsepol=${pkgver}-${pkgrel}")
+validpgpkeys=(
+  63191CE94183098689CAB8DB7EF137EC935B0EAF
+  68D21823342A13683AEB3E4EFB4C685B5DC1C13E
+)
+source=("https://github.com/SELinuxProject/selinux/releases/download/${pkgver}/${pkgname}-${pkgver}.tar.gz"{,.asc})
+sha256sums=(
+  d555586797fa9f38344496d2a7ec1147b6caaf3fcc44c42d8d5173edd7a79a71
+  SKIP
+)
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  export CFLAGS="${CFLAGS} -fno-semantic-interposition"
+  make
+}
+
+package() {
+  provides+=(libsepol.so)
+  cd "${pkgname}-${pkgver}"
+  make DESTDIR="$pkgdir" SHLIBDIR=/usr/lib install
+}

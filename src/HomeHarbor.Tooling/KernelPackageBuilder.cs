@@ -57,10 +57,11 @@ public sealed class KernelPackageBuilder(
         await NeedAsync("pacstrap", cancellationToken);
         await NeedAsync("arch-chroot", cancellationToken);
         await NeedAsync("bsdtar", cancellationToken);
-        await NeedAsync("mkfs.erofs", cancellationToken);
+        await NeedAsync("repo-add", cancellationToken);
         await NeedAsync("dump.erofs", cancellationToken);
         await NeedAsync("modinfo", cancellationToken);
         await NeedAsync("cc", cancellationToken);
+        await NeedAsync("zstd", cancellationToken);
 
         await DeleteWorkDirectoryAsync(_work, cancellationToken);
         _ = Directory.CreateDirectory(_work);
@@ -69,11 +70,33 @@ public sealed class KernelPackageBuilder(
         _ = Directory.CreateDirectory(rootfs);
         _ = Directory.CreateDirectory(recoveryRootfs);
 
+        var packageRepository = await RequireSystemPackageRepositoryAsync(
+            Path.Combine(_work, "repository"),
+            cancellationToken);
+        var systemPlan = SystemImageBuildDescriptor.LoadDefaultPlan(_root, version);
+
         var modulePackageFile = await ResolveModulePackageAsync(module, cancellationToken);
+        var buildRootPackages = systemPlan.Packages.Recovery
+            .Concat([
+                kernelPackage,
+                "linux-firmware-broadcom",
+                "linux-firmware-intel",
+                "linux-firmware-realtek",
+                "linux-firmware-other",
+                "linux-firmware-whence",
+                "mkinitcpio",
+                "cryptsetup",
+                "mdadm",
+                "btrfs-progs",
+                "xfsprogs"
+            ])
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         await RunPacstrapAsync(
             rootfs,
-            ["base", kernelPackage, "linux-firmware-broadcom", "linux-firmware-intel", "linux-firmware-realtek", "linux-firmware-other", "linux-firmware-whence", "mkinitcpio", "cryptsetup", "device-mapper", "mdadm", "btrfs-progs", "xfsprogs", "erofs-utils", "android-tools", "jq", "openssl", "systemd"],
-            cancellationToken);
+            buildRootPackages,
+            cancellationToken,
+            pacmanConfig: packageRepository.PacmanConfigPath);
         PrepareWritableRootfs(rootfs);
 
         var moduleRoot = Path.Combine(_work, "module-root");
@@ -92,6 +115,11 @@ public sealed class KernelPackageBuilder(
         }
 
         var kernelRelease = kernelReleases[0]!;
+        await KernelConfigValidator.ValidateAsync(
+            Path.Combine(rootfs, "usr", "lib", "modules", kernelRelease, "vmlinuz"),
+            Path.Combine(_work, "kernel-config"),
+            _runner,
+            cancellationToken);
         if (Directory.GetFiles(Path.Combine(rootfs, "usr", "lib", "modules", kernelRelease), "zfs.ko*", SearchOption.AllDirectories).Length == 0)
         {
             throw new InvalidOperationException($"{module.Package} did not provide zfs.ko for {kernelRelease}");
@@ -124,11 +152,28 @@ public sealed class KernelPackageBuilder(
         var firmwareRoot = Path.Combine(_work, "firmware-root");
         Directory.Move(Path.Combine(rootfs, "usr", "lib", "modules"), modulesRoot);
         Directory.Move(Path.Combine(rootfs, "usr", "lib", "firmware"), firmwareRoot);
-        await BuildRecoveryRootfsAsync(recoveryRootfs, modulesRoot, firmwareRoot, avbHelper, kernelRelease, vmlinuz, initramfs, recovery, cancellationToken);
+        var erofs = await SelinuxErofsTool.CreateAsync(
+            packageRepository.PackageDirectory,
+            Path.Combine(_work, "selinux-erofs-tool"),
+            _runner,
+            cancellationToken);
+        await BuildRecoveryRootfsAsync(
+            recoveryRootfs,
+            modulesRoot,
+            firmwareRoot,
+            avbHelper,
+            kernelRelease,
+            vmlinuz,
+            initramfs,
+            recovery,
+            packageRepository,
+            erofs,
+            cancellationToken);
         var firmwarePrune = await MainFirmwareTreePruner.PruneAsync(modulesRoot, firmwareRoot, _runner, cancellationToken);
         Console.WriteLine($"Pruned firmware tree for {firmwarePrune.KernelRelease}: kept {firmwarePrune.KeptEntries} entries ({firmwarePrune.KeptBytes} bytes), removed {firmwarePrune.RemovedEntries} entries ({firmwarePrune.OriginalBytes - firmwarePrune.KeptBytes} bytes)");
-        await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", modules, modulesRoot], cancellationToken);
-        await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", firmware, firmwareRoot], cancellationToken);
+        var fileContexts = SelinuxErofsTool.RequireFileContexts(rootfs);
+        await erofs.BuildAsync(modules, modulesRoot, fileContexts, "/usr/lib/modules", ["-zlz4hc,12"], cancellationToken);
+        await erofs.BuildAsync(firmware, firmwareRoot, fileContexts, "/usr/lib/firmware", ["-zlz4hc,12"], cancellationToken);
         await RunAsync("dump.erofs", ["-s", modules], cancellationToken);
         await RunAsync("dump.erofs", ["-s", firmware], cancellationToken);
         WriteSha256(modules);
@@ -144,26 +189,25 @@ public sealed class KernelPackageBuilder(
         string vmlinuz,
         string initramfs,
         string recovery,
+        ArchLocalPackageRepository packageRepository,
+        SelinuxErofsTool erofs,
         CancellationToken cancellationToken)
     {
         var systemPlan = SystemImageBuildDescriptor.LoadDefaultPlan(_root, version);
-        var packages = string.Join('\n', systemPlan.Packages.Recovery) + "\n";
-        await RunPacstrapAsync(recoveryRootfs, ["-"], cancellationToken, standardInput: packages);
+        await RunPacstrapAsync(
+            recoveryRootfs,
+            systemPlan.Packages.Recovery,
+            cancellationToken,
+            pacmanConfig: packageRepository.PacmanConfigPath);
         PrepareWritableRootfs(recoveryRootfs);
-        var recoveryPackageDir = Path.Combine(_root, "artifacts", "channels", version, "packages");
-        var recoveryPackages = Directory.Exists(recoveryPackageDir)
-            ? Directory.GetFiles(recoveryPackageDir, "homeharbor-recovery-*.pkg.tar.*").Order(StringComparer.Ordinal).ToArray()
-            : [];
-        if (recoveryPackages.Length != 1)
-        {
-            throw new InvalidOperationException($"expected exactly one HomeHarbor recovery package in {recoveryPackageDir}, found {recoveryPackages.Length}");
-        }
-
-        await RunMappedRootAsync("pacman", ["--root", recoveryRootfs, "--noconfirm", "-U", recoveryPackages[0]], cancellationToken);
         InstallFile(avbHelper, Path.Combine(recoveryRootfs, "usr", "lib", "homeharbor", "homeharbor-avb"), executable: true);
         _ = Directory.CreateDirectory(Path.Combine(recoveryRootfs, "etc", "homeharbor"));
         _ = Directory.CreateDirectory(Path.Combine(recoveryRootfs, "efi"));
-        _ = Directory.CreateDirectory(Path.Combine(recoveryRootfs, "homeharbor-data"));
+        var recoveryDataMountPoint = Directory.CreateDirectory(Path.Combine(recoveryRootfs, "homeharbor-data"));
+        File.SetUnixFileMode(
+            recoveryDataMountPoint.FullName,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
         await File.WriteAllTextAsync(Path.Combine(recoveryRootfs, "etc", "fstab"), "LABEL=state /var ext4 defaults 0 2\nLABEL=esp /efi vfat umask=0077,nofail,x-systemd.device-timeout=30s 0 2\n", cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(recoveryRootfs, "etc", "hostname"), "homeharbor-recovery\n", cancellationToken);
         var shells = Path.Combine(recoveryRootfs, "etc", "shells");
@@ -182,13 +226,25 @@ public sealed class KernelPackageBuilder(
             Path.Combine(recoveryRootfs, "usr", "lib", "modules"),
             Path.Combine(recoveryRootfs, "usr", "lib", "firmware"));
         await RunMappedChrootAsync(recoveryRootfs, "depmod", ["-a", kernelRelease], cancellationToken);
+        await SelinuxPolicyValidator.ValidateAsync(
+            recoveryRootfs,
+            "ZFS recovery rootfs",
+            _rootless,
+            cancellationToken);
+        _ = SelinuxPolicyStoreSynchronizer.PrepareImmutableSeed(recoveryRootfs);
 
         var recoveryBoot = Path.Combine(_work, "recovery_boot.efi");
         await BuildUkiAsync(recoveryBoot, vmlinuz, initramfs, Path.Combine(recoveryRootfs, "etc", "os-release"), kernelRelease, SecureBootAssets.RecoveryCmdline(), cancellationToken);
         InstallFile(recoveryBoot, Path.Combine(recoveryRootfs, "boot", "recovery_boot.efi"));
         var hints = Path.Combine(_work, "recovery-compress-hints");
         await File.WriteAllTextAsync(hints, "0 boot/recovery_boot[.]efi\n", cancellationToken);
-        await RunMappedRootAsync("mkfs.erofs", ["-E^inline_data", "-zlz4hc,12", "--compress-hints=" + hints, recovery, recoveryRootfs], cancellationToken);
+        await erofs.BuildAsync(
+            recovery,
+            recoveryRootfs,
+            SelinuxErofsTool.RequireFileContexts(recoveryRootfs),
+            "/",
+            ["-E^inline_data", "-zlz4hc,12", "--compress-hints=" + hints],
+            cancellationToken);
         await RunAsync("dump.erofs", ["-s", recovery], cancellationToken);
         WriteSha256(recovery);
     }
@@ -204,7 +260,7 @@ public sealed class KernelPackageBuilder(
         await NeedAsync("git", cancellationToken);
         await NeedAsync("makepkg", cancellationToken);
         await NeedAsync("bsdtar", cancellationToken);
-        await NeedAsync("mkfs.erofs", cancellationToken);
+        await NeedAsync("repo-add", cancellationToken);
         await NeedAsync("dump.erofs", cancellationToken);
         var work = Path.Combine(_work, addon.Key);
         var packageOutput = addon.Source?.PackageOutput ?? Path.Combine(work, "packages");
@@ -246,7 +302,34 @@ public sealed class KernelPackageBuilder(
             throw new InvalidOperationException("zfs-utils addon must contain usr/bin/zfs and usr/bin/zpool");
         }
 
-        await RunMappedRootAsync("mkfs.erofs", ["-zlz4hc,12", addon.Path, Path.Combine(work, "payload-root")], cancellationToken);
+        var packageRepository = await RequireSystemPackageRepositoryAsync(
+            Path.Combine(work, "repository"),
+            cancellationToken);
+        var policyRootfs = Path.Combine(work, "policy-rootfs");
+        _ = Directory.CreateDirectory(policyRootfs);
+        await RunPacstrapAsync(
+            policyRootfs,
+            ["base", "selinux-refpolicy-arch", "homeharbor-selinux-policy"],
+            cancellationToken,
+            pacmanConfig: packageRepository.PacmanConfigPath);
+        PrepareWritableRootfs(policyRootfs);
+        await SelinuxPolicyValidator.ValidateAsync(
+            policyRootfs,
+            "ZFS addon policy rootfs",
+            _rootless,
+            cancellationToken);
+        var erofs = await SelinuxErofsTool.CreateAsync(
+            packageRepository.PackageDirectory,
+            Path.Combine(work, "selinux-erofs-tool"),
+            _runner,
+            cancellationToken);
+        await erofs.BuildAsync(
+            addon.Path,
+            Path.Combine(work, "payload-root"),
+            SelinuxErofsTool.RequireFileContexts(policyRootfs),
+            "/",
+            ["-zlz4hc,12"],
+            cancellationToken);
         await RunAsync("dump.erofs", ["-s", addon.Path], cancellationToken);
         WriteSha256(addon.Path);
     }
@@ -280,6 +363,33 @@ public sealed class KernelPackageBuilder(
 
         return SelectPackageFile(output, packageName)
             ?? throw new InvalidOperationException($"no {packageName} package found in {output}");
+    }
+
+    private async Task<ArchLocalPackageRepository> RequireSystemPackageRepositoryAsync(
+        string configDirectory,
+        CancellationToken cancellationToken)
+    {
+        var packageDirectory = Path.Combine(_root, ".work", "image", "packages");
+        await ArchPackageSetProvenance.VerifyAsync(
+            _root,
+            version,
+            packageDirectory,
+            cancellationToken);
+        if (!Directory.Exists(packageDirectory) ||
+            Directory.GetFiles(packageDirectory, "homeharbor-recovery-*.pkg.tar.*", SearchOption.TopDirectoryOnly).Length != 1 ||
+            Directory.GetFiles(packageDirectory, "selinux-refpolicy-arch-*.pkg.tar.*", SearchOption.TopDirectoryOnly).Length != 1 ||
+            Directory.GetFiles(packageDirectory, "erofs-utils-selinux-*.pkg.tar.*", SearchOption.TopDirectoryOnly).Length != 1)
+        {
+            throw new InvalidOperationException(
+                "the locally built HomeHarbor SELinux package set is unavailable; run system-build before building kernel-channel artifacts: " +
+                packageDirectory);
+        }
+
+        return await ArchLocalPackageRepositoryBuilder.CreateAsync(
+            packageDirectory,
+            configDirectory,
+            _runner,
+            cancellationToken);
     }
 
     private static string? SelectPackageFile(string output, string packageName)
@@ -494,13 +604,15 @@ public sealed class KernelPackageBuilder(
         string rootfs,
         IEnumerable<string> packages,
         CancellationToken cancellationToken,
-        string? standardInput = null)
+        string? standardInput = null,
+        string? pacmanConfig = null)
     {
         var result = await _rootless.RunPacstrapAsync(
             rootfs,
             packages,
             new CommandRunOptions(StandardInput: standardInput, StreamOutput: true, StreamError: true),
-            cancellationToken);
+            pacmanConfig,
+            cancellationToken: cancellationToken);
         _ = result.EnsureSuccess();
     }
 
@@ -550,10 +662,22 @@ public sealed class KernelPackageBuilder(
         IReadOnlyDictionary<string, string>? environment = null)
     {
         await _rootless.RequireNonRootAsync(cancellationToken);
+        var options = RootlessBuildExecutor.IsolatedOptions(new CommandRunOptions(
+            WorkingDirectory: workingDirectory,
+            StreamOutput: true,
+            StreamError: true,
+            EnvironmentOverride: environment));
+        var isolatedEnvironment = new Dictionary<string, string>(options.Environment, StringComparer.Ordinal)
+        {
+            ["HOME"] = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ["LOGNAME"] = Environment.UserName,
+            ["USER"] = Environment.UserName
+        };
+        options = options with { EnvironmentOverride = isolatedEnvironment };
         var result = await _runner.RunAsync(
             fileName,
             arguments,
-            new CommandRunOptions(WorkingDirectory: workingDirectory, StreamOutput: true, StreamError: true, EnvironmentOverride: environment),
+            options,
             cancellationToken);
         _ = result.EnsureSuccess();
     }
@@ -625,6 +749,7 @@ public sealed class KernelPackageBuilder(
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
             UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        RootlessBuildExecutor.ConfigureSystemdResolved(rootfs);
     }
 
     private static void DeleteDirectory(string path)

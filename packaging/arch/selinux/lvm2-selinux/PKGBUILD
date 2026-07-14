@@ -1,0 +1,151 @@
+# Maintainer: Eric Bélanger <eric@archlinux.org>
+# Maintainer: Thomas Bächler <thomas@archlinux.org>
+#
+# HomeHarbor provenance:
+# - Arch Linux packaging baseline: archlinux/packaging/packages/lvm2
+#   commit b534e388a69f77ea46eccc47234ac4de6d3b6255 (2026-06-29).
+# - The SELinux delta adds libselinux and explicitly enables upstream's
+#   SELinux-aware device-node, symlink, lock, and runtime-directory labeling.
+# - This recipe builds directly from the signed upstream tag and does not use
+#   archlinuxhardened binary packages or repositories.
+
+pkgbase=lvm2-selinux
+pkgdesc='Device mapper and Logical Volume Manager with SELinux support'
+pkgname=('lvm2-selinux' 'device-mapper-selinux')
+pkgver=2.03.41
+pkgrel=1
+arch=('x86_64')
+url='https://sourceware.org/lvm2/'
+license=('GPL-2.0-only' 'LGPL-2.1-only')
+groups=('selinux')
+makedepends=(
+  'git'
+  'libaio'
+  'libselinux'
+  'systemd-selinux'
+  'thin-provisioning-tools'
+  'util-linux-selinux'
+)
+validpgpkeys=('88437EF5C077BD113D3B7224228191C1567E2C17'  # Alasdair G Kergon <agk@redhat.com>
+              'D501A478440AE2FD130A1BE8B9112431E509039F') # Marian Csontos <marian.csontos@gmail.com>
+source=("lvm2::git+https://gitlab.com/lvmteam/lvm2.git?signed#tag=v${pkgver//./_}")
+sha256sums=('7ad3899acacc53697fcc6bf9e8f93e0017f22cddeea0db60c77fcab6ddc5959e')
+
+_backports=(
+  # makefiles: add an empty target install_lvm2
+  '78132bdcbf2e184609d86b5bf720314d2daf419c'
+)
+
+prepare() {
+  cd lvm2/
+
+  local _c
+  for _c in "${_backports[@]}"; do
+    git log --oneline -1 "${_c}"
+    git show "${_c}" -- ':(exclude)WHATS_NEW' | git apply
+  done
+
+  # remove install section from systemd units that are enabled by default
+  sed -i -e '/^\[Install\]$/,$d' \
+    scripts/dm_event_systemd_red_hat.socket.in \
+    scripts/lvm2_lvmpolld_systemd_red_hat.socket.in \
+    scripts/lvm2_monitoring_systemd_red_hat.service.in
+}
+
+build() {
+  # build system requires bash:
+  # https://www.redhat.com/archives/linux-lvm/2020-January/msg00004.html
+  # https://www.gnu.org/software/autoconf/manual/autoconf-2.69/html_node/Defining-Variables.html
+  export CONFIG_SHELL=/bin/bash
+
+  cd lvm2/
+
+  ./configure \
+    CONFIG_SHELL=/bin/bash \
+    --prefix=/usr \
+    --sbindir=/usr/bin \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    --enable-cmdlib \
+    --enable-dmeventd \
+    --enable-lvmpolld \
+    --enable-pkgconfig \
+    --enable-readline \
+    --enable-selinux \
+    --enable-udev_rules \
+    --enable-udev_sync \
+    --enable-write_install \
+    --with-cache=internal \
+    --with-default-dm-run-dir=/run \
+    --with-default-locking-dir=/run/lock/lvm \
+    --with-default-pid-dir=/run \
+    --with-default-run-dir=/run/lvm \
+    --with-libexecdir=/usr/lib/lvm2 \
+    --with-systemdsystemunitdir=/usr/lib/systemd/system \
+    --with-thin=internal \
+    --with-udev-prefix=/usr
+  make
+}
+
+package_device-mapper-selinux() {
+  pkgdesc='Device mapper userspace library and tools with SELinux support'
+  url='https://sourceware.org/dm/'
+  depends=(
+    'bash'
+    'glibc'
+    'libgcc' 'libgcc_s.so'
+    'libselinux' 'libselinux.so'
+    'systemd-libs-selinux' 'libudev.so'
+  )
+  provides=(
+    "device-mapper=${pkgver}-${pkgrel}"
+    'libdevmapper.so'
+    'libdevmapper-event.so'
+  )
+  conflicts=('device-mapper')
+  replaces=('device-mapper')
+
+  cd lvm2/
+
+  make DESTDIR="${pkgdir}" install_device-mapper
+  # Install dmeventd socket and service
+  make DESTDIR="${pkgdir}" install_systemd_units
+  rm -f "${pkgdir}/usr/lib/systemd/system/"{blk-availability.service,lvm*}
+  install -d -m0755 "${pkgdir}/usr/lib/systemd/system/sockets.target.wants"
+  ln -sf ../dm-event.socket "${pkgdir}/usr/lib/systemd/system/sockets.target.wants/dm-event.socket"
+}
+
+package_lvm2-selinux() {
+  pkgdesc='Logical Volume Manager 2 utilities with SELinux support'
+  url='https://sourceware.org/lvm2/'
+  depends=(
+    'bash'
+    "device-mapper-selinux>=${pkgver}"
+    'glibc'
+    'libaio' 'libaio.so'
+    'libselinux' 'libselinux.so'
+    'readline' 'libreadline.so'
+    'systemd-libs-selinux' 'libudev.so'
+    'thin-provisioning-tools'
+    'util-linux-libs-selinux' 'libblkid.so'
+  )
+  provides=("lvm2=${pkgver}-${pkgrel}")
+  conflicts=('lvm2' 'lvm' 'mkinitcpio<38-1')
+  replaces=('lvm2')
+  backup=('etc/lvm/lvm.conf'
+    'etc/lvm/lvmlocal.conf')
+
+  cd lvm2/
+
+  make -j1 DESTDIR="${pkgdir}" install_lvm2
+  # /etc directories
+  install -d "${pkgdir}"/etc/lvm/{archive,backup}
+
+  # systemd support
+  make DESTDIR="${pkgdir}" install_systemd_units
+  rm -f "${pkgdir}/usr/lib/systemd/system/"dm-*
+  install -d -m0755 "${pkgdir}/usr/lib/systemd/system/sysinit.target.wants"
+  ln -sf ../lvm2-lvmpolld.socket "${pkgdir}/usr/lib/systemd/system/sysinit.target.wants/lvm2-lvmpolld.socket"
+  ln -sf ../lvm2-monitor.service "${pkgdir}/usr/lib/systemd/system/sysinit.target.wants/lvm2-monitor.service"
+  make DESTDIR="${pkgdir}" install_systemd_generators
+}

@@ -1,0 +1,43 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71;
+# Python and Ruby bindings are intentionally packaged separately from this appliance baseline.
+
+pkgname=libsemanage
+pkgver=3.10
+pkgrel=2
+pkgdesc="SELinux binary policy management library"
+arch=(x86_64)
+url="https://github.com/SELinuxProject/selinux"
+license=(LGPL-2.1-or-later)
+groups=(selinux)
+makedepends=(flex pkgconf)
+depends=('libselinux>=3.10' audit)
+options=(!emptydirs)
+conflicts=(selinux-usr-libsemanage)
+provides=("selinux-usr-libsemanage=${pkgver}-${pkgrel}")
+validpgpkeys=(
+  63191CE94183098689CAB8DB7EF137EC935B0EAF
+  68D21823342A13683AEB3E4EFB4C685B5DC1C13E
+)
+source=(
+  "https://github.com/SELinuxProject/selinux/releases/download/${pkgver}/${pkgname}-${pkgver}.tar.gz"{,.asc}
+  semanage.conf
+)
+sha256sums=(
+  1978894c414769ad77438d26886eaae3fb7bb74578ef2a5ad3130c89cb5cb1fe
+  SKIP
+  58c19ed1e450ce9d9e6198a5359ae1f4b4e4d0e3ee6d4a8f97f083af71d6d074
+)
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  export CFLAGS="${CFLAGS} -fno-semantic-interposition"
+  make all
+}
+
+package() {
+  provides+=(libsemanage.so)
+  cd "${pkgname}-${pkgver}"
+  make DESTDIR="$pkgdir" LIBEXECDIR=/usr/lib SHLIBDIR=/usr/lib install
+  install -Dm0644 "$srcdir/semanage.conf" "$pkgdir/etc/selinux/semanage.conf"
+}

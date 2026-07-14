@@ -1,0 +1,32 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71.
+
+pkgname=policycoreutils
+pkgver=3.10
+pkgrel=1
+pkgdesc="SELinux policy core utilities"
+arch=(x86_64)
+url="https://github.com/SELinuxProject/selinux"
+license=(GPL-2.0-only)
+groups=(selinux)
+depends=('libsemanage>=3.10' pam)
+optdepends=('semodule-utils: SELinux module tools')
+conflicts=(selinux-usr-policycoreutils)
+provides=("selinux-usr-policycoreutils=${pkgver}-${pkgrel}")
+validpgpkeys=(
+  63191CE94183098689CAB8DB7EF137EC935B0EAF
+  68D21823342A13683AEB3E4EFB4C685B5DC1C13E
+)
+source=("https://github.com/SELinuxProject/selinux/releases/download/${pkgver}/${pkgname}-${pkgver}.tar.gz"{,.asc})
+sha256sums=(
+  8dbd50d868acbfae9d1a972f6bbb2587f06c9ec73308d11af6acb3a401de9832
+  SKIP
+)
+
+build() {
+  make -C "${pkgname}-${pkgver}" LSPP_PRIV=y all
+}
+
+package() {
+  make -C "${pkgname}-${pkgver}" DESTDIR="$pkgdir" LIBEXECDIR=/usr/lib SBINDIR=/usr/bin install
+}

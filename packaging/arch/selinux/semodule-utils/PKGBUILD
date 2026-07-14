@@ -1,0 +1,30 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71.
+
+pkgname=semodule-utils
+pkgver=3.10
+pkgrel=1
+pkgdesc="SELinux module tools"
+arch=(x86_64)
+url="https://github.com/SELinuxProject/selinux"
+license=(GPL-2.0-only)
+groups=(selinux)
+depends=('libsepol>=3.10')
+conflicts=('policycoreutils<2.7')
+validpgpkeys=(
+  63191CE94183098689CAB8DB7EF137EC935B0EAF
+  68D21823342A13683AEB3E4EFB4C685B5DC1C13E
+)
+source=("https://github.com/SELinuxProject/selinux/releases/download/${pkgver}/${pkgname}-${pkgver}.tar.gz"{,.asc})
+sha256sums=(
+  1c2f14cc098cbb4d75912d131c5f747e70246e1042e72f2ab40e28f53cf45c10
+  SKIP
+)
+
+build() {
+  make -C "${pkgname}-${pkgver}"
+}
+
+package() {
+  make -C "${pkgname}-${pkgver}" DESTDIR="$pkgdir" install
+}

@@ -308,7 +308,7 @@ package_homeharbor-control() {
     'android-tools'
     'btrfs-progs'
     'cryptsetup'
-    'device-mapper'
+    'device-mapper-selinux'
     'dotnet-runtime'
     'caddy'
     'curl'
@@ -316,13 +316,16 @@ package_homeharbor-control() {
     'mdadm'
     'openssl'
     'podman'
+    'policycoreutils'
     'postgresql'
+    'crun-selinux'
     'samba'
     'smartmontools'
-    'systemd'
+    'systemd-selinux'
     'tpm2-tss'
     'valkey'
     'xfsprogs'
+    'homeharbor-selinux-policy'
     "${_dotnet_package_depends[@]}"
   )
 
@@ -365,6 +368,7 @@ package_homeharbor-control() {
   if [[ -f "${agent_publish_dir}/HomeHarbor.Tooling.pdb" ]]; then
     install -Dm644 "${agent_publish_dir}/HomeHarbor.Tooling.pdb" "${pkgdir}/usr/lib/homeharbor/agent/HomeHarbor.Tooling.pdb"
   fi
+  ln -s agent/HomeHarbor.Agent "${pkgdir}/usr/lib/homeharbor/selinux-store-sync"
 
   _link_published_dotnet_libraries "${publish_dir}" "${pkgdir}/usr/lib/homeharbor/api"
   _link_published_dotnet_libraries "${agent_publish_dir}" "${pkgdir}/usr/lib/homeharbor/agent"
@@ -379,6 +383,12 @@ package_homeharbor-control() {
   install -Dm644 "${source_dir}/os/systemd/homeharbor-firstboot.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-firstboot.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-setup-bootstrap-consume.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-setup-bootstrap-consume.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-setup-bootstrap-consume.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-setup-bootstrap-consume.path"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-relabel.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-relabel.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-relabel-late.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-relabel-late.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-store-sync.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-store-sync.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-ready.target" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-ready.target"
+  install -Dm644 "${source_dir}/os/systemd/audit-rules.service.d/homeharbor.conf" "${pkgdir}/usr/lib/systemd/system/audit-rules.service.d/homeharbor.conf"
+  install -Dm640 "${source_dir}/os/audit/homeharbor.rules" "${pkgdir}/etc/audit/homeharbor.rules"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-apply.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-apply.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-storage-apply.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-storage-apply.path"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-ota-commit.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-ota-commit.service"
@@ -396,6 +406,9 @@ package_homeharbor-control() {
   install -Dm644 "${source_dir}/os/systemd/homeharbor-system-app-apply.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-system-app-apply.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-system-app-apply.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-system-app-apply.path"
   install -Dm644 "${source_dir}/os/systemd/caddy.service.d/homeharbor-config.conf" "${pkgdir}/usr/lib/systemd/system/caddy.service.d/homeharbor-config.conf"
+  install -dm755 "${pkgdir}/usr/lib/systemd/system/sysinit.target.requires"
+  ln -s ../homeharbor-selinux-ready.target \
+    "${pkgdir}/usr/lib/systemd/system/sysinit.target.requires/homeharbor-selinux-ready.target"
   sed -i "s/^Environment=HOMEHARBOR_VERSION=.*/Environment=HOMEHARBOR_VERSION=${_homeharbor_version}/" \
     "${pkgdir}/usr/lib/systemd/system/homeharbor-api.service"
   sed -i "s/^Environment=HOMEHARBOR_CHANNEL=.*/Environment=HOMEHARBOR_CHANNEL=${_homeharbor_channel}/" \
@@ -406,6 +419,9 @@ package_homeharbor-control() {
 
   install -Dm644 "${source_dir}/packaging/arch/homeharbor.sysusers" "${pkgdir}/usr/lib/sysusers.d/homeharbor.conf"
   install -Dm644 "${source_dir}/packaging/arch/homeharbor.tmpfiles" "${pkgdir}/usr/lib/tmpfiles.d/homeharbor.conf"
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor-audit.tmpfiles" "${pkgdir}/etc/tmpfiles.d/audit.conf"
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor-containers.modules" \
+    "${pkgdir}/usr/lib/modules-load.d/homeharbor-containers.conf"
   install -dm755 "${pkgdir}/etc/homeharbor" "${pkgdir}/homeharbor-data"
 }
 
@@ -416,11 +432,13 @@ package_homeharbor-recovery() {
   pkgdesc='HomeHarbor recovery environment'
   depends=(
     'android-tools'
-    'device-mapper'
+    'device-mapper-selinux'
     'dotnet-runtime'
     'jq'
     'openssl'
-    'systemd'
+    'policycoreutils'
+    'systemd-selinux'
+    'homeharbor-selinux-policy'
     "dotnet-system-commandline=${pkgver}-${pkgrel}"
     "dotnet-yamldotnet=${pkgver}-${pkgrel}"
   )
@@ -438,18 +456,30 @@ package_homeharbor-recovery() {
   if [[ -f "${recovery_publish_dir}/HomeHarbor.Tooling.pdb" ]]; then
     install -Dm644 "${recovery_publish_dir}/HomeHarbor.Tooling.pdb" "${pkgdir}/usr/lib/homeharbor/recovery/HomeHarbor.Tooling.pdb"
   fi
+  ln -s recovery/HomeHarbor.Recovery "${pkgdir}/usr/lib/homeharbor/selinux-store-sync"
   _link_published_dotnet_libraries "${recovery_publish_dir}" "${pkgdir}/usr/lib/homeharbor/recovery"
 
   install -Dm644 "${source_dir}/os/systemd/homeharbor-fastbootd.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-fastbootd.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-recovery-action.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-recovery-action.service"
   install -Dm644 "${source_dir}/os/systemd/homeharbor-recovery-action.path" "${pkgdir}/usr/lib/systemd/system/homeharbor-recovery-action.path"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-relabel.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-relabel.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-relabel-late.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-relabel-late.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-store-sync.service" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-store-sync.service"
+  install -Dm644 "${source_dir}/os/systemd/homeharbor-selinux-ready.target" "${pkgdir}/usr/lib/systemd/system/homeharbor-selinux-ready.target"
+  install -Dm644 "${source_dir}/os/systemd/audit-rules.service.d/homeharbor.conf" "${pkgdir}/usr/lib/systemd/system/audit-rules.service.d/homeharbor.conf"
+  install -Dm640 "${source_dir}/os/audit/homeharbor.rules" "${pkgdir}/etc/audit/homeharbor.rules"
   install -Dm644 "${source_dir}/os/systemd/network/20-homeharbor-recovery-wired.network" "${pkgdir}/etc/systemd/network/20-homeharbor-recovery-wired.network"
   install -Dm644 "${source_dir}/os/systemd/serial-getty@ttyS0.service.d/recovery-autologin.conf" "${pkgdir}/etc/systemd/system/serial-getty@ttyS0.service.d/recovery-autologin.conf"
   install -Dm644 "${source_dir}/os/systemd/getty@tty1.service.d/recovery-autologin.conf" "${pkgdir}/etc/systemd/system/getty@tty1.service.d/recovery-autologin.conf"
   install -Dm644 "${source_dir}/packaging/arch/homeharbor-recovery.sysusers" "${pkgdir}/usr/lib/sysusers.d/homeharbor_recovery.conf"
   install -Dm644 "${source_dir}/packaging/arch/homeharbor-recovery.tmpfiles" "${pkgdir}/usr/lib/tmpfiles.d/homeharbor_recovery.conf"
+  install -Dm644 "${source_dir}/packaging/arch/homeharbor-audit.tmpfiles" "${pkgdir}/etc/tmpfiles.d/audit.conf"
+  install -dm755 "${pkgdir}/usr/lib/systemd/system/sysinit.target.requires"
+  ln -s ../homeharbor-selinux-ready.target \
+    "${pkgdir}/usr/lib/systemd/system/sysinit.target.requires/homeharbor-selinux-ready.target"
   install -Dm755 "${avb_helper}" "${pkgdir}/usr/lib/homeharbor/homeharbor-avb"
-  install -dm755 "${pkgdir}/etc/homeharbor" "${pkgdir}/homeharbor-data"
+  install -dm755 "${pkgdir}/etc/homeharbor"
+  install -dm750 "${pkgdir}/homeharbor-data"
 }
 
 package_homeharbor-installer() {
@@ -461,19 +491,23 @@ package_homeharbor-installer() {
     'android-tools'
     'btrfs-progs'
     'cryptsetup'
-    'device-mapper'
+    'device-mapper-selinux'
     'dotnet-runtime'
     'dosfstools'
-    'erofs-utils'
+    'erofs-utils-selinux'
     'gpm'
     'mdadm'
     'xfsprogs'
     'gptfdisk'
     'jq'
     'mokutil'
+    'networkmanager-selinux'
     'openssl'
-    'systemd'
+    'policycoreutils'
+    'systemd-resolvconf-selinux'
+    'systemd-selinux'
     'tpm2-tss'
+    'homeharbor-selinux-policy'
   )
 
   install -dm755 "${pkgdir}/usr/lib/homeharbor/installer"

@@ -1,8 +1,8 @@
 [Unit]
 Description=HomeHarbor control plane
-Requires=valkey.service
+Requires=homeharbor-selinux-ready.target valkey.service
 RequiresMountsFor=/var/lib/homeharbor
-After=network-online.target homeharbor-storage-apply.service valkey.service
+After=homeharbor-selinux-ready.target network-online.target homeharbor-storage-apply.service valkey.service
 Wants=network-online.target homeharbor-caddy-render.service homeharbor-smb-apply.service homeharbor-container-apply.service
 
 [Service]
@@ -17,7 +17,7 @@ Environment=HOMEHARBOR_CHANNEL=dev
 UMask=0007
 ExecStartPre=+/usr/bin/chgrp homeharbor-api /run/homeharbor-api
 ExecStartPre=+/usr/lib/homeharbor/agent/HomeHarbor.Agent firstboot
-ExecStart=/usr/bin/dotnet /usr/lib/homeharbor/api/HomeHarbor.Api.dll
+ExecStart=/usr/lib/homeharbor/api/HomeHarbor.Api
 Restart=always
 RestartSec=3
 NoNewPrivileges=true

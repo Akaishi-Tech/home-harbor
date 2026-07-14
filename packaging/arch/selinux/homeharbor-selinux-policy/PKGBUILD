@@ -1,0 +1,93 @@
+# Maintainer: HomeHarbor maintainers
+
+pkgname=homeharbor-selinux-policy
+pkgver=1.0.0
+pkgrel=42
+pkgdesc='SELinux policy module for the HomeHarbor appliance'
+arch=(any)
+url='https://github.com/akaishi-tech/home-harbor'
+license=(GPL-2.0-only)
+groups=(selinux)
+depends=(
+  checkpolicy
+  policycoreutils
+  selinux-refpolicy-arch
+  semodule-utils
+)
+makedepends=(
+  checkpolicy
+  selinux-refpolicy-arch
+  semodule-utils
+)
+install=homeharbor-selinux-policy.install
+source=(
+  homeharbor.te
+  homeharbor.fc
+  homeharbor.if
+  homeharbor-containers.conf
+  homeharbor-selinux-cgroup-relabel.service
+)
+sha256sums=(
+  07759e2f61819e5c549a4d8109963c9efc54a9ea8a946a4e032b9245b58db16a
+  c1def11f494108af7debcf7e11e13e8d74ac0bd23b149c4f914c13419e3f7e3e
+  58d97c7957d93c6891d9fbc4e963a8d35215899f54ac09b1ab96b67f7c2e8633
+  dc511a740d4ff0858cacbce8c57067baa82ac5fc40e58262450c9c64384b70a6
+  b46ead341852a0c7911828ebf9b0e8a8d6fa94c955ecd03309eee948761109e3
+)
+
+build() {
+  make -f /usr/share/selinux/refpolicy-arch/include/Makefile \
+    NAME=refpolicy-arch \
+    homeharbor.pp
+}
+
+package() {
+  install -Dm0644 homeharbor.pp \
+    "$pkgdir/usr/share/selinux/refpolicy-arch/homeharbor.pp"
+  install -Dm0644 homeharbor.if \
+    "$pkgdir/usr/share/selinux/refpolicy-arch/include/contrib/homeharbor.if"
+  install -Dm0644 homeharbor.te \
+    "$pkgdir/usr/share/doc/$pkgname/homeharbor.te"
+  install -Dm0644 homeharbor.fc \
+    "$pkgdir/usr/share/doc/$pkgname/homeharbor.fc"
+
+  # Confined rootless Podman must preserve the caller's SELinux user and role
+  # when it assigns a per-container MCS category pair. Keep this vendor policy
+  # on the immutable root rather than in the service account's writable XDG
+  # configuration directory.
+  install -Dm0644 homeharbor-containers.conf \
+    "$pkgdir/usr/share/containers/containers.rootless.conf.d/10-homeharbor-selinux.conf"
+
+  install -Dm0644 homeharbor-selinux-cgroup-relabel.service \
+    "$pkgdir/usr/lib/systemd/system/homeharbor-selinux-cgroup-relabel.service"
+  install -dm0755 "$pkgdir/usr/lib/systemd/system/sysinit.target.requires"
+  ln -s ../homeharbor-selinux-cgroup-relabel.service \
+    "$pkgdir/usr/lib/systemd/system/sysinit.target.requires/homeharbor-selinux-cgroup-relabel.service"
+
+  # HomeHarbor uses fixed local appliance identities rather than homed. Keep
+  # the service from being D-Bus activated by NSS lookups on every boot.
+  install -dm0755 "$pkgdir/etc/systemd/system"
+  local unit
+  for unit in \
+    systemd-homed.service \
+    systemd-homed-activate.service \
+    systemd-homed-firstboot.service; do
+    ln -s /dev/null "$pkgdir/etc/systemd/system/$unit"
+  done
+
+  # GnuPG's system instances remain available for pacman key verification;
+  # only the unused per-user socket activation surface is masked.
+  install -dm0755 "$pkgdir/etc/systemd/user"
+  for unit in \
+    dirmngr.service \
+    dirmngr.socket \
+    gpg-agent.service \
+    gpg-agent.socket \
+    gpg-agent-browser.socket \
+    gpg-agent-extra.socket \
+    gpg-agent-ssh.socket \
+    keyboxd.service \
+    keyboxd.socket; do
+    ln -s /dev/null "$pkgdir/etc/systemd/user/$unit"
+  done
+}

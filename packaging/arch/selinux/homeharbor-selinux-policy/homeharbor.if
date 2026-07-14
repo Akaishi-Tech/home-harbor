@@ -1,0 +1,38 @@
+## <summary>HomeHarbor appliance control-plane policy.</summary>
+
+########################################
+## <summary>
+## Transition to the HomeHarbor domain.
+## </summary>
+## <param name="domain">
+## <summary>Source domain.</summary>
+## </param>
+#
+interface(`homeharbor_domtrans',`
+	gen_require(`
+		type homeharbor_t;
+		type homeharbor_exec_t;
+	')
+
+	domtrans_pattern($1, homeharbor_exec_t, homeharbor_t)
+')
+
+########################################
+## <summary>
+## Allow a domain to manage HomeHarbor-owned persistent data.
+## </summary>
+## <param name="domain">
+## <summary>Domain allowed access.</summary>
+## </param>
+#
+interface(`homeharbor_manage_data',`
+	gen_require(`
+		type homeharbor_data_t;
+	')
+
+	manage_dirs_pattern($1, homeharbor_data_t, homeharbor_data_t)
+	manage_files_pattern($1, homeharbor_data_t, homeharbor_data_t)
+	manage_lnk_files_pattern($1, homeharbor_data_t, homeharbor_data_t)
+	manage_fifo_files_pattern($1, homeharbor_data_t, homeharbor_data_t)
+	manage_sock_files_pattern($1, homeharbor_data_t, homeharbor_data_t)
+')

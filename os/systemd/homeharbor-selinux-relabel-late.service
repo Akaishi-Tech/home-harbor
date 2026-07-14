@@ -1,0 +1,21 @@
+[Unit]
+Description=Relabel HomeHarbor paths created during early boot for SELinux
+DefaultDependencies=no
+AssertSecurity=selinux
+AssertPathExists=/usr/bin/restorecon
+AssertPathIsDirectory=/var
+AssertPathIsDirectory=/homeharbor-data
+Requires=homeharbor-selinux-relabel.service systemd-tmpfiles-setup.service
+RequiresMountsFor=/var
+Conflicts=shutdown.target
+After=homeharbor-selinux-relabel.service systemd-tmpfiles-setup.service
+Before=sysinit.target shutdown.target
+Before=homeharbor-boot-attempt.service homeharbor-storage-apply.service
+Before=homeharbor-firstboot.service homeharbor-postgresql-init.service homeharbor-postgresql.service
+Before=homeharbor-api.service homeharbor-fastbootd.service homeharbor-recovery-action.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/homeharbor/selinux-store-sync selinux-relabel managed
+ExecStartPost=/usr/lib/homeharbor/selinux-store-sync selinux-ready-check
+RemainAfterExit=yes

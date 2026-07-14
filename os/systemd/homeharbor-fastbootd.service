@@ -1,6 +1,7 @@
 [Unit]
 Description=HomeHarbor recovery fastboot over TCP
-After=network-online.target
+Requires=homeharbor-selinux-ready.target
+After=homeharbor-selinux-ready.target network-online.target
 Wants=network-online.target
 
 [Service]

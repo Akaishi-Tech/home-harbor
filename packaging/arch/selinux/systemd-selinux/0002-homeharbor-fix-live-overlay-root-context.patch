@@ -1,0 +1,93 @@
+From 3f8f28388fc30b461b579963d1d4d0185457c41b Mon Sep 17 00:00:00 2001
+From: HomeHarbor maintainers <maintainers@homeharbor.local>
+Date: Sun, 12 Jul 2026 22:30:00 +0800
+Subject: [PATCH] core: fix HomeHarbor live overlay root context after policy
+ load
+
+Archiso mounts its writable overlay before SELinux policy initialization.
+The overlay root consequently resolves to the backing tmpfs type when PID 1
+loads policy, preventing confined domains from traversing the filesystem.
+
+Apply the appliance root context immediately after a successful policy load
+and before PID 1 transitions into init_t. Only accept the exact Archiso
+overlay state, verify the result, and avoid writing when the root is already
+correct so immutable installed and recovery roots remain untouched. Treat
+any unexpected state, read, relabel, or verification failure as fatal instead
+of booting with a partially usable enforcing policy.
+---
+ src/core/selinux-setup.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/src/core/selinux-setup.c b/src/core/selinux-setup.c
+index 886b00cbf5..1c927b2527 100644
+--- a/src/core/selinux-setup.c
++++ b/src/core/selinux-setup.c
+@@ -1,5 +1,6 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ 
++#include <linux/magic.h>
+ #include <unistd.h>
+ 
+ #include "sd-messages.h"
+@@ -9,9 +10,44 @@
+ #include "log.h"
+ #include "selinux-setup.h"
+ #include "selinux-util.h"
++#include "stat-util.h"
+ #include "string-util.h"
+ #include "time-util.h"
+ 
++#define HOMEHARBOR_ROOT_CONTEXT "system_u:object_r:root_t:s0"
++#define HOMEHARBOR_TMPFS_CONTEXT "system_u:object_r:tmpfs_t:s0"
++
++static int homeharbor_fix_root_context(void) {
++        _cleanup_freecon_ char *context = NULL, *verified = NULL;
++
++        /* Archiso creates the overlay before policy initialization, so its root
++         * otherwise inherits the backing tmpfs type.  Relabel only after the
++         * context can be validated and before PID 1 transitions into init_t. */
++        if (sym_getfilecon_raw("/", &context) < 0)
++                return -errno;
++        if (streq_ptr(context, HOMEHARBOR_ROOT_CONTEXT))
++                return 0;
++        if (!streq_ptr(context, HOMEHARBOR_TMPFS_CONTEXT))
++                return -ENOTRECOVERABLE;
++        if (access("/run/archiso", F_OK) < 0)
++                return -errno;
++
++        int r = path_is_fs_type("/", OVERLAYFS_SUPER_MAGIC);
++        if (r < 0)
++                return r;
++        if (r == 0)
++                return -ENOTRECOVERABLE;
++
++        if (sym_setfilecon_raw("/", HOMEHARBOR_ROOT_CONTEXT) < 0)
++                return -errno;
++        if (sym_getfilecon_raw("/", &verified) < 0)
++                return -errno;
++        if (!streq_ptr(verified, HOMEHARBOR_ROOT_CONTEXT))
++                return -ENOTRECOVERABLE;
++
++        return 1;
++}
++
+ int mac_selinux_setup(bool *loaded_policy) {
+         int r;
+ 
+@@ -56,6 +92,14 @@ int mac_selinux_setup(bool *loaded_policy) {
+         if (sym_selinux_init_load_policy(&enforce) == 0) { /* NB: Apparently doesn't set useful errno! */
+                 mac_selinux_retest();
+ 
++                r = homeharbor_fix_root_context();
++                if (r < 0) {
++                        log_open();
++                        return log_struct_errno(LOG_EMERG, r,
++                                                LOG_MESSAGE("Failed to apply the HomeHarbor SELinux root context: %m"),
++                                                LOG_MESSAGE_ID(SD_MESSAGE_SELINUX_FAILED_STR));
++                }
++
+                 /* Transition to the new context */
+                 _cleanup_freecon_ char *label = NULL;
+                 r = mac_selinux_get_create_label_from_exe(SYSTEMD_BINARY_PATH, &label);
+-- 
+2.50.1

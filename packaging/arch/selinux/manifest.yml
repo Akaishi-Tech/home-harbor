@@ -1,0 +1,156 @@
+schemaVersion: 1
+upstreamRepository: https://github.com/archlinuxhardened/selinux
+upstreamRevision: e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71
+
+# Every output below is built from the PKGBUILD stored in this repository.
+# The pinned upstream repository is source provenance for the SELinux deltas;
+# it is never configured as a pacman repository and no binary is consumed.
+recipes:
+  - name: libsepol
+    path: packaging/arch/selinux/libsepol
+    packages: [libsepol]
+    installPackages: [libsepol]
+  - name: libselinux
+    path: packaging/arch/selinux/libselinux
+    packages: [libselinux]
+    installPackages: [libselinux]
+  - name: checkpolicy
+    path: packaging/arch/selinux/checkpolicy
+    packages: [checkpolicy]
+    installPackages: [checkpolicy]
+  - name: secilc
+    path: packaging/arch/selinux/secilc
+    packages: [secilc]
+    installPackages: [secilc]
+  - name: libsemanage
+    path: packaging/arch/selinux/libsemanage
+    packages: [libsemanage]
+    installPackages: [libsemanage]
+  - name: semodule-utils
+    path: packaging/arch/selinux/semodule-utils
+    packages: [semodule-utils]
+    installPackages: [semodule-utils]
+  - name: policycoreutils
+    path: packaging/arch/selinux/policycoreutils
+    packages: [policycoreutils]
+    installPackages: [policycoreutils]
+  - name: pambase-selinux
+    path: packaging/arch/selinux/pambase-selinux
+    packages: [pambase-selinux]
+    installPackages: [pambase-selinux]
+  - name: pam-selinux
+    path: packaging/arch/selinux/pam-selinux
+    packages: [pam-selinux]
+    installPackages: [pam-selinux]
+  - name: coreutils-selinux
+    path: packaging/arch/selinux/coreutils-selinux
+    packages: [coreutils-selinux]
+    installPackages: [coreutils-selinux]
+  - name: findutils-selinux
+    path: packaging/arch/selinux/findutils-selinux
+    packages: [findutils-selinux]
+    installPackages: [findutils-selinux]
+  - name: iproute2-selinux
+    path: packaging/arch/selinux/iproute2-selinux
+    packages: [iproute2-selinux]
+    installPackages: [iproute2-selinux]
+  - name: psmisc-selinux
+    path: packaging/arch/selinux/psmisc-selinux
+    packages: [psmisc-selinux]
+    installPackages: [psmisc-selinux]
+  - name: shadow-selinux
+    path: packaging/arch/selinux/shadow-selinux
+    packages: [shadow-selinux]
+    installPackages: [shadow-selinux]
+  - name: sudo-selinux
+    path: packaging/arch/selinux/sudo-selinux
+    packages: [sudo-selinux]
+    installPackages: [sudo-selinux]
+  - name: util-linux-selinux
+    path: packaging/arch/selinux/util-linux-selinux
+    packages: [util-linux-selinux, util-linux-libs-selinux]
+    installPackages: [util-linux-libs-selinux, util-linux-selinux]
+  - name: systemd-selinux
+    path: packaging/arch/selinux/systemd-selinux
+    packages:
+      - systemd-selinux
+      - systemd-libs-selinux
+      - systemd-resolvconf-selinux
+      - systemd-sysvcompat-selinux
+      - systemd-tests-selinux
+      - systemd-ukify-selinux
+    installPackages:
+      - systemd-libs-selinux
+      - systemd-selinux
+      - systemd-resolvconf-selinux
+      - systemd-sysvcompat-selinux
+  - name: dbus-selinux
+    path: packaging/arch/selinux/dbus-selinux
+    packages: [dbus-selinux, dbus-docs-selinux]
+    installPackages: [dbus-selinux]
+  - name: dbus-broker-selinux
+    path: packaging/arch/selinux/dbus-broker-selinux
+    packages: [dbus-broker-selinux]
+    installPackages: [dbus-broker-selinux]
+  - name: lvm2-selinux
+    path: packaging/arch/selinux/lvm2-selinux
+    packages: [lvm2-selinux, device-mapper-selinux]
+    installPackages: [device-mapper-selinux]
+  - name: networkmanager-selinux
+    path: packaging/arch/selinux/networkmanager-selinux
+    packages:
+      - networkmanager-selinux
+      - libnm-selinux
+      - nm-cloud-setup-selinux
+      - networkmanager-docs-selinux
+    installPackages: [libnm-selinux, networkmanager-selinux]
+  - name: openssh-selinux
+    path: packaging/arch/selinux/openssh-selinux
+    packages: [openssh-selinux]
+    installPackages: [openssh-selinux]
+  - name: erofs-utils-selinux
+    path: packaging/arch/selinux/erofs-utils-selinux
+    packages: [erofs-utils-selinux, erofsfuse-selinux]
+    installPackages: [erofs-utils-selinux]
+  - name: crun-selinux
+    path: packaging/arch/selinux/crun-selinux
+    packages: [crun-selinux, krun-selinux]
+    installPackages: [crun-selinux]
+  - name: selinux-refpolicy-arch
+    path: packaging/arch/selinux/selinux-refpolicy-arch
+    packages: [selinux-refpolicy-arch]
+    installPackages: [selinux-refpolicy-arch]
+  - name: homeharbor-selinux-policy
+    path: packaging/arch/selinux/homeharbor-selinux-policy
+    packages: [homeharbor-selinux-policy]
+    installPackages: [homeharbor-selinux-policy]
+
+buildOrder:
+  - libsepol
+  - libselinux
+  - checkpolicy
+  - secilc
+  - libsemanage
+  - semodule-utils
+  - pam-selinux
+  - pambase-selinux
+  - policycoreutils
+  - coreutils-selinux
+  - findutils-selinux
+  - iproute2-selinux
+  - psmisc-selinux
+  - shadow-selinux
+  - sudo-selinux
+  - util-linux-selinux
+  - systemd-selinux
+  - util-linux-selinux
+  - systemd-selinux
+  - dbus-selinux
+  - dbus-broker-selinux
+  - lvm2-selinux
+  - networkmanager-selinux
+  - openssh-selinux
+  - erofs-utils-selinux
+  - crun-selinux
+  - selinux-refpolicy-arch
+  - homeharbor-selinux-policy

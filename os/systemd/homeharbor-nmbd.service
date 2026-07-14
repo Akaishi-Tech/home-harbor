@@ -1,6 +1,7 @@
 [Unit]
 Description=HomeHarbor NetBIOS name service
-After=network-online.target homeharbor-smbd.service
+Requires=homeharbor-selinux-ready.target
+After=homeharbor-selinux-ready.target network-online.target homeharbor-smbd.service
 Wants=network-online.target
 
 [Service]

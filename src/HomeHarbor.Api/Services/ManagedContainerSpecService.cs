@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using HomeHarbor.Api.Data;
+using HomeHarbor.Tooling;
 
 namespace HomeHarbor.Api.Services;
 
@@ -153,7 +154,7 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
                 throw new InvalidOperationException("Containers may mount only their private app data root read-write.");
             _ = builder.AppendLine(
                 CultureInfo.InvariantCulture,
-                $"Volume={QuoteSystemd($"{hostPath}:{containerPath}:{(volume.ReadOnly ? "ro" : "rw,U")}")}");
+                $"Volume={QuoteSystemd($"{hostPath}:{containerPath}:{(volume.ReadOnly ? "ro,Z" : "rw,U,Z")}")}");
         }
 
         if (command.Count > 0)
@@ -163,6 +164,7 @@ public sealed partial class ManagedContainerSpecService(IHomeHarborStorageServic
 
         _ = builder.AppendLine();
         _ = builder.AppendLine("[Service]");
+        _ = builder.AppendLine("Environment=" + ContainerRuntimePaths.QuadletPodmanConfigEnvironment);
         _ = builder.AppendLine("Restart=on-failure");
         _ = builder.AppendLine("RestartSec=5");
         if (string.Equals(container.DesiredState, "running", StringComparison.Ordinal))

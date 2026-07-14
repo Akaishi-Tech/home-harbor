@@ -1,0 +1,3 @@
+# HomeHarbor ships SELinux enabled and enforcing.
+SELINUX=enforcing
+SELINUXTYPE=refpolicy-arch

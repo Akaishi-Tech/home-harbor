@@ -1,0 +1,37 @@
+# Maintainer: HomeHarbor maintainers
+# Imported from archlinuxhardened/selinux at e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71.
+
+pkgname=checkpolicy
+pkgver=3.10
+pkgrel=1
+pkgdesc="SELinux policy compiler"
+arch=(x86_64)
+url="https://github.com/SELinuxProject/selinux"
+license=(GPL-2.0-only)
+groups=(selinux)
+makedepends=('libsepol>=3.10')
+conflicts=(selinux-usr-checkpolicy)
+provides=("selinux-usr-checkpolicy=${pkgver}-${pkgrel}")
+validpgpkeys=(
+  63191CE94183098689CAB8DB7EF137EC935B0EAF
+  68D21823342A13683AEB3E4EFB4C685B5DC1C13E
+)
+source=("https://github.com/SELinuxProject/selinux/releases/download/${pkgver}/${pkgname}-${pkgver}.tar.gz"{,.asc})
+sha256sums=(
+  2d92951dfcb090d6179e7a23856622e0fcbc32be03bf1e60ace9dc9cbda11e59
+  SKIP
+)
+
+build() {
+  make -C "${pkgname}-${pkgver}"
+}
+
+check() {
+  make -C "${pkgname}-${pkgver}" test
+}
+
+package() {
+  make -C "${pkgname}-${pkgver}" DESTDIR="$pkgdir" install
+  install -m0755 "${pkgname}-${pkgver}/test/dismod" "$pkgdir/usr/bin/sedismod"
+  install -m0755 "${pkgname}-${pkgver}/test/dispol" "$pkgdir/usr/bin/sedispol"
+}

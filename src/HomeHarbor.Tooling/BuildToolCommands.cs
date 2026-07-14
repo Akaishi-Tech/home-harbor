@@ -7,6 +7,7 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
 {
     private readonly string _root = BuildKeyDefaults.Apply(root);
     private readonly ICommandRunner _runner = runner ?? new ProcessCommandRunner();
+    private readonly RootlessBuildExecutor _rootless = new(runner ?? new ProcessCommandRunner());
 
     public async Task BuildEfiLoaderAsync(string output, CancellationToken cancellationToken = default)
     {
@@ -53,7 +54,7 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         Console.WriteLine("Built " + fullOutput);
     }
 
-    public async Task ArchPackageAsync(string version, CancellationToken cancellationToken = default)
+    public async Task<ArchLocalPackageRepository> ArchPackageAsync(string version, CancellationToken cancellationToken = default)
     {
         RequireSafeVersion(version);
         if (OperatingSystem.IsLinux() && Environment.UserName == "root")
@@ -61,7 +62,10 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
             throw new InvalidOperationException("arch-package must run as a normal user; makepkg and fakeroot must not be driven from a rootful builder.");
         }
 
-        await RequireToolsAsync(["dotnet", "fakeroot", "makepkg", "pnpm", "tar"], cancellationToken);
+        await RequireToolsAsync(
+            ["arch-chroot", "bsdtar", "dotnet", "fakeroot", "git", "makepkg", "pacman", "pacstrap", "pnpm", "repo-add", "tar", "unshare"],
+            cancellationToken);
+        await _rootless.RequireReadyAsync(cancellationToken);
 
         var workRoot = Path.Combine(_root, ".work");
         var artifactsRoot = Path.Combine(_root, "artifacts");
@@ -78,35 +82,21 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         var buildDir = Path.Combine(packageWork, "makepkg");
         var sourceTarball = Path.Combine(sourceDir, $"homeharbor-{version}.tar.gz");
 
-        DeleteIfExists(packageWork);
-        DeleteIfExists(packageOutput);
+        await DeleteMappedBuildPathAsync(packageWork, cancellationToken);
+        await DeleteMappedBuildPathAsync(packageOutput, cancellationToken);
         _ = Directory.CreateDirectory(sourceDir);
         _ = Directory.CreateDirectory(buildDir);
         _ = Directory.CreateDirectory(packageOutput);
 
-        await RunRequiredAsync(
-            "tar",
-            [
-                "-C",
-                _root,
-                "--exclude=./.work",
-                "--exclude=./artifacts",
-                "--exclude=./node_modules",
-                "--exclude=./docs/node_modules",
-                "--exclude=./frontend/node_modules",
-                "--exclude=./packaging/arch/pkg",
-                "--exclude=./packaging/arch/src",
-                "--exclude=./packaging/arch/homeharbor-*.tar.gz",
-                "--exclude=./packaging/arch/*.pkg.tar.*",
-                "--exclude=*/bin",
-                "--exclude=*/obj",
-                "--transform",
-                $"s#^\\.#homeharbor-{version}#",
-                "-czf",
-                sourceTarball,
-                "."
-            ],
+        var selinuxSourceSha256 = ArchPackageSetProvenance.ComputeSelinuxSourceSha256(_root);
+        var selinuxPlan = SelinuxPackageBuildDescriptor.LoadDefaultPlan(_root);
+        await new SelinuxPackageBuilder(_root, _runner).BuildAsync(
+            selinuxPlan,
+            Path.Combine(packageWork, "selinux"),
+            packageOutput,
             cancellationToken);
+
+        await CreateCleanSourceArchiveAsync(sourceDir, sourceTarball, version, cancellationToken);
 
         var packagingTarball = Path.Combine(_root, "packaging", "arch", $"homeharbor-{version}.tar.gz");
         if (File.Exists(packagingTarball))
@@ -116,12 +106,19 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
 
         var environment = new Dictionary<string, string>
         {
+            ["DOTNET_CLI_HOME"] = Path.Combine(packageWork, "home", ".dotnet"),
+            ["HOME"] = Path.Combine(packageWork, "home"),
             ["HOMEHARBOR_VERSION"] = version,
             ["HOMEHARBOR_CHANNEL"] = Env.String("HOMEHARBOR_CHANNEL", ReleaseChannel.Dev),
             ["HOMEHARBOR_SOURCE_TARBALL"] = sourceTarball,
+            ["LOGNAME"] = Environment.UserName,
+            ["NUGET_PACKAGES"] = Path.Combine(packageWork, "nuget-packages"),
             ["PKGDEST"] = packageOutput,
-            ["BUILDDIR"] = buildDir
+            ["BUILDDIR"] = buildDir,
+            ["USER"] = Environment.UserName,
+            ["XDG_CACHE_HOME"] = Path.Combine(packageWork, "home", ".cache")
         };
+        _ = Directory.CreateDirectory(environment["HOME"]);
         await RunRequiredAsync(
             "makepkg",
             ["--force", "--cleanbuild", "--clean", "--nodeps"],
@@ -129,10 +126,29 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
             workingDirectory: Path.Combine(_root, "packaging", "arch"),
             environment: environment);
 
+        await ArchPackageArchiveValidator.ValidateHomeHarborPackagesAsync(
+            packageOutput,
+            version,
+            _runner,
+            cancellationToken);
+
         foreach (var package in Directory.GetFiles(packageOutput, "*.pkg.tar.*", SearchOption.TopDirectoryOnly).Order(StringComparer.Ordinal))
         {
             Console.WriteLine(package);
         }
+
+        await ArchPackageSetProvenance.WriteAsync(
+            _root,
+            version,
+            packageOutput,
+            selinuxSourceSha256,
+            cancellationToken);
+
+        return await ArchLocalPackageRepositoryBuilder.CreateAsync(
+            packageOutput,
+            Path.Combine(packageWork, "repository"),
+            _runner,
+            cancellationToken);
     }
 
     public async Task GenerateEfiAvbPublicKeyHeaderAsync(string output, CancellationToken cancellationToken = default)
@@ -299,6 +315,90 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         }
     }
 
+    private async Task CreateCleanSourceArchiveAsync(
+        string sourceDirectory,
+        string sourceTarball,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        var listed = await _runner.RunAsync(
+            "git",
+            ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            new CommandRunOptions(WorkingDirectory: _root, StreamError: true),
+            cancellationToken);
+        _ = listed.EnsureSuccess("could not enumerate clean HomeHarbor source inputs");
+
+        var sourcePaths = SelectCleanSourcePaths(
+            _root,
+            listed.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries));
+        if (sourcePaths.Count == 0)
+        {
+            throw new InvalidOperationException("clean HomeHarbor source input set is empty");
+        }
+
+        var stageName = "homeharbor-" + version;
+        var stage = Path.Combine(sourceDirectory, stageName);
+        var included = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sourcePath in sourcePaths)
+        {
+            var current = sourcePath;
+            while (!string.Equals(current, _root, StringComparison.Ordinal))
+            {
+                _ = included.Add(current);
+                current = Path.GetDirectoryName(current)
+                    ?? throw new InvalidOperationException("source input has no repository parent: " + sourcePath);
+            }
+        }
+
+        FileTreeCopier.CopyDirectory(
+            _root,
+            stage,
+            path => included.Contains(Path.GetFullPath(path)));
+        await RunRequiredAsync(
+            "tar",
+            ["-C", sourceDirectory, "-czf", sourceTarball, stageName],
+            cancellationToken);
+    }
+
+    internal static IReadOnlyList<string> SelectCleanSourcePaths(string root, IEnumerable<string> relativePaths)
+    {
+        var repositoryRoot = Path.GetFullPath(root);
+        var selinuxRoot = Path.Combine(repositoryRoot, "packaging", "arch", "selinux");
+        var result = new List<string>();
+        foreach (var relativePath in relativePaths)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath) ||
+                Path.IsPathRooted(relativePath) ||
+                relativePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Contains("..", StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException("git returned an unsafe source input path: " + relativePath);
+            }
+
+            var fullPath = Path.GetFullPath(Path.Combine(repositoryRoot, relativePath));
+            if (!SecurityGuards.IsInsideDirectory(fullPath, repositoryRoot))
+            {
+                throw new InvalidOperationException("source input escapes the repository: " + relativePath);
+            }
+
+            if (SecurityGuards.IsInsideDirectory(fullPath, selinuxRoot) &&
+                !ArchPackageSetProvenance.IsMaintainedSource(selinuxRoot, fullPath))
+            {
+                continue;
+            }
+
+            if (!File.Exists(fullPath) &&
+                !Directory.Exists(fullPath) &&
+                FileTreeCopier.ReadSymbolicLink(fullPath) is null)
+            {
+                throw new FileNotFoundException("git source input does not exist", fullPath);
+            }
+
+            result.Add(fullPath);
+        }
+
+        return result.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
     private async Task RequireToolsAsync(IEnumerable<string> tools, CancellationToken cancellationToken)
     {
         foreach (var tool in tools)
@@ -322,10 +422,20 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         string? workingDirectory = null,
         IReadOnlyDictionary<string, string>? environment = null)
     {
+        var options = new CommandRunOptions(
+            WorkingDirectory: workingDirectory,
+            StreamOutput: true,
+            StreamError: true,
+            EnvironmentOverride: environment);
+        if (environment is not null)
+        {
+            options = RootlessBuildExecutor.IsolatedOptions(options);
+        }
+
         var result = await _runner.RunAsync(
             fileName,
             arguments,
-            new CommandRunOptions(WorkingDirectory: workingDirectory, StreamOutput: true, StreamError: true, EnvironmentOverride: environment),
+            options,
             cancellationToken);
         _ = result.EnsureSuccess();
     }
@@ -340,5 +450,20 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         {
             File.Delete(path);
         }
+    }
+
+    private async Task DeleteMappedBuildPathAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(path) && !File.Exists(path))
+        {
+            return;
+        }
+
+        var result = await _rootless.RunMappedRootAsync(
+            "rm",
+            ["-rf", "--", Path.GetFullPath(path)],
+            new CommandRunOptions(StreamError: true, Timeout: TimeSpan.FromMinutes(5)),
+            cancellationToken);
+        _ = result.EnsureSuccess("could not remove mapped package build path " + path);
     }
 }

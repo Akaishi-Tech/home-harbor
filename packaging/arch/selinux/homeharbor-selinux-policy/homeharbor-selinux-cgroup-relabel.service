@@ -1,0 +1,18 @@
+[Unit]
+Description=Relabel early cgroup v2 pressure files for SELinux
+DefaultDependencies=no
+AssertSecurity=selinux
+AssertPathExists=/usr/bin/restorecon
+AssertPathIsDirectory=/sys/fs/cgroup
+Conflicts=shutdown.target
+Before=systemd-journald.service systemd-networkd.service systemd-resolved.service
+Before=systemd-timesyncd.service systemd-userdbd.service systemd-nsresourced.service
+Before=homeharbor-selinux-ready.target sysinit.target shutdown.target
+
+[Service]
+Type=oneshot
+# systemd creates and removes transient service cgroups while restorecon walks
+# this virtual tree. Ignore only paths that disappear during that traversal;
+# other relabeling failures remain fatal.
+ExecStart=/usr/bin/restorecon -i -RF /sys/fs/cgroup
+RemainAfterExit=yes

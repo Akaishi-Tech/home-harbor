@@ -3,6 +3,9 @@ namespace HomeHarbor.Tooling;
 public static class SecureBootAssets
 {
     public const string ConsoleArgs = "console=tty0 console=ttyS0,115200n8";
+    public const string SelinuxArgs = "lsm=landlock,lockdown,yama,integrity,selinux,bpf selinux=1 enforcing=1 audit=1 audit_backlog_limit=8192";
+
+    private static string BaseArgs => ConsoleArgs + " " + SelinuxArgs;
 
     public static bool IsEnabled()
         => Env.Flag("HOMEHARBOR_SECURE_BOOT");
@@ -35,14 +38,14 @@ public static class SecureBootAssets
             : $" homeharbor.vbmeta_a_digest={vbmetaADigest} homeharbor.vbmeta_b_digest={vbmetaBDigest}";
         var appendedArgs = string.IsNullOrWhiteSpace(extraArgs) ? string.Empty : " " + extraArgs.Trim();
         _ = ReleaseSequence.RequirePositive(releaseSequence, "release sequence");
-        return ConsoleArgs + " ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs " +
+        return BaseArgs + " ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs " +
             $"homeharbor.boot_mode={BootMode()} homeharbor.boot_generic=1 homeharbor.super=/dev/disk/by-partlabel/super " +
             $"homeharbor.kernel_release={kernelRelease}{vbmetaArgs}{appendedArgs} " +
             $"{ReleaseSequence.KernelArgument}={releaseSequence} homeharbor.version={version}";
     }
 
     public static string SlotCmdline(HomeHarborBootEnvironment env)
-        => ConsoleArgs + " ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs " +
+        => BaseArgs + " ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs " +
             $"homeharbor.boot_mode={BootMode()} homeharbor.super=/dev/disk/by-partlabel/super " +
             $"homeharbor.slot={env.RootSlot} " +
             $"homeharbor.root_logical={env.RootLogical} homeharbor.kernel_release={env.KernelRelease} " +
@@ -51,7 +54,7 @@ public static class SecureBootAssets
             $"homeharbor.version={env.Version}";
 
     public static string RecoveryCmdline()
-        => $"{ConsoleArgs} ro rd.homeharbor.verity=1 homeharbor.boot_mode={BootMode()} " +
+        => $"{BaseArgs} ro rd.homeharbor.verity=1 homeharbor.boot_mode={BootMode()} " +
             "homeharbor.recovery=1 root=/dev/mapper/homeharbor-recovery-root rootfstype=erofs";
 
     public static void WriteLoaderEntries(string esp, string mode, string? recoveryHash = null)
@@ -87,19 +90,19 @@ public static class SecureBootAssets
             title HomeHarbor A
             linux /EFI/HomeHarbor/A/vmlinuz-linux
             initrd /EFI/HomeHarbor/A/initramfs-linux.img
-            options console=tty0 console=ttyS0,115200n8 ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs homeharbor.boot_generic=1 homeharbor.super=/dev/disk/by-partlabel/super
+            options console=tty0 console=ttyS0,115200n8 lsm=landlock,lockdown,yama,integrity,selinux,bpf selinux=1 enforcing=1 audit=1 audit_backlog_limit=8192 ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs homeharbor.boot_generic=1 homeharbor.super=/dev/disk/by-partlabel/super
             """.Replace("            ", string.Empty, StringComparison.Ordinal), 0644);
         FileWrites.AtomicWriteText(Path.Combine(entries, "homeharbor_b.conf"), """
             title HomeHarbor B
             linux /EFI/HomeHarbor/B/vmlinuz-linux
             initrd /EFI/HomeHarbor/B/initramfs-linux.img
-            options console=tty0 console=ttyS0,115200n8 ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs homeharbor.boot_generic=1 homeharbor.super=/dev/disk/by-partlabel/super
+            options console=tty0 console=ttyS0,115200n8 lsm=landlock,lockdown,yama,integrity,selinux,bpf selinux=1 enforcing=1 audit=1 audit_backlog_limit=8192 ro rd.homeharbor.verity=1 root=/dev/mapper/homeharbor-root rootfstype=erofs homeharbor.boot_generic=1 homeharbor.super=/dev/disk/by-partlabel/super
             """.Replace("            ", string.Empty, StringComparison.Ordinal), 0644);
         FileWrites.AtomicWriteText(Path.Combine(entries, "homeharbor_recovery.conf"), """
             title HomeHarbor Recovery
             linux /EFI/HomeHarbor/Recovery/vmlinuz-linux
             initrd /EFI/HomeHarbor/Recovery/initramfs-linux.img
-            options console=tty0 console=ttyS0,115200n8 ro rd.homeharbor.verity=1 homeharbor.recovery=1 root=/dev/mapper/homeharbor-recovery-root rootfstype=erofs
+            options console=tty0 console=ttyS0,115200n8 lsm=landlock,lockdown,yama,integrity,selinux,bpf selinux=1 enforcing=1 audit=1 audit_backlog_limit=8192 ro rd.homeharbor.verity=1 homeharbor.recovery=1 root=/dev/mapper/homeharbor-recovery-root rootfstype=erofs
             """.Replace("            ", string.Empty, StringComparison.Ordinal), 0644);
     }
 }

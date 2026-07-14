@@ -83,6 +83,13 @@ internal static class OtaApplyCommand
         }
 
         var work = CreateWorkDirectory(options.WorkDirectory);
+        var workRoot = Path.GetDirectoryName(work)
+            ?? throw new InvalidOperationException("OTA work directory has no parent");
+        _ = (await runner.RunAsync(
+            "restorecon",
+            [workRoot, work],
+            cancellationToken: cancellationToken))
+            .EnsureSuccess("failed to label the bounded OTA work directories");
         var createdMaps = new List<string>();
         var rootfsMounted = false;
         try

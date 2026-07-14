@@ -1,0 +1,63 @@
+# Maintainer: Christian Hesse <mail@eworm.de>
+# Maintainer: Ronald van Haren <ronald.archlinux.org>
+# Contributor: Judd Vinet <jvinet@zeroflux.org>
+# SELinux Maintainer: Nicolas Iooss (nicolas <dot> iooss <at> m4x <dot> org)
+#
+# HomeHarbor provenance:
+# - Arch Linux packaging baseline: archlinux/packaging/packages/iproute2
+#   commit c0ef44a912d934c00e43fb08884cda6e0ebafbd1 (2026-06-16).
+# - SELinux delta rebased from archlinuxhardened/selinux
+#   commit e65a9de9c1820c4ac48e4ac6c69cf740d59ffc71 (2026-03-12).
+# - This recipe builds from source; no archlinuxhardened binary package is used.
+
+pkgname=iproute2-selinux
+_pkgname=${pkgname%-selinux}
+pkgver=7.1.0
+pkgrel=1
+pkgdesc='IP Routing Utilities with SELinux support'
+arch=('x86_64')
+license=('GPL-2.0-or-later')
+groups=('selinux')
+url='https://git.kernel.org/pub/scm/network/iproute2/iproute2.git'
+depends=('glibc'
+         'libxtables.so' # from iptables or iptables-legacy
+         'libcap' 'libcap.so'
+         'libelf'
+         'libbpf' 'libbpf.so'
+         'libselinux' 'libselinux.so')
+makedepends=('git' 'db' 'linux-atm' 'iptables')
+optdepends=('db: userspace arp daemon'
+            'linux-atm: ATM support'
+            'python: for routel')
+provides=('iproute'
+          "${_pkgname}=${pkgver}-${pkgrel}"
+          "selinux-${_pkgname}=${pkgver}-${pkgrel}")
+conflicts=("${_pkgname}" "selinux-${_pkgname}")
+options=('!emptydirs')
+validpgpkeys=('9F6FC345B05BE7E766B83C8F80A77F6095CDE47E') # Stephen Hemminger
+source=("git+https://git.kernel.org/pub/scm/network/${_pkgname}/${_pkgname}.git#tag=v${pkgver}"
+        '0001-make-iproute2-fhs-compliant.patch')
+sha256sums=('8e8c2e7c1fc279bb56babe714fd75354ef3cca21dfd6f05b91c95c79488ecd3f'
+            '758b82bd61ed7512d215efafd5fab5ae7a28fbfa6161b85e2ce7373285e56a5d')
+
+prepare() {
+  cd "${srcdir}/${_pkgname}"
+
+  # set correct fhs structure
+  patch -Np1 -i "${srcdir}"/0001-make-iproute2-fhs-compliant.patch
+}
+
+build() {
+  cd "${srcdir}/${_pkgname}"
+
+  # configure auto-detects libselinux and enables SELinux support in ss(8).
+  ./configure \
+    --color auto
+  make
+}
+
+package() {
+  cd "${srcdir}/${_pkgname}"
+
+  make DESTDIR="${pkgdir}" SBINDIR="/usr/bin" install
+}
