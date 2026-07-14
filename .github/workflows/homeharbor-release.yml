@@ -2,17 +2,129 @@ name: HomeHarbor OTA and Installers
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths:
+      - ".github/workflows/homeharbor-release.yml"
+      - "global.json"
+      - "packaging/arch/selinux/**"
+      - "src/HomeHarbor.ImageBuilder/**"
+      - "src/HomeHarbor.Tooling/**"
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  SELINUX_DEPENDENCY_CACHE_PATH: artifacts/dependencies/selinux
 
 jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    outputs:
+      cache-key: ${{ steps.dependency-key.outputs.cache-key }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Resolve SELinux dependency cache key
+        id: dependency-key
+        shell: bash
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          DOTNET_NOLOGO: "1"
+        run: |
+          set -euo pipefail
+          command_output="$(dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj --configuration Release -- \
+            selinux-dependency-key "${PWD}")"
+          printf "%s\n" "${command_output}"
+          fingerprint="$(printf "%s\n" "${command_output}" | tail -n 1)"
+          if [[ ! "${fingerprint}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid SELinux dependency input fingerprint: ${fingerprint}" >&2
+            exit 1
+          fi
+          cache_key="homeharbor-selinux-dependencies-v1-x86_64-${fingerprint}"
+          echo "cache-key=${cache_key}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore SELinux dependency packages
+        id: dependency-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.SELINUX_DEPENDENCY_CACHE_PATH }}
+          key: ${{ steps.dependency-key.outputs.cache-key }}
+
+      - name: Build or verify SELinux dependency packages in Arch Linux
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.dependency-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --privileged \
+            --userns=host \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            --security-opt systempaths=unconfined \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            -e CACHE_HIT \
+            -e SELINUX_DEPENDENCY_CACHE_PATH \
+            archlinux:base-devel bash <<'HOMEHARBOR_DOCKER_SCRIPT'
+              set -euo pipefail
+              pacman -Syu --noconfirm --needed arch-install-scripts dotnet-sdk git sudo
+              chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+              useradd -m -G wheel builder
+              printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/homeharbor-builder
+              chmod 0440 /etc/sudoers.d/homeharbor-builder
+              printf "builder:100000:65536\n" >> /etc/subuid
+              printf "builder:100000:65536\n" >> /etc/subgid
+              original_uid="$(stat -c %u /workspace)"
+              original_gid="$(stat -c %g /workspace)"
+              restore_workspace_owner() { chown -R "${original_uid}:${original_gid}" /workspace || true; }
+              trap restore_workspace_owner EXIT
+              chown -R builder:builder /workspace
+              export HOME=/home/builder
+              export HOMEHARBOR_PACKAGE_USER=builder
+              export DOTNET_CLI_TELEMETRY_OPTOUT=1
+              export DOTNET_NOLOGO=1
+              setpriv --reuid=builder --regid=builder --init-groups \
+                --inh-caps +sys_admin,+setuid,+setgid \
+                --ambient-caps +sys_admin,+setuid,+setgid \
+                bash <<'HOMEHARBOR_BUILDER_SCRIPT'
+                set -euo pipefail
+                cd /workspace
+                cache="/workspace/${SELINUX_DEPENDENCY_CACHE_PATH}"
+                if [[ "${CACHE_HIT}" != "true" ]]; then
+                  dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj --configuration Release -- \
+                    selinux-dependency-build "${cache}" /workspace/.work/selinux-dependencies /workspace
+                fi
+                dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj --configuration Release -- \
+                  selinux-dependency-verify "${cache}" /workspace
+          HOMEHARBOR_BUILDER_SCRIPT
+          HOMEHARBOR_DOCKER_SCRIPT
+
+      - name: Save SELinux dependency packages
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.SELINUX_DEPENDENCY_CACHE_PATH }}
+          key: ${{ steps.dependency-key.outputs.cache-key }}
+
   build:
+    if: github.event_name != 'push' || github.ref_type == 'tag'
+    needs: dependencies
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
@@ -21,6 +133,37 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore verified SELinux dependency packages
+        id: release-dependency-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.SELINUX_DEPENDENCY_CACHE_PATH }}
+          key: ${{ needs.dependencies.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Verify restored SELinux dependency packages before loading release secrets
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.release-dependency-cache.outputs.cache-hit }}
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          DOTNET_NOLOGO: "1"
+        run: |
+          set -euo pipefail
+          if [[ "${CACHE_HIT}" != "true" ]]; then
+            echo "The exact SELinux dependency package cache was not restored." >&2
+            exit 1
+          fi
+          if ! command -v bsdtar >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes libarchive-tools
+          fi
+          dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj --configuration Release -- \
+            selinux-dependency-verify "${PWD}/${SELINUX_DEPENDENCY_CACHE_PATH}" "${PWD}"
 
       - name: Resolve release coordinates
         id: release
@@ -53,6 +196,7 @@ jobs:
           HOMEHARBOR_RELEASE_KEY_ID: ${{ secrets.HOMEHARBOR_RELEASE_KEY_ID }}
           HOMEHARBOR_SECURE_BOOT_KEY_PEM: ${{ secrets.HOMEHARBOR_SECURE_BOOT_KEY_PEM }}
           HOMEHARBOR_SECURE_BOOT_CERT_PEM: ${{ secrets.HOMEHARBOR_SECURE_BOOT_CERT_PEM }}
+          HOMEHARBOR_SELINUX_DEPENDENCY_CACHE: /workspace/${{ env.SELINUX_DEPENDENCY_CACHE_PATH }}
         run: |
           set -euo pipefail
           if [[ -z "${HOMEHARBOR_RELEASE_PRIVATE_KEY_PEM}" || -z "${HOMEHARBOR_RELEASE_PUBLIC_KEY_PEM}" ]]; then
@@ -80,10 +224,11 @@ jobs:
             -e HOMEHARBOR_RELEASE_KEY_ID \
             -e HOMEHARBOR_SECURE_BOOT_KEY_PEM \
             -e HOMEHARBOR_SECURE_BOOT_CERT_PEM \
+            -e HOMEHARBOR_SELINUX_DEPENDENCY_CACHE \
             archlinux:base-devel bash <<'HOMEHARBOR_DOCKER_SCRIPT'
               set -euo pipefail
               pacman -Syu --noconfirm --needed \
-                android-tools arch-install-scripts archiso aspnet-runtime base-devel btrfs-progs clang cryptsetup \
+                android-tools arch-install-scripts archiso aspnet-runtime aspnet-targeting-pack base-devel btrfs-progs clang cryptsetup \
                 device-mapper dosfstools dotnet-sdk efitools erofs-utils git gptfdisk grub jq lld lvm2 networkmanager openssl \
                 pnpm postgresql qemu-base sbsigntools sudo systemd systemd-ukify
               chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
@@ -120,7 +265,6 @@ jobs:
               export HOMEHARBOR_IMAGE_SIZE="${HOMEHARBOR_IMAGE_SIZE:-12G}"
               export HOMEHARBOR_PACKAGE_USER=builder
               export HOMEHARBOR_RELEASE_SKIP_FULL_E2E=1
-              export AllowMissingPrunePackageData=true
 
               export HOME=/home/builder
               setpriv --reuid=builder --regid=builder --init-groups \

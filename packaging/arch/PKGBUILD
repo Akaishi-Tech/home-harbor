@@ -8,7 +8,7 @@ pkgrel=1
 arch=('x86_64')
 url='https://github.com/akaishi-tech/home-harbor'
 license=('GPL-3.0-only')
-makedepends=('aspnet-runtime' 'dotnet-sdk' 'efitools' 'jq' 'openssl' 'pnpm' 'sbsigntools' 'systemd-ukify')
+makedepends=('aspnet-runtime' 'aspnet-targeting-pack' 'dotnet-sdk' 'efitools' 'jq' 'openssl' 'pnpm' 'sbsigntools' 'systemd-ukify')
 options=('!strip')
 
 _dotnet_keys=(

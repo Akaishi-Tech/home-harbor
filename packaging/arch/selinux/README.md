@@ -13,13 +13,33 @@ All archives are placed in a controlled local pacman repository that precedes
 the official `core`, `extra`, and `multilib` repositories; no other binary
 repository is configured.
 
-Build the complete package set with:
+Build the version-independent SELinux dependency package set once with:
+
+```sh
+dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
+  selinux-dependency-build "$PWD/artifacts/dependencies/selinux" \
+  "$PWD/.work/selinux-dependencies" "$PWD"
+```
+
+The cache key is printed by `selinux-dependency-key`; it covers the manifest,
+every maintained recipe input, patches, service files, shared signing keys, and
+the dependency-builder contract, but not HomeHarbor's version or generated
+makepkg state. A restored cache must
+pass `selinux-dependency-verify`, which checks the exact declared package set,
+package metadata, target architecture, and archive hashes.
+
+Build the complete versioned package set from that verified cache with:
 
 ```sh
 HOMEHARBOR_CHANNEL=dev \
+HOMEHARBOR_SELINUX_DEPENDENCY_CACHE="$PWD/artifacts/dependencies/selinux" \
   dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
   arch-package 0.1.0-dev "$PWD"
 ```
+
+When `HOMEHARBOR_SELINUX_DEPENDENCY_CACHE` is unset, local development retains
+the self-contained behavior and rebuilds the dependency packages before the
+versioned HomeHarbor packages.
 
 The builder validates each recipe's declared outputs, source checksums and PGP
 signatures, clears the caller's desktop and credential environment, installs

@@ -54,13 +54,76 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         Console.WriteLine("Built " + fullOutput);
     }
 
+    public string GetSelinuxDependencyInputSha256()
+        => SelinuxDependencyPackageSetProvenance.ComputeDependencyInputSha256(_root);
+
+    public async Task BuildSelinuxDependencyPackagesAsync(
+        string output,
+        string workDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        RequireNormalPackageBuilder("selinux-dependency-build");
+        await RequireToolsAsync(
+            ["arch-chroot", "bsdtar", "fakeroot", "git", "makepkg", "pacman", "pacstrap", "repo-add", "unshare"],
+            cancellationToken);
+        await _rootless.RequireReadyAsync(cancellationToken);
+
+        var workRoot = Path.Combine(_root, ".work");
+        var artifactsRoot = Path.Combine(_root, "artifacts");
+        var work = RequireManagedBuildPath(
+            workDirectory,
+            "SELinux dependency package work directory",
+            workRoot);
+        var packageOutput = RequireManagedBuildPath(
+            output,
+            "SELinux dependency package output",
+            workRoot,
+            artifactsRoot);
+        RequireSeparateDirectories(work, packageOutput, "SELinux dependency package work and output");
+
+        await DeleteMappedBuildPathAsync(work, cancellationToken);
+        await DeleteMappedBuildPathAsync(packageOutput, cancellationToken);
+        _ = Directory.CreateDirectory(work);
+        _ = Directory.CreateDirectory(packageOutput);
+
+        var inputSha256 = GetSelinuxDependencyInputSha256();
+        var plan = SelinuxPackageBuildDescriptor.LoadDefaultPlan(_root);
+        await new SelinuxPackageBuilder(_root, _runner).BuildAsync(
+            plan,
+            work,
+            packageOutput,
+            cancellationToken);
+        await SelinuxDependencyPackageSetProvenance.WriteAsync(
+            _root,
+            packageOutput,
+            inputSha256,
+            _runner,
+            cancellationToken);
+        await SelinuxDependencyPackageSetProvenance.VerifyAsync(
+            _root,
+            packageOutput,
+            _runner,
+            cancellationToken);
+        Console.WriteLine("Built verified SELinux dependency packages: " + packageOutput);
+    }
+
+    public async Task VerifySelinuxDependencyPackagesAsync(
+        string input,
+        CancellationToken cancellationToken = default)
+    {
+        await RequireToolsAsync(["bsdtar"], cancellationToken);
+        await SelinuxDependencyPackageSetProvenance.VerifyAsync(
+            _root,
+            Path.GetFullPath(input),
+            _runner,
+            cancellationToken);
+        Console.WriteLine("Verified SELinux dependency packages: " + Path.GetFullPath(input));
+    }
+
     public async Task<ArchLocalPackageRepository> ArchPackageAsync(string version, CancellationToken cancellationToken = default)
     {
         RequireSafeVersion(version);
-        if (OperatingSystem.IsLinux() && Environment.UserName == "root")
-        {
-            throw new InvalidOperationException("arch-package must run as a normal user; makepkg and fakeroot must not be driven from a rootful builder.");
-        }
+        RequireNormalPackageBuilder("arch-package");
 
         await RequireToolsAsync(
             ["arch-chroot", "bsdtar", "dotnet", "fakeroot", "git", "makepkg", "pacman", "pacstrap", "pnpm", "repo-add", "tar", "unshare"],
@@ -78,6 +141,23 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
             "HOMEHARBOR_PACKAGE_OUTPUT",
             workRoot,
             artifactsRoot);
+        RequireSeparateDirectories(packageWork, packageOutput, "package work and output");
+        var configuredDependencyCache = Env.Optional("HOMEHARBOR_SELINUX_DEPENDENCY_CACHE");
+        var dependencyCache = string.IsNullOrWhiteSpace(configuredDependencyCache)
+            ? null
+            : Path.GetFullPath(configuredDependencyCache);
+        if (dependencyCache is not null)
+        {
+            RequireSeparateDirectories(
+                dependencyCache,
+                packageWork,
+                "SELinux dependency cache and package work");
+            RequireSeparateDirectories(
+                dependencyCache,
+                packageOutput,
+                "SELinux dependency cache and package output");
+        }
+
         var sourceDir = Path.Combine(packageWork, "source");
         var buildDir = Path.Combine(packageWork, "makepkg");
         var sourceTarball = Path.Combine(sourceDir, $"homeharbor-{version}.tar.gz");
@@ -89,11 +169,30 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         _ = Directory.CreateDirectory(packageOutput);
 
         var selinuxSourceSha256 = ArchPackageSetProvenance.ComputeSelinuxSourceSha256(_root);
-        var selinuxPlan = SelinuxPackageBuildDescriptor.LoadDefaultPlan(_root);
-        await new SelinuxPackageBuilder(_root, _runner).BuildAsync(
-            selinuxPlan,
-            Path.Combine(packageWork, "selinux"),
+        if (dependencyCache is null)
+        {
+            var dependencyOutput = Path.Combine(packageWork, "selinux-packages");
+            _ = Directory.CreateDirectory(dependencyOutput);
+            var dependencyInputSha256 = GetSelinuxDependencyInputSha256();
+            await new SelinuxPackageBuilder(_root, _runner).BuildAsync(
+                SelinuxPackageBuildDescriptor.LoadDefaultPlan(_root),
+                Path.Combine(packageWork, "selinux"),
+                dependencyOutput,
+                cancellationToken);
+            await SelinuxDependencyPackageSetProvenance.WriteAsync(
+                _root,
+                dependencyOutput,
+                dependencyInputSha256,
+                _runner,
+                cancellationToken);
+            dependencyCache = dependencyOutput;
+        }
+
+        await SelinuxDependencyPackageSetProvenance.ImportVerifiedAsync(
+            _root,
+            dependencyCache,
             packageOutput,
+            _runner,
             cancellationToken);
 
         await CreateCleanSourceArchiveAsync(sourceDir, sourceTarball, version, cancellationToken);
@@ -273,6 +372,24 @@ public sealed class BuildToolCommands(string root, ICommandRunner? runner = null
         if (!SecurityGuards.IsSafeVersion(version))
         {
             throw new InvalidOperationException("version must contain only letters, numbers, dot, underscore, and dash: " + version);
+        }
+    }
+
+    private static void RequireNormalPackageBuilder(string command)
+    {
+        if (OperatingSystem.IsLinux() && Environment.UserName == "root")
+        {
+            throw new InvalidOperationException(
+                command + " must run as a normal user; makepkg and fakeroot must not be driven from a rootful builder.");
+        }
+    }
+
+    internal static void RequireSeparateDirectories(string first, string second, string label)
+    {
+        if (SecurityGuards.IsInsideDirectory(first, second) ||
+            SecurityGuards.IsInsideDirectory(second, first))
+        {
+            throw new InvalidOperationException(label + " must be separate directories");
         }
     }
 

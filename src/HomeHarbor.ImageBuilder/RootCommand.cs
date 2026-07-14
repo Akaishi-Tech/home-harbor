@@ -16,6 +16,9 @@ internal static partial class ImageBuilderProgram
 
         root.Subcommands.Add(CreatePlanCommand());
         root.Subcommands.Add(CreateArchPackageCommand());
+        root.Subcommands.Add(CreateSelinuxDependencyKeyCommand());
+        root.Subcommands.Add(CreateSelinuxDependencyBuildCommand());
+        root.Subcommands.Add(CreateSelinuxDependencyVerifyCommand());
         root.Subcommands.Add(CreateBuildEfiLoaderCommand());
         root.Subcommands.Add(CreateBuildHomeHarborAvbCommand());
         root.Subcommands.Add(CreateBuildHomeHarborInitCommand());

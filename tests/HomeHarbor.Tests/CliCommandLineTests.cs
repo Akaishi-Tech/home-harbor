@@ -36,7 +36,12 @@ public sealed class CliCommandLineTests
 
         Assert.AreEqual(0, await ImageBuilderProgram.RunAsync(["--help"], CancellationToken.None));
         Assert.AreEqual(0, await ImageBuilderProgram.RunAsync(["plan", "0.1.0-dev"], CancellationToken.None));
+        Assert.AreEqual(0, await ImageBuilderProgram.RunAsync(["selinux-dependency-key", "--help"], CancellationToken.None));
+        Assert.AreEqual(0, await ImageBuilderProgram.RunAsync(["selinux-dependency-build", "--help"], CancellationToken.None));
+        Assert.AreEqual(0, await ImageBuilderProgram.RunAsync(["selinux-dependency-verify", "--help"], CancellationToken.None));
         Assert.AreEqual(2, await ImageBuilderProgram.RunAsync(["not-a-command"], CancellationToken.None));
+        Assert.AreEqual(2, await ImageBuilderProgram.RunAsync(["selinux-dependency-build"], CancellationToken.None));
+        Assert.AreEqual(2, await ImageBuilderProgram.RunAsync(["selinux-dependency-verify"], CancellationToken.None));
         Assert.AreEqual(2, await ImageBuilderProgram.RunAsync(["kernel-package-build", "/tmp/kernel", "0.1.0-dev", "bad"], CancellationToken.None));
     }
 
