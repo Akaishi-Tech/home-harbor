@@ -215,18 +215,39 @@ public sealed class RecoverySecurityTests
     public async Task ProcessCommandRunner_Cancellation_Kills_The_Process_Tree()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "homeharbor-process-cancel-" + Guid.NewGuid().ToString("N"));
+        var started = Path.Combine(tempDir, "child-started");
+        var gate = Path.Combine(tempDir, "allow-child-to-finish");
         var marker = Path.Combine(tempDir, "should-not-exist");
         try
         {
             _ = Directory.CreateDirectory(tempDir);
-            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            using var cancellation = new CancellationTokenSource();
             var runner = new ProcessCommandRunner();
-            _ = await runner.RunAsync(
+            var running = runner.RunAsync(
                 "/bin/sh",
-                ["-c", "sleep 1; printf done > \"$1\"", "sh", marker],
+                [
+                    "-c",
+                    "(printf started > \"$1\"; while [ ! -e \"$2\" ]; do sleep 0.01; done; printf done > \"$3\") & child=$!; wait \"$child\"",
+                    "sh",
+                    started,
+                    gate,
+                    marker
+                ],
                 cancellationToken: cancellation.Token);
 
-            await Task.Delay(TimeSpan.FromMilliseconds(1100));
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!File.Exists(started))
+            {
+                Assert.IsFalse(running.IsCompleted, "the process tree exited before its child started");
+                Assert.IsLessThan(deadline, DateTime.UtcNow, "the process tree did not start in time");
+                await Task.Delay(TimeSpan.FromMilliseconds(10));
+            }
+
+            cancellation.Cancel();
+            var result = await running.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(127, result.ExitCode);
+            await File.WriteAllTextAsync(gate, "continue\n");
+            await Task.Delay(TimeSpan.FromSeconds(1));
             Assert.IsFalse(File.Exists(marker), "a canceled command must not continue running in the background");
         }
         finally

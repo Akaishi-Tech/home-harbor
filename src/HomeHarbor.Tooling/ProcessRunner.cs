@@ -57,37 +57,36 @@ public sealed class ProcessCommandRunner : ICommandRunner
             using var process = Process.Start(start)
                 ?? throw new InvalidOperationException("Failed to start " + fileName);
             using var cancellationRegistration = timeout.Token.Register(
-                static state =>
-                {
-                    var runningProcess = (Process)state!;
-                    try
-                    {
-                        if (!runningProcess.HasExited)
-                        {
-                            runningProcess.Kill(entireProcessTree: true);
-                        }
-                    }
-                    catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
-                    {
-                        // The process exited concurrently or cannot be killed on this platform.
-                    }
-                },
+                static state => TryKillProcessTree((Process)state!),
                 process);
 
             var stdout = ReadPipeAsync(process.StandardOutput, options.StreamOutput ? Console.Out : null, timeout.Token);
             var stderr = ReadPipeAsync(process.StandardError, options.StreamError ? Console.Error : null, timeout.Token);
-            if (options.StandardInput is not null)
+            try
             {
-                await process.StandardInput.WriteAsync(options.StandardInput.AsMemory(), timeout.Token);
-                process.StandardInput.Close();
-            }
+                if (options.StandardInput is not null)
+                {
+                    await process.StandardInput.WriteAsync(options.StandardInput.AsMemory(), timeout.Token);
+                    process.StandardInput.Close();
+                }
 
-            await process.WaitForExitAsync(timeout.Token);
-            return new CommandResult(
-                process.ExitCode,
-                await stdout,
-                await stderr,
-                FormatCommand(fileName, arguments));
+                await process.WaitForExitAsync(timeout.Token);
+                return new CommandResult(
+                    process.ExitCode,
+                    await stdout,
+                    await stderr,
+                    FormatCommand(fileName, arguments));
+            }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            {
+                // Cancellation callbacks run in LIFO order. WaitForExitAsync can therefore
+                // resume before the earlier registration above has killed the process tree.
+                // Kill again while the registration and Process are still alive, then reap
+                // the root process before the outer cancellation path returns to the caller.
+                TryKillProcessTree(process);
+                await WaitForCanceledProcessAsync(process, stdout, stderr);
+                throw;
+            }
         }
         catch (Exception ex) when (ex is Win32Exception or OperationCanceledException or IOException)
         {
@@ -97,6 +96,51 @@ public sealed class ProcessCommandRunner : ICommandRunner
             }
 
             return new CommandResult(127, string.Empty, ex.Message, FormatCommand(fileName, arguments));
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            // The process exited concurrently or cannot be killed on this platform.
+        }
+    }
+
+    private static async Task WaitForCanceledProcessAsync(
+        Process process,
+        Task<string> stdout,
+        Task<string> stderr)
+    {
+        try
+        {
+            await process.WaitForExitAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            // The process was already reaped or cannot be waited on by this platform.
+        }
+
+        await ObserveCanceledPipeAsync(stdout);
+        await ObserveCanceledPipeAsync(stderr);
+    }
+
+    private static async Task ObserveCanceledPipeAsync(Task<string> pipe)
+    {
+        try
+        {
+            _ = await pipe;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            // Cancellation intentionally tears down redirected pipes.
         }
     }
 
