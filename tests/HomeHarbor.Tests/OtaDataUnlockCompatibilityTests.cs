@@ -1,3 +1,5 @@
+using HomeHarbor.Tooling;
+
 namespace HomeHarbor.Tests;
 
 [TestClass]

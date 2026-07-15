@@ -71,7 +71,7 @@ channel 发布前运行 unit 与 build-plan 检查：
 
 ```bash
 dotnet test tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0
 ```
 
 release 检查会拒绝：

@@ -7,7 +7,7 @@
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.9" />
-    <ProjectReference Include="..\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
+    <ProjectReference Include="..\..\tools\system-build\external\system-utils\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
   </ItemGroup>
 
 </Project>

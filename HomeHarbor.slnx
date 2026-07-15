@@ -3,10 +3,11 @@
     <Project Path="src/HomeHarbor.Api/HomeHarbor.Api.csproj" />
     <Project Path="src/HomeHarbor.Core/HomeHarbor.Core.csproj" />
     <Project Path="src/HomeHarbor.Agent/HomeHarbor.Agent.csproj" />
-    <Project Path="src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" />
+    <Project Path="tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" />
+    <Project Path="tools/system-build/src/HomeHarbor.SystemBuild/HomeHarbor.SystemBuild.csproj" />
     <Project Path="src/HomeHarbor.Installer/HomeHarbor.Installer.csproj" />
     <Project Path="src/HomeHarbor.Recovery/HomeHarbor.Recovery.csproj" />
-    <Project Path="src/HomeHarbor.Tooling/HomeHarbor.Tooling.csproj" />
+    <Project Path="tools/system-build/external/system-utils/src/HomeHarbor.Tooling/HomeHarbor.Tooling.csproj" />
     <Project Path="src/HomeHarbor.WebDav/HomeHarbor.WebDav.csproj" />
   </Folder>
   <Folder Name="/tests/">

@@ -9,19 +9,19 @@ INIT_OUTPUT ?= $(ROOT)/artifacts/homeharbor-verity
 all: bootloader avb init assets
 
 bootloader:
-	$(MAKE) -C bootloader OUTPUT="$(EFI_OUTPUT)" all
+	$(MAKE) -C "$(ROOT)" efi-loader EFI_OUTPUT="$(EFI_OUTPUT)"
 
 avb:
-	$(MAKE) -C avb OUTPUT="$(AVB_OUTPUT)" all
+	$(MAKE) -C "$(ROOT)" avb-helper AVB_OUTPUT="$(AVB_OUTPUT)"
 
 init:
-	$(MAKE) -C init OUTPUT="$(INIT_OUTPUT)" all
+	$(MAKE) -C "$(ROOT)" init-helper INIT_OUTPUT="$(INIT_OUTPUT)"
 
 assets:
 	$(MAKE) -C assets all
 
 clean:
-	$(MAKE) -C bootloader clean
-	$(MAKE) -C avb clean
-	$(MAKE) -C init clean
+	$(MAKE) -C ../tools/system-build/external/system-utils/boot/bootloader clean
+	$(MAKE) -C ../tools/system-build/external/system-utils/boot/avb clean
+	$(MAKE) -C ../tools/system-build/external/system-utils/boot/init clean
 	$(MAKE) -C assets clean

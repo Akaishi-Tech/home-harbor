@@ -13,7 +13,7 @@ internal static partial class AgentProgram
         {
             Options = { stateDirOption, espOption, bootEnvOption, runDirOption }
         };
-        command.SetAction((parseResult, cancellationToken) => OtaCommitAsync(
+        command.SetAction((parseResult, cancellationToken) => OtaCommitter.CommitAsync(
             new OtaCommitOptions(
                 parseResult.GetValue(stateDirOption)!,
                 parseResult.GetValue(espOption)!,

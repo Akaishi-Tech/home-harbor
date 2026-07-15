@@ -262,8 +262,10 @@ public sealed partial class ReleaseArtifactBuilderTests
         var root = RepositoryRoot();
         var releaseSource = File.ReadAllText(Path.Combine(
             root,
+            "tools",
+            "system-build",
             "src",
-            "HomeHarbor.Tooling",
+            "HomeHarbor.SystemBuild",
             "ReleaseArtifactBuilder.cs"));
         var compact = MyRegex().Replace(releaseSource, " ");
 
@@ -333,8 +335,12 @@ public sealed partial class ReleaseArtifactBuilderTests
     {
         var otaSource = File.ReadAllText(Path.Combine(
             RepositoryRoot(),
+            "tools",
+            "system-build",
+            "external",
+            "system-utils",
             "src",
-            "HomeHarbor.Agent",
+            "HomeHarbor.Tooling",
             "OtaApplyCommand.cs"));
 
         Assert.IsTrue(RootPartitionWriteRegex().IsMatch(otaSource));

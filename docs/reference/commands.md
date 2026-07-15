@@ -58,18 +58,18 @@ dotnet test tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj
 ## Appliance Build
 
 ```bash
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0-dev
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-plan system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
-HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
-HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- release-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- arch-package 0.1.0-dev "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-plan system/x86_64/kernel 0.1.0-dev "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-build system/x86_64/kernel 0.1.0-dev generic "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- build-efi-loader artifacts/HomeHarborBoot.efi "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- build-homeharbor-avb artifacts/homeharbor-avb "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- build-homeharbor-init artifacts/homeharbor-verity "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- generate-efi-avb-public-key artifacts/homeharbor-avb-public-key.h "$(pwd)"
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-app-payload <app-key> <rootfs> <destination> <package> [package...]
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0-dev
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-plan system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+HOMEHARBOR_RELEASE_SEQUENCE=1234 dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- release-build system/x86_64/system/manifest.yml 0.1.0-dev "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- arch-package 0.1.0-dev "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-plan system/x86_64/kernel 0.1.0-dev "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- kernel-package-build system/x86_64/kernel 0.1.0-dev generic "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- build-efi-loader artifacts/HomeHarborBoot.efi "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- build-homeharbor-avb artifacts/homeharbor-avb "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- build-homeharbor-init artifacts/homeharbor-verity "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- generate-efi-avb-public-key artifacts/homeharbor-avb-public-key.h "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- system-app-payload <app-key> <rootfs> <destination> <package> [package...]
 ```
 
 ## Installer

@@ -117,10 +117,10 @@ rootfs:
     - /usr/lib/firmware
     - /var/lib/systemd/linger
   files:
-    - source: os/mkinitcpio/install/homeharbor-verity
+    - source: tools/system-build/external/system-utils/os/mkinitcpio/install/homeharbor-verity
       destination: /etc/initcpio/install/homeharbor-verity
       mode: "0755"
-    - source: os/mkinitcpio/hooks/homeharbor-verity
+    - source: tools/system-build/external/system-utils/os/mkinitcpio/hooks/homeharbor-verity
       destination: /etc/initcpio/hooks/homeharbor-verity
       mode: "0755"
     - destination: /etc/systemd/network/20-homeharbor-wired.network

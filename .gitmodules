@@ -1,0 +1,4 @@
+[submodule "tools/system-build"]
+	path = tools/system-build
+	url = https://github.com/Akaishi-Tech/system-build.git
+	branch = main

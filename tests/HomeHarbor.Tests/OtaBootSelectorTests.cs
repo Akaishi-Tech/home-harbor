@@ -37,8 +37,12 @@ public sealed class OtaBootSelectorTests
     {
         var source = File.ReadAllText(Path.Combine(
             RepositoryRoot(),
+            "tools",
+            "system-build",
+            "external",
+            "system-utils",
             "src",
-            "HomeHarbor.Agent",
+            "HomeHarbor.Tooling",
             "OtaApplyCommand.cs"));
         var install = source.IndexOf("InstallKernelAssetsAsync", StringComparison.Ordinal);
         var bootNext = source.IndexOf("EfiBootVariables.SetOneShotAsync", StringComparison.Ordinal);

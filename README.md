@@ -11,21 +11,36 @@ validation.
   dashboard, OTA, SMB, container, and recovery endpoints.
 - `src/HomeHarbor.Core`: domain records and shared appliance model types.
 - `src/HomeHarbor.WebDav`: WebDAV HTTP method and XML helpers.
-- `src/HomeHarbor.Tooling`: shared C# tooling for manifest, boot, security,
-  tar, and path-safety logic.
-- `src/HomeHarbor.Agent`, `src/HomeHarbor.ImageBuilder`,
-  `src/HomeHarbor.Installer`, `src/HomeHarbor.Recovery`: appliance-side tools.
+- `tools/system-build`: recursively pinned checkout of the independent
+  [Akaishi-Tech/system-build](https://github.com/Akaishi-Tech/system-build)
+  image, kernel, OTA, and installer build tool.
+- `tools/system-build/external/system-utils`: the build tool's pinned
+  [Akaishi-Tech/system-utils](https://github.com/Akaishi-Tech/system-utils)
+  A/B boot, OTA verification, and low-level appliance utility library.
+- `src/HomeHarbor.Agent`, `src/HomeHarbor.Installer`,
+  `src/HomeHarbor.Recovery`: HomeHarbor appliance-side tools.
 - `frontend`: Vite React application. Release assets are generated into
   `src/HomeHarbor.Api/wwwroot` and are not committed.
 - `docs`: VitePress documentation site. English is the default locale and
   Simplified Chinese is served from `/zh/`; Cloudflare Pages deployment uses
   `docs/wrangler.toml`.
-- `build`, `scripts`, `os`, `packaging/arch`: image, OTA, installer, systemd,
-  mkinitcpio, and Arch packaging entrypoints.
+- `boot/assets`, `system`, `os`, `packaging/arch`: HomeHarbor product assets,
+  image manifests, systemd units, and Arch packaging entrypoints.
 - `tests/HomeHarbor.Tests`: local MSTest unit tests.
 - `tests/HomeHarbor.FullE2E.Tests`: VM-oriented full-system tests.
 
 ## Development
+
+Initialize the recursively pinned build tool before restoring the solution:
+
+```bash
+git submodule update --init --recursive
+```
+
+Reusable system-build, seamless A/B, verified-boot, and OTA behavior belongs in
+the two independent repositories above. This repository keeps HomeHarbor's
+product manifests, branding, services, installer, recovery UI, and control
+plane integration.
 
 Install frontend and docs dependencies:
 
@@ -106,7 +121,7 @@ Build Arch packages through the C# image builder entrypoint:
 
 ```bash
 make arch-package VERSION=0.1.0
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- arch-package 0.1.0 "$(pwd)"
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- arch-package 0.1.0 "$(pwd)"
 ```
 
 The GitHub release workflow builds in an Arch Linux container and publishes

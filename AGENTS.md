@@ -6,7 +6,7 @@ Spend time on thinking; you do not need to use the commentary channel to report 
 
 ## Project Structure & Module Organization
 
-HomeHarbor is a .NET 10 appliance control plane with a Vite React frontend and VitePress docs site. Backend projects live under `src/`: `HomeHarbor.Api` for ASP.NET Core and EF Core, `HomeHarbor.Core` for domain models, `HomeHarbor.WebDav` for WebDAV helpers, and `ImageBuilder`, `Installer`, and `Recovery` for appliance tooling. Tests live in `tests/HomeHarbor.Tests` and `tests/HomeHarbor.FullE2E.Tests`. Frontend source is in `frontend/src`; built assets are served from `src/HomeHarbor.Api/wwwroot`. Documentation source is in `docs/`, defaults to English, and serves Simplified Chinese from `/zh/`. Appliance assets live in `build/`, `scripts/`, `os/`, and `packaging/arch/`; generated outputs belong in `artifacts/`.
+HomeHarbor is a .NET 10 appliance control plane with a Vite React frontend and VitePress docs site. Backend projects live under `src/`: `HomeHarbor.Api` for ASP.NET Core and EF Core, `HomeHarbor.Core` for domain models, `HomeHarbor.WebDav` for WebDAV helpers, and `Installer` and `Recovery` for product tooling. `tools/system-build` recursively pins the independent system builder and its `external/system-utils` A/B/OTA dependency. Tests live in `tests/HomeHarbor.Tests` and `tests/HomeHarbor.FullE2E.Tests`. Frontend source is in `frontend/src`; built assets are served from `src/HomeHarbor.Api/wwwroot`. Documentation source is in `docs/`, defaults to English, and serves Simplified Chinese from `/zh/`. Appliance assets live in `boot/assets`, `system`, `os`, and `packaging/arch/`; generated outputs belong in `artifacts/`.
 
 ## Build, Test, and Development Commands
 
@@ -18,7 +18,7 @@ HomeHarbor is a .NET 10 appliance control plane with a Vite React frontend and V
 - `pnpm docs:dev`: start the VitePress docs site.
 - `pnpm docs:build`: build the bilingual docs site.
 - `dotnet test tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj`: run local unit tests only.
-- `dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0`: inspect the C# build plan.
+- `dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0`: inspect the C# build plan.
 
 ## Coding Style & Naming Conventions
 
@@ -26,11 +26,11 @@ Use C# nullable reference types and implicit usings as configured. Follow existi
 
 ## Shell-to-C# Tooling Policy
 
-Prefer C# for appliance, build, release, OTA, installer, recovery, validation, JSON/manifest, cryptographic, path-safety, and channel-guard logic. When touching Bash scripts, migrate reusable behavior into `HomeHarbor.Tooling` or the owning .NET executable (`HomeHarbor.Agent`, `HomeHarbor.ImageBuilder`, `HomeHarbor.Installer`, or `HomeHarbor.Recovery`) instead of expanding shell logic.
+Prefer C# for appliance, build, release, OTA, installer, recovery, validation, JSON/manifest, cryptographic, path-safety, and channel-guard logic. Reusable build behavior belongs in `Akaishi-Tech/system-build`; reusable A/B and OTA behavior belongs in `Akaishi-Tech/system-utils`. When touching Bash scripts, migrate behavior into the owning .NET executable instead of expanding shell logic.
 
 Shell scripts are allowed only for thin POSIX entrypoints, Arch packaging glue, mkinitcpio hooks, chroot/bootstrap glue, or simple wrappers around external system tools that cannot reasonably be expressed in managed code. Keep those scripts minimal, use `set -euo pipefail`, validate arguments and environment variables, and delegate business rules to C#.
 
-Do not implement JSON parsing, manifest canonicalization, OTA slot decisions, Secure Boot policy, release guard policy, channel deployment invariants, or path traversal checks in shell when C# can own them. Put shared logic in `HomeHarbor.Tooling` and cover it with MSTest unit tests.
+Do not implement JSON parsing, manifest canonicalization, OTA slot decisions, Secure Boot policy, release guard policy, channel deployment invariants, or path traversal checks in shell when C# can own them. Put shared logic in the appropriate extracted repository and cover it with MSTest unit tests.
 
 When replacing an installed script, keep package, systemd, initramfs, and test entrypoints stable with a temporary wrapper only when needed. Remove wrappers once all callers invoke the C# command directly.
 

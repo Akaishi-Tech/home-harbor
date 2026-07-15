@@ -16,10 +16,11 @@
     <ProjectReference Include="..\..\src\HomeHarbor.Agent\HomeHarbor.Agent.csproj" />
     <ProjectReference Include="..\..\src\HomeHarbor.Api\HomeHarbor.Api.csproj" />
     <ProjectReference Include="..\..\src\HomeHarbor.Core\HomeHarbor.Core.csproj" />
-    <ProjectReference Include="..\..\src\HomeHarbor.ImageBuilder\HomeHarbor.ImageBuilder.csproj" />
+    <ProjectReference Include="..\..\tools\system-build\src\HomeHarbor.ImageBuilder\HomeHarbor.ImageBuilder.csproj" />
+    <ProjectReference Include="..\..\tools\system-build\src\HomeHarbor.SystemBuild\HomeHarbor.SystemBuild.csproj" />
     <ProjectReference Include="..\..\src\HomeHarbor.Installer\HomeHarbor.Installer.csproj" />
     <ProjectReference Include="..\..\src\HomeHarbor.Recovery\HomeHarbor.Recovery.csproj" />
-    <ProjectReference Include="..\..\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
+    <ProjectReference Include="..\..\tools\system-build\external\system-utils\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
   </ItemGroup>
 
 </Project>

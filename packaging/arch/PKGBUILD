@@ -82,9 +82,9 @@ build() {
   dotnet publish "${source_dir}/src/HomeHarbor.Installer/HomeHarbor.Installer.csproj" \
     -c Release \
     -o "${installer_publish_dir}"
-  dotnet run --project "${source_dir}/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- \
+  dotnet run --project "${source_dir}/tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- \
     build-homeharbor-avb "${avb_helper}" "${source_dir}"
-  dotnet run --project "${source_dir}/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- \
+  dotnet run --project "${source_dir}/tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj" -- \
     build-homeharbor-init "${init_helper}" "${source_dir}"
 }
 

@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
+    <ProjectReference Include="..\..\tools\system-build\external\system-utils\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
   </ItemGroup>
 
   <ItemGroup>

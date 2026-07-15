@@ -20,12 +20,6 @@ internal static partial class AgentProgram
         string? ApiSocket,
         bool DryRun);
 
-    private sealed record OtaCommitOptions(
-        string StateDir,
-        string Esp,
-        string BootEnv,
-        string RunDir);
-
     private sealed record AppliedStoragePlan(
         string PlanId,
         string UnlockMode,

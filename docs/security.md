@@ -74,7 +74,7 @@ Before channel release, run unit and build-plan checks:
 
 ```bash
 dotnet test tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0
 ```
 
 Release checks reject:

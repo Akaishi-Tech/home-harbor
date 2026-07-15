@@ -1414,7 +1414,7 @@ internal static partial class AgentProgram
                 _ = Directory.CreateDirectory(options.StateDir);
                 if (!options.DryRun)
                 {
-                    _ = await OtaCommitAsync(
+                    _ = await OtaCommitter.CommitAsync(
                         new OtaCommitOptions(options.OtaStateDir, options.Esp, options.BootEnv, options.RunDir),
                         runner,
                         cancellationToken);
@@ -1436,47 +1436,6 @@ internal static partial class AgentProgram
         }
 
         throw new InvalidOperationException("HomeHarbor boot was not marked successful before timeout: " + healthUrl);
-    }
-
-    private static async Task<int> OtaCommitAsync(OtaCommitOptions options, ICommandRunner runner, CancellationToken cancellationToken)
-    {
-        _ = runner;
-        _ = Directory.CreateDirectory(options.RunDir);
-        var pending = Path.Combine(options.StateDir, "pending.json");
-        if (!File.Exists(pending))
-        {
-            return 0;
-        }
-
-        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(pending, cancellationToken));
-        var active = BootEnvironment.Read(options.BootEnv);
-        var activeBootSlot = GetBoot(active, "HOMEHARBOR_BOOT_SLOT");
-        var activeRootSlot = GetBoot(active, "HOMEHARBOR_SLOT");
-        var bootMatches = activeBootSlot == JsonString(doc.RootElement, "targetBootSlot");
-        var rootMatches = activeRootSlot == JsonString(doc.RootElement, "targetRootSlot") &&
-            GetBoot(active, "HOMEHARBOR_ROOT_LOGICAL") == JsonString(doc.RootElement, "rootLogical") &&
-            GetBoot(active, "HOMEHARBOR_ROOT_DESCRIPTOR_DIGEST") == JsonString(doc.RootElement, "rootDescriptorDigest");
-        var modulesMatches = GetBoot(active, "HOMEHARBOR_MODULES_LOGICAL") == JsonString(doc.RootElement, "modulesLogical") &&
-            GetBoot(active, "HOMEHARBOR_MODULES_DESCRIPTOR_DIGEST") == JsonString(doc.RootElement, "modulesDescriptorDigest");
-        var firmwareMatches = GetBoot(active, "HOMEHARBOR_FIRMWARE_LOGICAL") == JsonString(doc.RootElement, "firmwareLogical") &&
-            GetBoot(active, "HOMEHARBOR_FIRMWARE_DESCRIPTOR_DIGEST") == JsonString(doc.RootElement, "firmwareDescriptorDigest");
-        var vbmetaMatches = GetBoot(active, "HOMEHARBOR_VBMETA_PARTITION") == JsonString(doc.RootElement, "vbmetaPartition") &&
-            GetBoot(active, "HOMEHARBOR_VBMETA_DIGEST") == JsonString(doc.RootElement, "vbmetaDigest");
-        if (bootMatches && rootMatches && modulesMatches && firmwareMatches && vbmetaMatches && !string.IsNullOrWhiteSpace(activeBootSlot))
-        {
-            BootState.SetDefault(options.Esp, activeBootSlot, activeRootSlot);
-            var targetRecoverySlot = JsonString(doc.RootElement, "targetRecoverySlot");
-            if (!string.IsNullOrWhiteSpace(targetRecoverySlot))
-            {
-                BootState.SetRecovery(options.Esp, targetRecoverySlot);
-            }
-
-            var committed = Path.Combine(options.StateDir, "last-committed.json");
-            File.Move(pending, committed, overwrite: true);
-            File.Copy(committed, Path.Combine(options.RunDir, "last-committed-ota"), overwrite: true);
-        }
-
-        return 0;
     }
 
     private static async Task<int> StorageApplyAsync(ICommandRunner runner, CancellationToken cancellationToken)

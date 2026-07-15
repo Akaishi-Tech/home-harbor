@@ -31,21 +31,21 @@ pnpm docs:build
 | `src/HomeHarbor.Api` | ASP.NET Core API、EF Core 数据模型、认证、控制平面、静态前端托管 |
 | `src/HomeHarbor.Core` | 领域 record、枚举、存储路径策略和共享模型 |
 | `src/HomeHarbor.WebDav` | WebDAV HTTP method、状态码和 XML 编解码辅助 |
-| `src/HomeHarbor.Tooling` | manifest、boot state、release channel、安全校验、tar/path safety 等共享 C# 工具 |
+| `tools/system-build` | 递归固定版本的 `Akaishi-Tech/system-build` 构建引擎与 CLI |
+| `tools/system-build/external/system-utils` | 固定版本的 `Akaishi-Tech/system-utils` A/B、OTA、verified boot 与运行时工具源码 |
 | `src/HomeHarbor.Agent` | appliance 内 systemd 调用的运行时命令 |
-| `src/HomeHarbor.ImageBuilder` | 基于 descriptor 的镜像构建与布局 plan 输出 |
 | `src/HomeHarbor.Installer` | live installer TUI、manifest 校验和 boot-state 命令 |
 | `src/HomeHarbor.Recovery` | recovery console 与 fastboot TCP 服务 |
 | `frontend` | React 控制台 |
 | `docs` | VitePress 文档站和 Cloudflare Wrangler 配置 |
 | `system/x86_64` | system 与 kernel 镜像构建 descriptor |
-| `build`、`scripts`、`os`、`packaging/arch` | Arch package、镜像、OTA、ISO、systemd、mkinitcpio 入口 |
+| `boot/assets`、`system`、`os`、`packaging/arch` | HomeHarbor 品牌资源、manifest、Arch package 与 systemd 集成 |
 | `tests/HomeHarbor.Tests` | 本地 MSTest 单元测试 |
 | `tests/HomeHarbor.FullE2E.Tests` | VM 级完整系统测试 |
 
 ## C# 优先策略
 
-appliance、build、release、OTA、installer、recovery、validation、JSON/manifest、加密、路径安全和channel 防护逻辑应优先写在 C#。共享逻辑放进 `HomeHarbor.Tooling`，再由脚本或工具调用。
+appliance、build、release、OTA、installer、recovery、validation、JSON/manifest、加密、路径安全和 channel 防护逻辑应优先写在 C#。可复用的构建行为放入 `Akaishi-Tech/system-build`；可复用的 A/B 与 OTA 行为放入 `Akaishi-Tech/system-utils`；HomeHarbor 专属的运行时行为留在本仓库。
 
 Shell 只适合保留为薄入口：
 

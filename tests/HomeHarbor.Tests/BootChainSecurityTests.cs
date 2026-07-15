@@ -38,14 +38,29 @@ public sealed class BootChainSecurityTests
     }
 
     [TestMethod]
-    public void Selector_Build_Refreshes_The_Environment_Selected_Avb_Key_Atomically()
+    public void Selector_Build_Generates_The_Selected_Avb_Key_In_Managed_Code_Before_Make()
     {
-        var makefile = File.ReadAllText(Path.Combine(RepositoryRoot(), "boot", "bootloader", "Makefile"));
+        var root = RepositoryRoot();
+        var makefile = File.ReadAllText(Path.Combine(
+            root,
+            "tools",
+            "system-build",
+            "external",
+            "system-utils",
+            "boot",
+            "bootloader",
+            "Makefile"));
+        var buildCommands = File.ReadAllText(SystemBuildPath(root, "BuildToolCommands.cs"));
 
-        Assert.Contains("$(AVB_PUBLIC_KEY_HEADER): FORCE", makefile);
-        Assert.Contains("generate-efi-avb-public-key \"$$tmp\"", makefile);
-        Assert.Contains("cmp -s \"$$tmp\" \"$@\"", makefile);
-        Assert.Contains("mv -f \"$$tmp\" \"$@\"", makefile);
+        Assert.Contains("AVB_PUBLIC_KEY_HEADER ?=", makefile);
+        Assert.Contains("Generate it with the system-build tool", makefile);
+        Assert.DoesNotContain("dotnet run", makefile);
+        var generate = buildCommands.IndexOf(
+            "await GenerateEfiAvbPublicKeyHeaderAsync(publicKeyHeader",
+            StringComparison.Ordinal);
+        var make = buildCommands.IndexOf("await RunRequiredAsync(\n            \"make\"", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, generate);
+        Assert.IsGreaterThan(generate, make);
     }
 
     [TestMethod]
@@ -57,7 +72,7 @@ public sealed class BootChainSecurityTests
         var manifest = File.ReadAllText(Path.Combine(root, "system", "x86_64", "system", "manifest.yml"));
 
         var healthIndex = program.IndexOf("await http.GetStringAsync(healthUrl", StringComparison.Ordinal);
-        var commitIndex = program.IndexOf("await OtaCommitAsync(", healthIndex, StringComparison.Ordinal);
+        var commitIndex = program.IndexOf("await OtaCommitter.CommitAsync(", healthIndex, StringComparison.Ordinal);
         Assert.IsGreaterThanOrEqualTo(0, healthIndex);
         Assert.IsGreaterThan(healthIndex, commitIndex);
         Assert.Contains("Requires=homeharbor-boot-success.service", commitUnit);
@@ -70,7 +85,7 @@ public sealed class BootChainSecurityTests
     public void Verified_Boot_Environment_Is_Published_From_A_Root_Only_Runtime_Directory()
     {
         var root = RepositoryRoot();
-        var init = File.ReadAllText(Path.Combine(root, "boot", "init", "homeharbor-verity.c"));
+        var init = File.ReadAllText(SystemUtilsPath(root, "boot", "init", "homeharbor-verity.c"));
         var bootSuccess = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Agent", "BootSuccessCommand.cs"));
         var apiUnit = File.ReadAllText(Path.Combine(root, "os", "systemd", "homeharbor-api.service"));
 
@@ -104,7 +119,7 @@ public sealed class BootChainSecurityTests
     [TestMethod]
     public void Initramfs_Usr_Overlay_Never_Uses_Unauthenticated_Data_Volume_Content()
     {
-        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "boot", "init", "homeharbor-verity.c"));
+        var source = File.ReadAllText(SystemUtilsPath(RepositoryRoot(), "boot", "init", "homeharbor-verity.c"));
 
         Assert.DoesNotContain("append_system_app_usr_lowerdirs", source);
         Assert.DoesNotContain("/new_root/homeharbor-data/system-apps", source);
@@ -116,9 +131,9 @@ public sealed class BootChainSecurityTests
     public void Recovery_Uses_Signed_Generic_Raw_Uki_And_Signed_Verity_Geometry()
     {
         var root = RepositoryRoot();
-        var selector = File.ReadAllText(Path.Combine(root, "boot", "bootloader", "HomeHarborBoot.c"));
-        var init = File.ReadAllText(Path.Combine(root, "boot", "init", "homeharbor-verity.c"));
-        var secureBoot = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "SecureBootAssets.cs"));
+        var selector = File.ReadAllText(SystemUtilsPath(root, "boot", "bootloader", "HomeHarborBoot.c"));
+        var init = File.ReadAllText(SystemUtilsPath(root, "boot", "init", "homeharbor-verity.c"));
+        var secureBoot = File.ReadAllText(SystemBuildPath(root, "SecureBootAssets.cs"));
 
         Assert.Contains("label = L\"boot_a\"", selector);
         Assert.Contains("label = L\"boot_b\"", selector);
@@ -160,10 +175,10 @@ public sealed class BootChainSecurityTests
     public void Generic_Boot_Binds_Selected_Root_Vbmeta_Digest_Into_Initramfs()
     {
         var root = RepositoryRoot();
-        var selector = File.ReadAllText(Path.Combine(root, "boot", "bootloader", "HomeHarborBoot.c"));
-        var variables = File.ReadAllText(Path.Combine(root, "boot", "bootloader", "variables.c"));
-        var avb = File.ReadAllText(Path.Combine(root, "boot", "bootloader", "avb.c"));
-        var init = File.ReadAllText(Path.Combine(root, "boot", "init", "homeharbor-verity.c"));
+        var selector = File.ReadAllText(SystemUtilsPath(root, "boot", "bootloader", "HomeHarborBoot.c"));
+        var variables = File.ReadAllText(SystemUtilsPath(root, "boot", "bootloader", "variables.c"));
+        var avb = File.ReadAllText(SystemUtilsPath(root, "boot", "bootloader", "avb.c"));
+        var init = File.ReadAllText(SystemUtilsPath(root, "boot", "init", "homeharbor-verity.c"));
 
         Assert.Contains("if (root_slot[0] == 'B')", selector);
         Assert.Contains("verify_vbmeta_signature_preflight(vbmeta_label, secure_boot_active, vbmeta_digest)", selector);
@@ -212,9 +227,9 @@ public sealed class BootChainSecurityTests
     public void Recovery_Build_And_Ota_Validate_And_Write_The_Complete_Image()
     {
         var root = RepositoryRoot();
-        var imageBuilder = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "SystemImageBuilder.cs"));
-        var releaseBuilder = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "ReleaseArtifactBuilder.cs"));
-        var ota = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Agent", "OtaApplyCommand.cs"));
+        var imageBuilder = File.ReadAllText(SystemBuildPath(root, "SystemImageBuilder.cs"));
+        var releaseBuilder = File.ReadAllText(SystemBuildPath(root, "ReleaseArtifactBuilder.cs"));
+        var ota = File.ReadAllText(SystemUtilsPath(root, "src", "HomeHarbor.Tooling", "OtaApplyCommand.cs"));
         var installer = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Installer", "InstallDiskCommand.cs"));
 
         Assert.Contains("VerifyCompleteVerityImageAsync(LogicalPath(\"recovery_a\")", imageBuilder);
@@ -249,7 +264,7 @@ public sealed class BootChainSecurityTests
     {
         var root = RepositoryRoot();
         var installer = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Installer", "InstallDiskCommand.cs"));
-        var release = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "ReleaseArtifactBuilder.cs"));
+        var release = File.ReadAllText(SystemBuildPath(root, "ReleaseArtifactBuilder.cs"));
 
         Assert.DoesNotContain("HOMEHARBOR_SECURE_BOOT_KEY", installer);
         Assert.DoesNotContain("sbsign", installer);
@@ -274,6 +289,13 @@ public sealed class BootChainSecurityTests
         }
         throw new DirectoryNotFoundException("Repository root not found.");
     }
+
+    private static string SystemBuildPath(string root, string fileName)
+        => Path.Combine(root, "tools", "system-build", "src", "HomeHarbor.SystemBuild", fileName);
+
+    private static string SystemUtilsPath(string root, params string[] relativePath)
+        => Path.Combine(
+            [root, "tools", "system-build", "external", "system-utils", .. relativePath]);
 
     private static byte[] EncodedAvbKey(int bits)
     {

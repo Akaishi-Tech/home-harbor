@@ -16,7 +16,7 @@ repository is configured.
 Build the version-independent SELinux dependency package set once with:
 
 ```sh
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
   selinux-dependency-build "$PWD/artifacts/dependencies/selinux" \
   "$PWD/.work/selinux-dependencies" "$PWD"
 ```
@@ -33,7 +33,7 @@ Build the complete versioned package set from that verified cache with:
 ```sh
 HOMEHARBOR_CHANNEL=dev \
 HOMEHARBOR_SELINUX_DEPENDENCY_CACHE="$PWD/artifacts/dependencies/selinux" \
-  dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
+  dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- \
   arch-package 0.1.0-dev "$PWD"
 ```
 

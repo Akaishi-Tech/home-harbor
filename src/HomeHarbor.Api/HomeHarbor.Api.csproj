@@ -23,7 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HomeHarbor.Core\HomeHarbor.Core.csproj" />
-    <ProjectReference Include="..\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
+    <ProjectReference Include="..\..\tools\system-build\external\system-utils\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
     <ProjectReference Include="..\HomeHarbor.WebDav\HomeHarbor.WebDav.csproj" />
   </ItemGroup>
 

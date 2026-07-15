@@ -21,8 +21,9 @@ flowchart TB
   Agent --> Caddy["Caddyfile"]
   Agent --> Boot["Boot state / EFI vars"]
 
-  Build["HomeHarbor.ImageBuilder"] --> Tooling["HomeHarbor.Tooling"]
-  Build --> ImageBuilder["HomeHarbor.ImageBuilder"]
+  Build["Akaishi system-build"] --> Utils["Akaishi system-utils"]
+  Agent --> Utils
+  Build --> Manifests["HomeHarbor manifest / 产品资源"]
   Build --> Installer["HomeHarbor.Installer"]
   Build --> Recovery["HomeHarbor.Recovery"]
   Build --> Artifacts["artifacts/"]
@@ -71,7 +72,7 @@ WebDAV 不使用 bearer token，而是通过 Basic Auth handler 和 WebDAV token
 
 ## 分区布局
 
-`HomeHarbor.ImageBuilder plan` 会读取 `system/x86_64/system/manifest.yml` 并输出 appliance 磁盘布局，live installer 会按同样的 GPT 分区顺序写入目标磁盘。
+固定版本的 `system-build` CLI 会读取 `system/x86_64/system/manifest.yml` 并输出 appliance 磁盘布局，live installer 会按同样的 GPT 分区顺序写入目标磁盘；可复用的 A/B 与 OTA primitive 来自它固定的 `system-utils` revision。
 
 ```mermaid
 flowchart LR

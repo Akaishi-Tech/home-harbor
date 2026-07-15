@@ -34,7 +34,7 @@ pnpm docs:build
 Build command smoke check:
 
 ```bash
-dotnet run --project src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0
+dotnet run --project tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj -- plan 0.1.0
 ```
 
 ## Pull Request Contents

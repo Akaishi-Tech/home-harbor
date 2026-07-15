@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
+    <ProjectReference Include="..\..\tools\system-build\external\system-utils\src\HomeHarbor.Tooling\HomeHarbor.Tooling.csproj" />
   </ItemGroup>
 
 </Project>

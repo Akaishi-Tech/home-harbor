@@ -292,7 +292,12 @@ public sealed class SelinuxDependencyPackageSetTests
                 "    installPackages: []\n" +
                 "buildOrder: [policy]\n";
             File.WriteAllText(Manifest, OriginalManifest);
-            var tooling = Directory.CreateDirectory(Path.Combine(Root, "src", "HomeHarbor.Tooling"));
+            var tooling = Directory.CreateDirectory(Path.Combine(
+                Root,
+                "tools",
+                "system-build",
+                "src",
+                "HomeHarbor.SystemBuild"));
             BuilderContract = Path.Combine(tooling.FullName, "SelinuxPackageBuilder.cs");
             OriginalBuilderContract = "// dependency build contract\n";
             File.WriteAllText(BuilderContract, OriginalBuilderContract);

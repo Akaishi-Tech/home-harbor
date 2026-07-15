@@ -113,7 +113,13 @@ public sealed class ApplianceUnitSecurityTests
         var service = File.ReadAllText(Path.Combine(root, "os", "systemd", "homeharbor-recovery-action.service"));
         var tmpfiles = File.ReadAllText(Path.Combine(root, "packaging", "arch", "homeharbor-recovery.tmpfiles"));
         var manifest = File.ReadAllText(Path.Combine(root, "system", "x86_64", "system", "manifest.yml"));
-        var kernelBuilder = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "KernelPackageBuilder.cs"));
+        var kernelBuilder = File.ReadAllText(Path.Combine(
+            root,
+            "tools",
+            "system-build",
+            "src",
+            "HomeHarbor.SystemBuild",
+            "KernelPackageBuilder.cs"));
 
         Assert.Contains("ProtectSystem=strict", service);
         Assert.DoesNotContain("ProtectSystem=full", service);

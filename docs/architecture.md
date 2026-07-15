@@ -21,8 +21,9 @@ flowchart TB
   Agent --> Caddy["Caddyfile"]
   Agent --> Boot["Boot state / EFI vars"]
 
-  Build["HomeHarbor.ImageBuilder"] --> Tooling["HomeHarbor.Tooling"]
-  Build --> ImageBuilder["HomeHarbor.ImageBuilder"]
+  Build["Akaishi system-build"] --> Utils["Akaishi system-utils"]
+  Agent --> Utils
+  Build --> Manifests["HomeHarbor manifests / product assets"]
   Build --> Installer["HomeHarbor.Installer"]
   Build --> Recovery["HomeHarbor.Recovery"]
   Build --> Artifacts["artifacts/"]
@@ -71,7 +72,7 @@ The commands write runtime state under `/var/lib/homeharbor`, `/run/homeharbor`,
 
 ## Partition Layout
 
-`HomeHarbor.ImageBuilder plan` reads `system/x86_64/system/manifest.yml`, prints the appliance disk layout, and the live installer writes the same GPT partition order to the target disk.
+The pinned `system-build` CLI reads `system/x86_64/system/manifest.yml`, prints the appliance disk layout, and the live installer writes the same GPT partition order to the target disk. Reusable A/B and OTA primitives come from its pinned `system-utils` revision.
 
 ```mermaid
 flowchart LR

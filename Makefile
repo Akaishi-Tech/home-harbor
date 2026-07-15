@@ -16,7 +16,7 @@ BOOT_HELPER_TARGETS ?= efi-loader avb-helper init-helper
 ROOT := $(abspath .)
 SOLUTION := HomeHarbor.slnx
 API_PROJECT := src/HomeHarbor.Api/HomeHarbor.Api.csproj
-IMAGE_BUILDER_PROJECT := src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj
+IMAGE_BUILDER_PROJECT := tools/system-build/src/HomeHarbor.ImageBuilder/HomeHarbor.ImageBuilder.csproj
 UNIT_TEST_PROJECT := tests/HomeHarbor.Tests/HomeHarbor.Tests.csproj
 IMAGE_BUILDER := $(DOTNET) run --project $(IMAGE_BUILDER_PROJECT) --
 
@@ -165,5 +165,5 @@ arch-package:
 
 clean:
 	$(DOTNET) clean $(SOLUTION)
-	$(MAKE) -C boot/bootloader clean
+	$(MAKE) -C tools/system-build/external/system-utils/boot/bootloader clean
 	rm -f "$(EFI_OUTPUT)" "$(AVB_OUTPUT)" "$(INIT_OUTPUT)"

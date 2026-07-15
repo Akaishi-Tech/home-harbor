@@ -790,8 +790,10 @@ public sealed partial class SelinuxBuildTests
 
         var imageBuilder = File.ReadAllText(Path.Combine(
             root,
+            "tools",
+            "system-build",
             "src",
-            "HomeHarbor.Tooling",
+            "HomeHarbor.SystemBuild",
             "SystemImageBuilder.cs"));
         Assert.AreEqual(
             2,
@@ -833,7 +835,15 @@ public sealed partial class SelinuxBuildTests
     {
         var root = RepositoryRoot();
         var agent = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Agent", "Program.cs"));
-        var ota = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Agent", "OtaApplyCommand.cs"));
+        var ota = File.ReadAllText(Path.Combine(
+            root,
+            "tools",
+            "system-build",
+            "external",
+            "system-utils",
+            "src",
+            "HomeHarbor.Tooling",
+            "OtaApplyCommand.cs"));
 
         Assert.Contains("[\"selinux-relabel\", \"managed\"]", agent);
         Assert.Contains("[\"selinux-relabel\", \"data\"]", agent);
@@ -997,10 +1007,22 @@ public sealed partial class SelinuxBuildTests
         Assert.IsTrue(recoveryPackage.Success);
         Assert.Contains("install -dm750 \"${pkgdir}/homeharbor-data\"", recoveryPackage.Groups["body"].Value);
 
-        var imageBuilder = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "SystemImageBuilder.cs"));
+        var imageBuilder = File.ReadAllText(Path.Combine(
+            root,
+            "tools",
+            "system-build",
+            "src",
+            "HomeHarbor.SystemBuild",
+            "SystemImageBuilder.cs"));
         Assert.Contains("EnsureDirectory(Path.Combine(recoveryRootfs, \"homeharbor-data\"), 0750);", imageBuilder);
 
-        var kernelBuilder = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "KernelPackageBuilder.cs"));
+        var kernelBuilder = File.ReadAllText(Path.Combine(
+            root,
+            "tools",
+            "system-build",
+            "src",
+            "HomeHarbor.SystemBuild",
+            "KernelPackageBuilder.cs"));
         Assert.Contains("var recoveryDataMountPoint = Directory.CreateDirectory", kernelBuilder);
         Assert.Contains("File.SetUnixFileMode(\n            recoveryDataMountPoint.FullName", kernelBuilder);
     }
@@ -1042,7 +1064,13 @@ public sealed partial class SelinuxBuildTests
         var homeHarborPkgbuild = File.ReadAllText(Path.Combine(root, "packaging", "arch", "PKGBUILD"));
         var podmanConfig = File.ReadAllText(Path.Combine(recipe, "homeharbor-containers.conf"));
         var moduleConfig = File.ReadAllLines(Path.Combine(root, "packaging", "arch", "homeharbor-containers.modules"));
-        var imageBuilder = File.ReadAllText(Path.Combine(root, "src", "HomeHarbor.Tooling", "SystemImageBuilder.cs"));
+        var imageBuilder = File.ReadAllText(Path.Combine(
+            root,
+            "tools",
+            "system-build",
+            "src",
+            "HomeHarbor.SystemBuild",
+            "SystemImageBuilder.cs"));
 
         Assert.Contains(
             "d /var/lib/homeharbor-containers/.config 0750 root homeharbor-containers -",

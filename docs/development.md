@@ -31,21 +31,21 @@ The root lockfile is `pnpm-lock.yaml`. Package-local lockfiles are intentionally
 | `src/HomeHarbor.Api` | ASP.NET Core API, EF Core data model, auth, control plane, static frontend hosting |
 | `src/HomeHarbor.Core` | Domain records, enums, storage path policy, and shared model types |
 | `src/HomeHarbor.WebDav` | WebDAV HTTP methods, status codes, and XML helpers |
-| `src/HomeHarbor.Tooling` | Shared C# tooling for manifests, boot state, release channels, security guards, tar safety, and path safety |
+| `tools/system-build` | Recursively pinned `Akaishi-Tech/system-build` build engine and CLI |
+| `tools/system-build/external/system-utils` | Pinned `Akaishi-Tech/system-utils` A/B, OTA, verified-boot, and runtime utility source |
 | `src/HomeHarbor.Agent` | Appliance runtime commands called by systemd |
-| `src/HomeHarbor.ImageBuilder` | Manifest-backed image build and layout plan output |
 | `src/HomeHarbor.Installer` | Live installer TUI, manifest verification, and boot-state commands |
 | `src/HomeHarbor.Recovery` | Recovery console and fastboot TCP service |
 | `frontend` | React control console |
 | `docs` | VitePress documentation site and Cloudflare Wrangler configuration |
 | `system/x86_64` | System and kernel image build descriptors |
-| `build`, `scripts`, `os`, `packaging/arch` | Arch packages, image builds, OTA bundles, ISO generation, systemd units, and mkinitcpio entrypoints |
+| `boot/assets`, `system`, `os`, `packaging/arch` | HomeHarbor branding, manifests, Arch packages, and systemd integration |
 | `tests/HomeHarbor.Tests` | Local MSTest unit tests |
 | `tests/HomeHarbor.FullE2E.Tests` | VM-level full-system tests |
 
 ## Prefer C# For Product Logic
 
-Appliance, build, release, OTA, installer, recovery, validation, JSON/manifest, cryptographic, path-safety, and channel-guard logic should live in C# first. Shared behavior belongs in `HomeHarbor.Tooling`, with scripts or executables calling into it.
+Appliance, build, release, OTA, installer, recovery, validation, JSON/manifest, cryptographic, path-safety, and channel-guard logic should live in C# first. Reusable build behavior belongs in `Akaishi-Tech/system-build`; reusable A/B and OTA behavior belongs in `Akaishi-Tech/system-utils`. HomeHarbor-specific runtime behavior stays in this repository.
 
 Shell scripts should stay thin:
 
