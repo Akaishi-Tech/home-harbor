@@ -70,12 +70,10 @@ jobs:
           CACHE_HIT: ${{ steps.dependency-cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
+          # Keep the container non-privileged; the C# image builders use rootless user namespaces.
           docker run --rm -i \
-            --privileged \
-            --userns=host \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
-            --security-opt systempaths=unconfined \
             -v "${PWD}:/workspace" \
             -w /workspace \
             -e CACHE_HIT \
@@ -98,10 +96,7 @@ jobs:
               export HOMEHARBOR_PACKAGE_USER=builder
               export DOTNET_CLI_TELEMETRY_OPTOUT=1
               export DOTNET_NOLOGO=1
-              setpriv --reuid=builder --regid=builder --init-groups \
-                --inh-caps +sys_admin,+setuid,+setgid \
-                --ambient-caps +sys_admin,+setuid,+setgid \
-                bash <<'HOMEHARBOR_BUILDER_SCRIPT'
+              sudo -E -H -u builder bash <<'HOMEHARBOR_BUILDER_SCRIPT'
                 set -euo pipefail
                 cd /workspace
                 cache="/workspace/${SELINUX_DEPENDENCY_CACHE_PATH}"
@@ -209,12 +204,10 @@ jobs:
             echo "HOMEHARBOR_SECURE_BOOT_KEY_PEM and HOMEHARBOR_SECURE_BOOT_CERT_PEM secrets are required." >&2
             exit 1
           fi
+          # Keep the container non-privileged; the C# image builders use rootless user namespaces.
           docker run --rm -i \
-            --privileged \
-            --userns=host \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
-            --security-opt systempaths=unconfined \
             -v "${PWD}:/workspace" \
             -w /workspace \
             -e VERSION \
@@ -269,10 +262,7 @@ jobs:
               export HOMEHARBOR_RELEASE_SKIP_FULL_E2E=1
 
               export HOME=/home/builder
-              setpriv --reuid=builder --regid=builder --init-groups \
-                --inh-caps +sys_admin,+setuid,+setgid \
-                --ambient-caps +sys_admin,+setuid,+setgid \
-                bash <<'HOMEHARBOR_BUILDER_SCRIPT'
+              sudo -E -H -u builder bash <<'HOMEHARBOR_BUILDER_SCRIPT'
                 set -euo pipefail
                 cd /workspace
                 dotnet restore HomeHarbor.slnx
