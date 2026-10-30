@@ -75,6 +75,7 @@ jobs:
           docker run --rm -i \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=homeharbor-builder \
+            --security-opt systempaths=unconfined \
             -v "${PWD}:/workspace" \
             -w /workspace \
             -e CACHE_HIT \
@@ -212,6 +213,7 @@ jobs:
           docker run --rm -i \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=homeharbor-builder \
+            --security-opt systempaths=unconfined \
             -v "${PWD}:/workspace" \
             -w /workspace \
             -e VERSION \

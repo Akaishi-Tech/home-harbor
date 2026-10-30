@@ -6,6 +6,7 @@ set -euo pipefail
 docker run --rm -i \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=homeharbor-builder \
+  --security-opt systempaths=unconfined \
   -v "${PWD}:/workspace" -w /workspace \
   archlinux:base-devel bash <<'CONTAINER'
 set -euo pipefail
@@ -36,7 +37,18 @@ cat > "${namespace_probe_dir}/Probe.csproj" <<'PROJECT'
 PROJECT
 cat > "${namespace_probe_dir}/Program.cs" <<'CS'
 using HomeHarbor.Tooling;
-await new RootlessBuildExecutor(new ProcessCommandRunner()).RequireReadyAsync();
+var status = System.IO.File.ReadAllLines("/proc/self/status");
+foreach (var line in status)
+{
+    if (line.StartsWith("CapEff:") && (System.Convert.ToUInt64(line.Split(':')[1].Trim(), 16) & (1UL << 21)) != 0)
+        throw new System.InvalidOperationException("Builder must not have outer-namespace SYS_ADMIN.");
+    if (line.StartsWith("CapAmb:") && System.Convert.ToUInt64(line.Split(':')[1].Trim(), 16) != 0)
+        throw new System.InvalidOperationException("Builder must not have ambient capabilities.");
+}
+var executor = new RootlessBuildExecutor(new ProcessCommandRunner());
+await executor.RequireReadyAsync();
+(await executor.RunMappedRootAsync("sh", ["-c", "mount -t proc proc /proc && test $(id -u) = 0"]))
+    .EnsureSuccess("mapped PID/mount namespace must support its own procfs");
 System.Console.WriteLine("Pinned rootless builder namespace probe passed.");
 CS
 dotnet run --project "${namespace_probe_dir}/Probe.csproj" --configuration Release
