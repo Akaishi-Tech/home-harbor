@@ -11,6 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  namespace-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Check the pinned builder in the release container
+        run: .github/scripts/test-release-namespaces.sh
+
   csharp:
     runs-on: ubuntu-latest
     timeout-minutes: 30
