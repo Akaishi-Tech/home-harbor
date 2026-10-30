@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+.github/scripts/configure-release-namespaces.sh
+
 docker run --rm -i \
   --security-opt seccomp=unconfined \
-  --security-opt apparmor=unconfined \
+  --security-opt apparmor=homeharbor-builder \
   -v "${PWD}:/workspace" -w /workspace \
   archlinux:base-devel bash <<'CONTAINER'
 set -euo pipefail
 pacman -Syu --noconfirm --needed arch-install-scripts dotnet-sdk sudo
-chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap
+setcap cap_setuid=ep /usr/bin/newuidmap
+setcap cap_setgid=ep /usr/bin/newgidmap
 useradd -m -G wheel builder
 printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/homeharbor-builder
 chmod 0440 /etc/sudoers.d/homeharbor-builder
