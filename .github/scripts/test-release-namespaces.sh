@@ -40,8 +40,8 @@ using HomeHarbor.Tooling;
 var status = System.IO.File.ReadAllLines("/proc/self/status");
 foreach (var line in status)
 {
-    if (line.StartsWith("CapEff:") && (System.Convert.ToUInt64(line.Split(':')[1].Trim(), 16) & (1UL << 21)) != 0)
-        throw new System.InvalidOperationException("Builder must not have outer-namespace SYS_ADMIN.");
+    if ((line.StartsWith("CapEff:") || line.StartsWith("CapBnd:")) && (System.Convert.ToUInt64(line.Split(':')[1].Trim(), 16) & (1UL << 21)) != 0)
+        throw new System.InvalidOperationException("Release container must not allow outer-namespace SYS_ADMIN.");
     if (line.StartsWith("CapAmb:") && System.Convert.ToUInt64(line.Split(':')[1].Trim(), 16) != 0)
         throw new System.InvalidOperationException("Builder must not have ambient capabilities.");
 }
