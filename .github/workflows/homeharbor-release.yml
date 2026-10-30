@@ -70,11 +70,11 @@ jobs:
           CACHE_HIT: ${{ steps.dependency-cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
+          .github/scripts/configure-release-namespaces.sh
+          # Keep the container non-privileged; the C# image builders use rootless user namespaces.
           docker run --rm -i \
-            --privileged \
-            --userns=host \
             --security-opt seccomp=unconfined \
-            --security-opt apparmor=unconfined \
+            --security-opt apparmor=homeharbor-builder \
             --security-opt systempaths=unconfined \
             -v "${PWD}:/workspace" \
             -w /workspace \
@@ -83,7 +83,9 @@ jobs:
             archlinux:base-devel bash <<'HOMEHARBOR_DOCKER_SCRIPT'
               set -euo pipefail
               pacman -Syu --noconfirm --needed arch-install-scripts dotnet-sdk git sudo
-              chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+              chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap
+              setcap cap_setuid=ep /usr/bin/newuidmap
+              setcap cap_setgid=ep /usr/bin/newgidmap
               useradd -m -G wheel builder
               printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/homeharbor-builder
               chmod 0440 /etc/sudoers.d/homeharbor-builder
@@ -98,10 +100,7 @@ jobs:
               export HOMEHARBOR_PACKAGE_USER=builder
               export DOTNET_CLI_TELEMETRY_OPTOUT=1
               export DOTNET_NOLOGO=1
-              setpriv --reuid=builder --regid=builder --init-groups \
-                --inh-caps +sys_admin,+setuid,+setgid \
-                --ambient-caps +sys_admin,+setuid,+setgid \
-                bash <<'HOMEHARBOR_BUILDER_SCRIPT'
+              sudo -E -H -u builder bash <<'HOMEHARBOR_BUILDER_SCRIPT'
                 set -euo pipefail
                 cd /workspace
                 cache="/workspace/${SELINUX_DEPENDENCY_CACHE_PATH}"
@@ -209,11 +208,11 @@ jobs:
             echo "HOMEHARBOR_SECURE_BOOT_KEY_PEM and HOMEHARBOR_SECURE_BOOT_CERT_PEM secrets are required." >&2
             exit 1
           fi
+          .github/scripts/configure-release-namespaces.sh
+          # Keep the container non-privileged; the C# image builders use rootless user namespaces.
           docker run --rm -i \
-            --privileged \
-            --userns=host \
             --security-opt seccomp=unconfined \
-            --security-opt apparmor=unconfined \
+            --security-opt apparmor=homeharbor-builder \
             --security-opt systempaths=unconfined \
             -v "${PWD}:/workspace" \
             -w /workspace \
@@ -233,7 +232,9 @@ jobs:
                 android-tools arch-install-scripts archiso aspnet-runtime aspnet-targeting-pack base-devel btrfs-progs clang cryptsetup \
                 device-mapper dosfstools dotnet-sdk efitools erofs-utils git gptfdisk grub jq lld lvm2 networkmanager openssl \
                 pnpm postgresql qemu-base sbsigntools sudo systemd systemd-ukify
-              chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+              chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap
+              setcap cap_setuid=ep /usr/bin/newuidmap
+              setcap cap_setgid=ep /usr/bin/newgidmap
               useradd -m -G wheel builder
               printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/homeharbor-builder
               chmod 0440 /etc/sudoers.d/homeharbor-builder
@@ -269,10 +270,7 @@ jobs:
               export HOMEHARBOR_RELEASE_SKIP_FULL_E2E=1
 
               export HOME=/home/builder
-              setpriv --reuid=builder --regid=builder --init-groups \
-                --inh-caps +sys_admin,+setuid,+setgid \
-                --ambient-caps +sys_admin,+setuid,+setgid \
-                bash <<'HOMEHARBOR_BUILDER_SCRIPT'
+              sudo -E -H -u builder bash <<'HOMEHARBOR_BUILDER_SCRIPT'
                 set -euo pipefail
                 cd /workspace
                 dotnet restore HomeHarbor.slnx
